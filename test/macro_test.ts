@@ -1,9 +1,9 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Macro} from '../../src/js/asm/macro';
-import {Token} from '../../src/js/asm/token';
-import {Tokenizer} from '../../src/js/asm/tokenizer';
-import * as util from 'util';
+import {Macro} from '../macro.ts';
+import {Token} from '../token.ts';
+import {Tokenizer} from '../tokenizer.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 

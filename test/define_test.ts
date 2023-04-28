@@ -1,9 +1,10 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Define} from '../../src/js/asm/define';
-import {Token} from '../../src/js/asm/token';
-import {Tokenizer} from '../../src/js/asm/tokenizer';
-import * as util from 'util';
+import {Define} from '../define.ts';
+import {Token} from '../token.ts';
+import * as Tokens from '../token.ts';
+import {Tokenizer} from '../tokenizer.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 
@@ -18,7 +19,7 @@ describe('Define', function() {
     // TODO - handle this better...
     let found = -1;
     for (let i = 0; i < tokens.length; i++) {
-      if (Token.eq(defName, tokens[i])) {
+      if (Tokens.eq(defName, tokens[i])) {
         found = i;
         break;
       }

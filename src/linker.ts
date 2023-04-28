@@ -1,12 +1,14 @@
-import { Assembler } from './assembler';
-import { Cpu } from './cpu';
-import { Expr } from './expr';
-import { Chunk, Module, OverwriteMode, Segment, Substitution, Symbol } from './module';
-import { Preprocessor } from './preprocessor';
-import { Token } from './token';
-import { Tokenizer } from './tokenizer';
-import { TokenStream } from './tokenstream';
-import { IntervalSet, SparseByteArray, binaryInsert } from './util';
+import { Assembler } from './assembler.ts';
+import { Cpu } from './cpu.ts';
+import { Expr } from './expr.ts';
+import * as Exprs from './expr.ts';
+import { Chunk, Module, OverwriteMode, Segment, Substitution, Symbol } from './module.ts';
+import { Targets } from "./preamble.ts";
+import { Preprocessor } from './preprocessor.ts';
+import * as Tokens from './token.ts';
+import { Tokenizer } from './tokenizer.ts';
+import { TokenStream } from './tokenstream.ts';
+import { IntervalSet, SparseByteArray, binaryInsert } from './util.ts';
 
 export interface Export {
   value: number;
@@ -16,6 +18,7 @@ export interface Export {
 }
 
 export class Linker {
+  opts: Options;
   // TODO - accept a list of [filename, contents]?
   static assemble(contents: string): Uint8Array {
     const source = new Tokenizer(contents, 'contents.s',
@@ -45,6 +48,10 @@ export class Linker {
   private _link = new Link();
   private _exports?: Map<string, Export>;
 
+  constructor(opts: Options = {}) {
+    this.opts = opts;
+  }
+
   read(file: Module): Linker {
     this._link.readFile(file);
     return this;
@@ -56,6 +63,10 @@ export class Linker {
   }
 
   link(): SparseByteArray {
+    const target = Targets.get(this.opts.target?.toLowerCase())
+    if (target) {
+      target.segments.forEach( seg => this._link.addRawSegment(seg) );
+    }
     return this._link.link();
   }
 
@@ -73,11 +84,8 @@ export class Linker {
   }
 }
 
-export namespace Linker {
-  export interface Options {
-    
-
-  }
+export interface Options {
+  target?: string;
 }
 
 // TODO - link-time only function for getting either the original or the
@@ -300,7 +308,7 @@ class LinkChunk {
 
     // Do a full traverse of the expression - see what's blocking us.
     if (!this.subs.has(sub) && !this.selfSubs.has(sub)) return;
-    sub.expr = Expr.traverse(sub.expr, (e, rec, p) => {
+    sub.expr = Exprs.traverse(sub.expr, (e, rec, p) => {
       // First handle most common bank byte case, since it triggers on a
       // different type of resolution.
       if (initial && p?.op === '^' && p.args!.length === 1 && e.meta) {
@@ -309,7 +317,7 @@ class LinkChunk {
         }
         return e; // skip recursion either way.
       }
-      e = this.linker.resolveLink(Expr.evaluate(rec(e)));
+      e = this.linker.resolveLink(Exprs.evaluate(rec(e)));
       if (initial && e.meta?.rel) this.addDep(sub, e.meta.chunk!);
       return e;
     });
@@ -483,7 +491,7 @@ class Link {
           offset: chunk.offset,
           bank: chunk.segment?.bank,
         };
-        expr = Expr.evaluate({...expr, meta: {...meta, ...meta2}});
+        expr = Exprs.evaluate({...expr, meta: {...meta, ...meta2}});
       }
     }
     return expr;
@@ -493,12 +501,12 @@ class Link {
   // It basically copy-pastes from resolveSubs... :-(
 
   resolveExpr(expr: Expr): number {
-    expr = Expr.traverse(expr, (e, rec) => {
-      return this.resolveLink(Expr.evaluate(rec(e)));
+    expr = Exprs.traverse(expr, (e, rec) => {
+      return this.resolveLink(Exprs.evaluate(rec(e)));
     });
 
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
-    const at = Token.at(expr);
+    const at = Tokens.at(expr);
     throw new Error(`Unable to fully resolve expr${at}`);
   }
 
@@ -638,7 +646,7 @@ class Link {
       for (const a of c.asserts) {
         const v = this.resolveExpr(a);
         if (v) continue;
-        const at = Token.at(a);
+        const at = Tokens.at(a);
         throw new Error(`Assertion failed${at}`);
       }
       if (c.overlaps) continue;
@@ -650,6 +658,17 @@ class Link {
 
   placeChunk(chunk: LinkChunk) {
     if (chunk.org != null) return; // don't re-place.
+    // if this chunk doesn't have a predefined segment, and there is a default segment defined, then use that one
+    if (chunk.segments.length == 0) {
+      this.rawSegments.forEach((segments, name) => {
+        for (const seg of segments) {
+          if (seg.default) {
+            chunk.segments = [ name ];
+            break;
+          }
+        }
+      })
+    }
     const size = chunk.size;
     if (!chunk.subs.size && !chunk.selfSubs.size) {
       // chunk is resolved: search for an existing copy of it first
@@ -694,19 +713,19 @@ class Link {
     console.log(`After filling:\n${this.report(true)}`);
     const name = chunk.name ? `${chunk.name} ` : '';
     console.log(this.segments.get(chunk.segments[0]));
-    throw new Error(`Could not find space for ${size}-byte chunk ${name}in ${
+    throw new Error(`Could not find space for ${size}-byte chunk ${name} in ${
                      chunk.segments.join(', ')}`);
   }
 
   resolveSymbols(expr: Expr): Expr {
     // pre-traverse so that transitive imports work
-    return Expr.traverse(expr, (e, rec) => {
+    return Exprs.traverse(expr, (e, rec) => {
       while (e.op === 'im' || e.op === 'sym') {
         if (e.op === 'im') {
           const name = e.sym!;
           const imported = this.exports.get(name);
           if (imported == null) {
-            const at = Token.at(expr);
+            const at = Tokens.at(expr);
             throw new Error(`Symbol never exported ${name}${at}`);
           }
           e = this.symbols[imported].expr!;
@@ -715,12 +734,12 @@ class Link {
           e = this.symbols[e.num].expr!;
         }
       }
-      return Expr.evaluate(rec(e));
+      return Exprs.evaluate(rec(e));
     });
   }
 
   // resolveBankBytes(expr: Expr): Expr {
-  //   return Expr.traverse(expr, (e: Expr) => {
+  //   return Exprs.traverse(expr, (e: Expr) => {
   //     if (e.op !== '^' || e.args?.length !== 1) return e;
   //     const child = e.args[0];
   //     if (child.op !== 'off') return e;
@@ -766,8 +785,8 @@ class Link {
     const map = new Map<string, Export>();
     for (const symbol of this.symbols) {
       if (!symbol.export) continue;
-      const e = Expr.traverse(symbol.expr!, (e, rec) => {
-        return this.resolveLink(Expr.evaluate(rec(e)));
+      const e = Exprs.traverse(symbol.expr!, (e, rec) => {
+        return this.resolveLink(Exprs.evaluate(rec(e)));
       });
       if (e.op !== 'num') throw new Error(`never resolved: ${symbol.export}`);
       const value = e.num!;

@@ -1,4 +1,6 @@
-import {Token} from './token';
+
+import {Token} from './token.ts'
+import * as Tokens from './token.ts';
 
 const DEBUG = false;
 
@@ -19,10 +21,10 @@ export class Define {
   append(define: Define) {
     if (!this.canOverload()) {
       const prevDef = this.overloads[this.overloads.length - 1].definition;
-      const at = prevDef ? Token.at(prevDef) : '';
+      const at = prevDef ? Tokens.at(prevDef) : '';
       const prev = at.replace(/at/, 'previously defined at');
       const nextDef = define.overloads[0].definition;
-      const next = nextDef ? Token.nameAt(nextDef) : '';
+      const next = nextDef ? Tokens.nameAt(nextDef) : '';
       throw new Error(`Non-overloadable: ${next}${prev}`);
     }
     this.overloads.push(...define.overloads);
@@ -45,7 +47,7 @@ export class Define {
 
   // NOTE: macro[0] is .define
   static from(macro: Token[]) {
-    if (!Token.eq(macro[0], Token.DEFINE)) throw new Error(`invalid`);
+    if (!Tokens.eq(macro[0], Tokens.DEFINE)) throw new Error(`invalid`);
     if (macro[1]?.token !== 'ident') throw new Error(`invalid`);
     // parse the parameter list, if any
     const paramStart = macro[2];
@@ -58,12 +60,12 @@ export class Define {
       overload = new TexStyleDefine(paramStart.inner, macro.slice(3), macro[1]);
     } else if (paramStart.token === 'lp') {
       // C-style param list
-      const paramEnd = Token.findBalanced(macro, 2);
+      const paramEnd = Tokens.findBalanced(macro, 2);
       if (paramEnd < 0) {
-        throw new Error(`Expected close paren ${Token.nameAt(macro[2])}`);
+        throw new Error(`Expected close paren ${Tokens.nameAt(macro[2])}`);
       }
       overload =
-          new CStyleDefine(Token.identsFromCList(macro.slice(3, paramEnd)),
+          new CStyleDefine(Tokens.identsFromCList(macro.slice(3, paramEnd)),
                            macro.slice(paramEnd + 1), macro[1]);
     } else {
       // no param list
@@ -95,7 +97,7 @@ function produce(tokens: Token[],
         line.push(...param); // TODO - copy w/ child sourceinfo?
         continue;
       }
-    } else if (Token.eq(tok, Token.DOT_EOL)) {
+    } else if (Tokens.eq(tok, Tokens.DOT_EOL)) {
       overflow.push(line = []);
       continue;
     }
@@ -124,8 +126,8 @@ class CStyleDefine implements DefineOverload {
     let end = splice;
     const replacements = new Map<string, Token[]>();
     
-    if (start < tokens.length && Token.eq(Token.LP, tokens[i])) {
-      end = Token.findBalanced(tokens, i);
+    if (start < tokens.length && Tokens.eq(Tokens.LP, tokens[i])) {
+      end = Tokens.findBalanced(tokens, i);
       if (end < 0) {
         // throw?
         return 'missing close paren for enclosed C-style expansion';
@@ -135,7 +137,7 @@ class CStyleDefine implements DefineOverload {
       //tok = new Scanner(tokens.slice(0, i), start + 1);
     }
     // Find a comma, skipping balanced parens.
-    const args = Token.parseArgList(tokens, i, end);
+    const args = Tokens.parseArgList(tokens, i, end);
     if (args.length > this.params.length) {
       return 'too many args';
     }
@@ -169,23 +171,23 @@ class TexStyleDefine implements DefineOverload {
         if (!delim || delim?.token === 'ident') {
           // parse undelimited
           const tok = tokens[i++];
-          if (!tok) return `missing undelimited argument ${Token.name(pat)}`;
+          if (!tok) return `missing undelimited argument ${Tokens.name(pat)}`;
           replacements.set(pat.str, tok.token === 'grp' ? tok.inner : [tok]);
         } else {
           // parse delimited
-          const end = Token.eq(delim, Token.DOT_EOL) ?
-              tokens.length : Token.find(tokens, delim, i);
-          if (end < 0) return `could not find delimiter ${Token.name(delim)}`;
+          const end = Tokens.eq(delim, Tokens.DOT_EOL) ?
+              tokens.length : Tokens.find(tokens, delim, i);
+          if (end < 0) return `could not find delimiter ${Tokens.name(delim)}`;
           //patPos++;
           replacements.set(pat.str, tokens.slice(i, end));
           i = end;
         }
-      } else if (Token.eq(pat, Token.DOT_EOL)) {
+      } else if (Tokens.eq(pat, Tokens.DOT_EOL)) {
         if (i < tokens.length) return `could not match .eol`;
       } else {
         // token to match
-        if (!Token.eq(tokens[i++], pat)) {
-          return `could not match: ${Token.name(pat)}`;
+        if (!Tokens.eq(tokens[i++], pat)) {
+          return `could not match: ${Tokens.name(pat)}`;
         }
       }
     }

@@ -1,10 +1,11 @@
-import { assertNever } from '../util';
-import { Cpu } from './cpu';
-import { Expr } from './expr';
-import * as mod from './module';
-import { SourceInfo, Token, TokenSource } from './token';
-import { Tokenizer } from './tokenizer';
-import { IntervalSet } from './util';
+import { AddressingMode, Cpu } from './cpu.ts';
+import { Expr } from './expr.ts';
+import * as Exprs from './expr.ts';
+import * as mod from './module.ts';
+import {Token} from './token.ts'
+import * as Tokens from './token.ts';
+import { Tokenizer } from './tokenizer.ts';
+import { IntervalSet, assertNever } from './util.ts';
 type Chunk = mod.Chunk<number[]>;
 type Module = mod.Module;
 
@@ -27,14 +28,14 @@ class Symbol {
   /** Name this symbol is exported as. */
   export?: string;
   /** Token where this symbol was ref'd. */
-  ref?: {source?: SourceInfo}; // TODO - plumb this through
+  ref?: {source?: Tokens.SourceInfo}; // TODO - plumb this through
 }
 
 interface ResolveOpts {
   // Whether to create a forward reference for missing symbols.
   allowForwardRef?: boolean;
-  // Reference token.
-  ref?: {source?: SourceInfo};
+  // Reference Tokens.
+  ref?: {source?: Tokens.SourceInfo};
 }
 
 interface FwdRefResolveOpts extends ResolveOpts {
@@ -132,7 +133,7 @@ class CheapScope extends BaseScope {
   clear() {
     for (const [name, sym] of this.symbols) {
       if (!sym.expr) {
-        const at = sym.ref ? Token.at(sym.ref) : '';
+        const at = sym.ref ? Tokens.at(sym.ref) : '';
         throw new Error(`Cheap local label never defined: ${name}${at}`);
       }
     }
@@ -149,7 +150,7 @@ export interface RefExtractor {
 export class Assembler {
 
   /** The currently-open segment(s). */
-  private segments: readonly string[] = ['code'];
+  private segments: readonly string[] = [];
 
   /** Data on all the segments. */
   private segmentData = new Map<string, mod.Segment>();
@@ -207,7 +208,7 @@ export class Assembler {
   private _segmentPrefix = '';
 
   /** Current source location, for error messages. */
-  private _source?: SourceInfo;
+  private _source?: Tokens.SourceInfo;
 
   /** Token for reporting errors. */
   private errorToken?: Token;
@@ -215,7 +216,7 @@ export class Assembler {
   /** Supports refExtractor. */
   private _exprMap?: WeakMap<Expr, Expr> = undefined;
 
-  constructor(readonly cpu = Cpu.P02, readonly opts: Assembler.Options = {}) {}
+  constructor(readonly cpu = Cpu.P02, readonly opts: Options = {}) {}
 
   private get chunk(): Chunk {
     // make chunk only when needed
@@ -284,9 +285,9 @@ export class Assembler {
 
   pc(): Expr {
     const num = this.chunk.data.length; // NOTE: before counting chunks
-    const meta: Expr.Meta = {rel: true, chunk: this.chunks.length - 1};
+    const meta: Exprs.Meta = {rel: true, chunk: this.chunks.length - 1};
     if (this._chunk?.org != null) meta.org = this._chunk.org;
-    return Expr.evaluate({op: 'num', num, meta});
+    return Exprs.evaluate({op: 'num', num, meta});
   }
 
   where(): string {
@@ -297,11 +298,11 @@ export class Assembler {
   }
 
   resolve(expr: Expr): Expr {
-    const out = Expr.traverse(expr, (e, rec) => {
+    const out = Exprs.traverse(expr, (e, rec) => {
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
       }
-      return Expr.evaluate(rec(e));
+      return Exprs.evaluate(rec(e));
     });
     if (this.opts.refExtractor?.ref && out !== expr) {
       const orig = this.exprMap.get(expr) || expr;
@@ -387,7 +388,7 @@ export class Assembler {
         if (sym.expr || sym.id == null) continue;
         if (scope.parent) {
           // TODO - record where it was referenced?
-          if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${Token.nameAt(sym.ref)}`);
+          if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${Tokens.nameAt(sym.ref)}`);
           const parentSym = scope.parent.symbols.get(name);
           if (!parentSym) {
             // just alias it directly in the parent scope
@@ -433,7 +434,7 @@ export class Assembler {
     }
 
     for (const [name, sym] of this.currentScope.symbols) {
-      if (!sym.expr) throw new Error(`Symbol '${name}' undefined: ${Token.nameAt(sym.ref)}`);
+      if (!sym.expr) throw new Error(`Symbol '${name}' undefined: ${Tokens.nameAt(sym.ref)}`);
     }
   }
 
@@ -462,12 +463,12 @@ export class Assembler {
   // Assemble from a list of tokens
   line(tokens: Token[]) {
     this._source = tokens[0].source;
-    if (tokens.length < 3 && Token.eq(tokens[tokens.length - 1], Token.COLON)) {
+    if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
       this.label(tokens[0]);
-    } else if (Token.eq(tokens[1], Token.ASSIGN)) {
-      this.assign(Token.str(tokens[0]), this.parseExpr(tokens, 2));
-    } else if (Token.eq(tokens[1], Token.SET)) {
-      this.set(Token.str(tokens[0]), this.parseExpr(tokens, 2));
+    } else if (Tokens.eq(tokens[1], Tokens.ASSIGN)) {
+      this.assign(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
+    } else if (Tokens.eq(tokens[1], Tokens.SET)) {
+      this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
     } else if (tokens[0].token === 'cs') {
       this.directive(tokens);
     } else {
@@ -476,7 +477,7 @@ export class Assembler {
   }
 
   // Assemble from a token source
-  tokens(source: TokenSource) {
+  tokens(source: Tokens.Source) {
     let line;
     while ((line = source.next())) {
       this.line(line);
@@ -484,7 +485,7 @@ export class Assembler {
   }
 
   // Assemble from an async token source
-  async tokensAsync(source: TokenSource.Async): Promise<void> {
+  async tokensAsync(source: Tokens.Async): Promise<void> {
     let line;
     while ((line = await source.nextAsync())) {
       this.line(line);
@@ -495,11 +496,12 @@ export class Assembler {
     // TODO - record line information, rewrap error messages?
     this.errorToken = tokens[0];
     try {
-      switch (Token.str(tokens[0])) {
+      switch (Tokens.str(tokens[0])) {
         case '.org': return this.org(this.parseConst(tokens, 1));
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
         case '.assert': return this.assert(this.parseExpr(tokens, 1));
         case '.segment': return this.segment(...this.parseSegmentList(tokens, 1));
+        case '.byt':
         case '.byte': return this.byte(...this.parseDataList(tokens, true));
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
@@ -515,7 +517,7 @@ export class Assembler {
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
         case '.move': return this.move(...this.parseMoveArgs(tokens));
       }
-      this.fail(`Unknown directive: ${Token.nameAt(tokens[0])}`);
+      this.fail(`Unknown directive: ${Tokens.nameAt(tokens[0])}`);
     } finally {
       this.errorToken = undefined;
     }
@@ -528,7 +530,7 @@ export class Assembler {
     if (typeof label === 'string') {
       ident = label;
     } else {
-      ident = Token.str(token = label);
+      ident = Tokens.str(token = label);
       if (label.source) expr.source = label.source;
     }
     if (ident === ':') {
@@ -610,9 +612,9 @@ export class Assembler {
       scope.symbols.set(ident, sym = {id: -1});
     } else if (!mut && sym.expr) {
       const orig =
-          sym.expr.source ? `\nOriginally defined${Token.at(sym.expr)}` : '';
-      const name = token ? Token.nameAt(token) :
-          ident + (this._source ? Token.at({source: this._source}) : '');
+          sym.expr.source ? `\nOriginally defined${Tokens.at(sym.expr)}` : '';
+      const name = token ? Tokens.nameAt(token) :
+          ident + (this._source ? Tokens.at({source: this._source}) : '');
       throw new Error(`Redefining symbol ${name}${orig}`);
     }
     sym.expr = expr;
@@ -626,7 +628,7 @@ export class Assembler {
     if (args.length === 1 && Array.isArray(args[0])) {
       // handle the line...
       const tokens = args[0];
-      mnemonic = Token.expectIdentifier(tokens[0]).toLowerCase();
+      mnemonic = Tokens.expectIdentifier(tokens[0]).toLowerCase();
       arg = this.parseArg(tokens, 1);
     } else if (typeof args[1] === 'string') {
       // parse the tokens first
@@ -686,12 +688,12 @@ export class Assembler {
     const front = tokens[start];
     const next = tokens[start + 1];
     if (tokens.length === start + 1) {
-      if (Token.isRegister(front, 'a')) return ['acc'];
-    } else if (Token.eq(front, Token.IMMEDIATE)) {
+      if (Tokens.isRegister(front, 'a')) return ['acc'];
+    } else if (Tokens.eq(front, Tokens.IMMEDIATE)) {
       return ['imm', this.parseExpr(tokens, start + 1)];
     }
     // Look for relative or anonymous labels, which are not valid on their own
-    if (Token.eq(front, Token.COLON) && tokens.length === start + 2 &&
+    if (Tokens.eq(front, Tokens.COLON) && tokens.length === start + 2 &&
         next.token === 'op' && /^[-+]+$/.test(next.str)) {
       // anonymous label
       return ['add', {op: 'sym', sym: ':' + next.str}];
@@ -700,36 +702,47 @@ export class Assembler {
       // relative label
       return ['add', {op: 'sym', sym: front.str}];
     }
+    // check to see if there is a zp,abs,far operator forcing a new addressing mode type
+    if (front.token == 'ident' && (front.str == 'a' || front.str == 'z') && Tokens.eq(next, Tokens.COLON)) {
+      // Get the rest of the expression and force the addressing mode to the required one
+      const [mode, out] = this.parseArg(tokens, start + 2);
+      if (mode == 'acc' || mode == 'imm') {
+        this.fail(`Cannot force direct or absolute addressing on acc or imm arguments`, front);
+      }
+      const lookup = (front.str == 'z') ? ForceDirectAddressingMap : ForceAbsoluteAddressingMap;
+      const adr = lookup.get(mode);
+      return [adr ? adr! : mode as ArgMode, out!];
+    }
     // it must be an address of some sort - is it indirect?
-    if (Token.eq(front, Token.LP) ||
-        (this.opts.allowBrackets && Token.eq(front, Token.LB))) {
-      const close = Token.findBalanced(tokens, start);
-      if (close < 0) this.fail(`Unbalanced ${Token.name(front)}`, front);
-      const args = Token.parseArgList(tokens, start + 1, close);
+    if (Tokens.eq(front, Tokens.LP) ||
+        (this.opts.allowBrackets && Tokens.eq(front, Tokens.LB))) {
+      const close = Tokens.findBalanced(tokens, start);
+      if (close < 0) this.fail(`Unbalanced ${Tokens.name(front)}`, front);
+      const args = Tokens.parseArgList(tokens, start + 1, close);
       if (!args.length) this.fail(`Bad argument`, front);
       const expr = this.parseExpr(args[0], 0);
       if (args.length === 1) {
         // either IND or INY
-        if (Token.eq(tokens[close + 1], Token.COMMA) &&
-            Token.isRegister(tokens[close + 2], 'y')) {
-          Token.expectEol(tokens[close + 3]);
+        if (Tokens.eq(tokens[close + 1], Tokens.COMMA) &&
+            Tokens.isRegister(tokens[close + 2], 'y')) {
+          Tokens.expectEol(tokens[close + 3]);
           return ['iny', expr];
         }
-        Token.expectEol(tokens[close + 1]);
+        Tokens.expectEol(tokens[close + 1]);
         return ['ind', expr];
       } else if (args.length === 2 && args[1].length === 1) {
         // INX
-        if (Token.isRegister(args[1][0], 'x')) return ['inx', expr];
+        if (Tokens.isRegister(args[1][0], 'x')) return ['inx', expr];
       }
       this.fail(`Bad argument`, front);
     }
-    const args = Token.parseArgList(tokens, start);
+    const args = Tokens.parseArgList(tokens, start);
     if (!args.length) this.fail(`Bad arg`, front);
     const expr = this.parseExpr(args[0], 0);
     if (args.length === 1) return ['add', expr];
     if (args.length === 2 && args[1].length === 1) {
-      if (Token.isRegister(args[1][0], 'x')) return ['a,x', expr];
-      if (Token.isRegister(args[1][0], 'y')) return ['a,y', expr];
+      if (Tokens.isRegister(args[1][0], 'x')) return ['a,x', expr];
+      if (Tokens.isRegister(args[1][0], 'y')) return ['a,y', expr];
     }
     this.fail(`Bad arg`, front);
   }
@@ -741,7 +754,7 @@ export class Assembler {
     // TODO - handle local/anonymous labels separately?
     // TODO - check the range somehow?
     const num = this.chunk.data.length + arglen + 1;
-    const meta: Expr.Meta = {rel: true, chunk: this.chunks.length - 1};
+    const meta: Exprs.Meta = {rel: true, chunk: this.chunks.length - 1};
     if (this._chunk?.org) meta.org = this._chunk.org;
     const nextPc = {op: 'num', num, meta};
     const rel: Expr = {op: '-', args: [expr, nextPc]};
@@ -784,7 +797,7 @@ export class Assembler {
     // Save the ref, as long as it's actually interesting.
     if (this.opts.refExtractor?.ref && chunk.org != null) {
       const orig = this._exprMap?.get(expr) || expr;
-      if (Expr.symbols(orig).length > 0) {
+      if (Exprs.symbols(orig).length > 0) {
         this.opts.refExtractor.ref(orig, size,
                                       chunk.org + chunk.data.length,
                                       chunk.segments);
@@ -995,21 +1008,21 @@ export class Assembler {
     this.fail(`Expression is not constant`, tokens[1]);
   }
   parseNoArgs(tokens: Token[], start: number) {
-    Token.expectEol(tokens[1]);
+    Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {
-    return Expr.parseOnly(tokens, start);
+    return Exprs.parseOnly(tokens, start);
   }
   // parseStringList(tokens: Token[], start = 1): string[] {
-  //   return Token.parseArgList(tokens, 1).map(ts => {
-  //     const str = Token.expectString(ts[0]);
-  //     Token.expectEol(ts[1], "a single string");
+  //   return Tokens.parseArgList(tokens, 1).map(ts => {
+  //     const str = Tokens.expectString(ts[0]);
+  //     Tokens.expectEol(ts[1], "a single string");
   //     return str;
   //   });
   // }
   parseStr(tokens: Token[], start: number): string {
-    const str = Token.expectString(tokens[start]);
-    Token.expectEol(tokens[start + 1], "a single string");
+    const str = Tokens.expectString(tokens[start]);
+    Tokens.expectEol(tokens[start + 1], "a single string");
     return str;
   }
 
@@ -1017,15 +1030,15 @@ export class Assembler {
     if (tokens.length < start + 1) {
       this.fail(`Expected a segment list`, tokens[start - 1]);
     }
-    return Token.parseArgList(tokens, 1).map(ts => {
-      const str = this._segmentPrefix + Token.expectString(ts[0]);
+    return Tokens.parseArgList(tokens, 1).map(ts => {
+      const str = this._segmentPrefix + Tokens.expectString(ts[0]);
       if (ts.length === 1) return str;
-      if (!Token.eq(ts[1], Token.COLON)) {
-        this.fail(`Expected comma or colon: ${Token.name(ts[1])}`, ts[1]);
+      if (!Tokens.eq(ts[1], Tokens.COLON)) {
+        this.fail(`Expected comma or colon: ${Tokens.name(ts[1])}`, ts[1]);
       }
       const seg = {name: str} as mod.Segment;
       // TODO - parse expressions...
-      const attrs = Token.parseAttrList(ts, 1); // : ident [...]
+      const attrs = Tokens.parseAttrList(ts, 1); // : ident [...]
       for (const [key, val] of attrs) {
         switch (key) {
           case 'bank': seg.bank = this.parseConst(val, 0); break;
@@ -1059,7 +1072,7 @@ export class Assembler {
       this.fail(`Expected a data list`, tokens[0]);
     }
     const out: Array<Expr|string> = [];
-    for (const term of Token.parseArgList(tokens, 1)) {
+    for (const term of Tokens.parseArgList(tokens, 1)) {
       if (allowString && term.length === 1 && term[0].token === 'str') {
         out.push(term[0].str);
       } else if (term.length < 1) {
@@ -1076,11 +1089,11 @@ export class Assembler {
       this.fail(`Expected identifier(s)`, tokens[0]);
     }
     const out: string[] = [];
-    for (const term of Token.parseArgList(tokens, 1)) {
+    for (const term of Tokens.parseArgList(tokens, 1)) {
       if (term.length !== 1 || term[0].token !== 'ident') {
-        this.fail(`Expected identifier: ${Token.name(term[0])}`, term[0]);
+        this.fail(`Expected identifier: ${Tokens.name(term[0])}`, term[0]);
       }
-      out.push(Token.str(term[0]));
+      out.push(Tokens.str(term[0]));
     }
     return out;
   }
@@ -1088,21 +1101,21 @@ export class Assembler {
   parseOptionalIdentifier(tokens: Token[]): string|undefined {
     const tok = tokens[1];
     if (!tok) return undefined;
-    const ident = Token.expectIdentifier(tok);
-    Token.expectEol(tokens[2]);
+    const ident = Tokens.expectIdentifier(tok);
+    Tokens.expectEol(tokens[2]);
     return ident;
   }
 
   parseRequiredIdentifier(tokens: Token[]): string {
-    const ident = Token.expectIdentifier(tokens[1]);
-    Token.expectEol(tokens[2]);
+    const ident = Tokens.expectIdentifier(tokens[1]);
+    Tokens.expectEol(tokens[2]);
     return ident;
   }
 
   parseMoveArgs(tokens: Token[]): [number, Expr] {
     // .move 10, ident        ; must be an offset
     // .move 10, $1234, "seg" ; maybe support this?
-    const args = Token.parseArgList(tokens, 1);
+    const args = Tokens.parseArgList(tokens, 1);
     if (args.length !== 2 /* && args.length !== 3 */) {
       this.fail(`Expected constant number, then identifier`);
     }
@@ -1128,13 +1141,13 @@ export class Assembler {
 
   // Diagnostics
 
-  fail(msg: string, at?: {source?: SourceInfo}): never {
+  fail(msg: string, at?: {source?: Tokens.SourceInfo}): never {
     if (!at && this.errorToken) at = this.errorToken;
-    if (at?.source) throw new Error(msg + Token.at(at));
+    if (at?.source) throw new Error(msg + Tokens.at(at));
     if (!this._source && this._chunk?.name) {
       throw new Error(msg + `\n  in ${this._chunk.name}`);
     }
-    throw new Error(msg + Token.at({source: this._source}));
+    throw new Error(msg + Tokens.at({source: this._source}));
   }
 
   writeNumber(data: number[], size: number, val?: number) {
@@ -1182,14 +1195,13 @@ type ArgMode =
 
 export type Arg = ['acc' | 'imp'] | [ArgMode, Expr];
 
-export namespace Assembler {
-  export interface Options {
-    allowBrackets?: boolean;
-    reentrantScopes?: boolean;
-    overwriteMode?: mod.OverwriteMode;
-    refExtractor?: RefExtractor;
-  }
+export interface Options {
+  allowBrackets?: boolean;
+  reentrantScopes?: boolean;
+  overwriteMode?: mod.OverwriteMode;
+  refExtractor?: RefExtractor;
 }
+
 
 type ParsedSymbol = {type: 'pc'|'none'}|{type: 'anon'|'rel'|'rts', num: number};
 function parseSymbol(name: string): ParsedSymbol {
@@ -1207,3 +1219,25 @@ function parseSymbol(name: string): ParsedSymbol {
   if (/^-+$/.test(name)) return {type: 'rel', num: -name.length};
   return {type: 'none'};
 }
+
+const ForceDirectAddressingMap : Map<string, ArgMode> = new Map(
+  [
+    ['add', 'zpg'],
+    ['a,x', 'zpx'],
+    ['a,y', 'zpy'],
+    ['abs', 'zpg'],
+    ['abx', 'zpx'],
+    ['aby', 'zpy'],
+  ]
+);
+
+const ForceAbsoluteAddressingMap : Map<string, ArgMode> = new Map(
+  [
+    ['add', 'abs'],
+    ['a,x', 'abx'],
+    ['a,y', 'aby'],
+    ['zpg', 'abs'],
+    ['zpx', 'abx'],
+    ['zpy', 'aby'],
+  ]
+);

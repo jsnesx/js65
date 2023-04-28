@@ -1,8 +1,10 @@
-import {Define} from './define';
-import {Expr} from './expr';
-import {Macro} from './macro';
-import {Token, TokenSource} from './token';
-import {TokenStream} from './tokenstream';
+import {Define} from './define.ts';
+import {Expr} from './expr.ts';
+import * as Exprs from './expr.ts';
+import {Macro} from './macro.ts';
+import {Token} from './token.ts'
+import * as Tokens from './token.ts';
+import {TokenStream} from './tokenstream.ts';
 
 // TODO - figure out how to actually keep track of stack depth?
 //  - might need to insert a special token at the end of an expansion
@@ -37,7 +39,7 @@ interface Env {
   //  - turn it into a json tree...?
 }
 
-export class Preprocessor extends TokenSource.Abstract {
+export class Preprocessor extends Tokens.Abstract {
   private readonly macros: Map<string, Define|Macro>;
 
   // builds up repeating tokens...
@@ -62,7 +64,7 @@ export class Preprocessor extends TokenSource.Abstract {
         case 'ident':
           // Possibilities: (1) label, (2) instruction/assign, (3) macro
           // Labels get split out.  We don't distinguish assigns yet.
-          if (Token.eq(line[1], Token.COLON)) {
+          if (Tokens.eq(line[1], Tokens.COLON)) {
             yield line.splice(0, 2);
             break;
           }
@@ -78,7 +80,7 @@ export class Preprocessor extends TokenSource.Abstract {
           if (/^[-+]+$/.test(front.str)) {
             const label: Token[] = [front];
             const second = line[1];
-            if (second && Token.eq(second, Token.COLON)) {
+            if (second && Tokens.eq(second, Tokens.COLON)) {
               label.push(second);
               line.splice(0, 2);
             } else {
@@ -91,9 +93,9 @@ export class Preprocessor extends TokenSource.Abstract {
             yield line.splice(0, 1);
             break;
           }
-
+          /* fallthrough */
         default:
-          throw new Error(`Unexpected: ${Token.nameAt(line[0])}`);
+          throw new Error(`Unexpected: ${Tokens.nameAt(line[0])}`);
       }
     }
   }
@@ -119,7 +121,7 @@ export class Preprocessor extends TokenSource.Abstract {
         depth = 0;
       } else if (depth++ > MAX_STACK_DEPTH) {
         throw new Error(`Maximum expansion depth reached: ${
-                         line.map(Token.name).join(' ')}${Token.at(front)}`);
+                         line.map(Tokens.name).join(' ')}${Tokens.at(front)}`);
       }
       pos = this.expandToken(line, pos);
     }
@@ -211,82 +213,82 @@ export class Preprocessor extends TokenSource.Abstract {
 
   private parseArgs(line: Token[], i: number, argCount: number,
                     fn: (this: this, cs: Token,
-                         ...args: Token[][]) => void): number {
+                         ...args: Token[][]) => Token[]): number {
     const cs = line[i];
-    Token.expect(Token.LP, line[i + 1], cs);
-    const end = Token.findBalanced(line, i + 1);
+    Tokens.expect(Tokens.LP, line[i + 1], cs);
+    const end = Tokens.findBalanced(line, i + 1);
     const args =
-        Token.parseArgList(line, i + 2, end).map(ts => {
+        Tokens.parseArgList(line, i + 2, end).map(ts => {
           if (ts.length === 1 && ts[0].token === 'grp') ts = ts[0].inner;
           return this.expandLine(ts);
         });
     if (argCount && args.length !== argCount) {
-      throw new Error(`Expected ${argCount} parameters: ${Token.nameAt(cs)}`);
+      throw new Error(`Expected ${argCount} parameters: ${Tokens.nameAt(cs)}`);
     }
     const expansion = fn.call(this, cs, ...args);
     line.splice(i, end + 1 - i, ...expansion);
     return i; // continue expansion from same spot
   }
 
-  private tcount(cs: Token, arg: Token[]) {
-    return [{token: 'num', num: Token.count(arg), source: cs.source}];
+  private tcount(cs: Token, arg: Token[]) : Token[] {
+    return [{token: 'num', num: Tokens.count(arg), source: cs.source}];
   }
 
-  private ident(cs: Token, arg: Token[]) {
-    const str = Token.expectString(arg[0], cs);
-    Token.expectEol(arg[1], 'a single token');
+  private ident(cs: Token, arg: Token[]) : Token[] {
+    const str = Tokens.expectString(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single token');
     return [{token: 'ident', str, source: arg[0].source}];
   }
 
-  private string(cs: Token, arg: Token[]) {
-    const str = Token.expectIdentifier(arg[0], cs);
-    Token.expectEol(arg[1], 'a single token');
+  private string(cs: Token, arg: Token[]) : Token[] {
+    const str = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single token');
     return [{token: 'str', str, source: arg[0].source}];
   }
     
-  private concat(cs: Token, ...args: Token[][]) {
+  private concat(cs: Token, ...args: Token[][]) : Token[] {
     const strs = args.map(ts => {
-      const str = Token.expectString(ts[0]);
-      Token.expectEol(ts[1], 'a single string');
+      const str = Tokens.expectString(ts[0]);
+      Tokens.expectEol(ts[1], 'a single string');
       return str;
     });
     return [{token: 'str', str: strs.join(''), source: cs.source}];
   }
 
-  private sprintf(cs: Token, fmtToks: Token[], ...args: Token[][]) {
-    const fmt = Token.expectString(fmtToks[0], cs);
-    Token.expectEol(fmtToks[1], 'a single format string');
+  private sprintf(cs: Token, fmtToks: Token[], ...args: Token[][]) : Token[] {
+    const fmt = Tokens.expectString(fmtToks[0], cs);
+    Tokens.expectEol(fmtToks[1], 'a single format string');
     // figure out what placeholders...
     // TODO - evaluate numeric args as exprs, strings left as is
     const [] = [fmt];
     throw new Error('unimplemented');
   }
 
-  private cond(cs: Token, ...args: Token[][]) {
+  private cond(cs: Token, ...args: Token[][]) : Token[] {
     throw new Error('unimplemented');
   }
 
-  private defined(cs: Token, arg: Token[]) {
-    const ident = Token.expectIdentifier(arg[0], cs);
-    Token.expectEol(arg[1], 'a single identifier');
+  private defined(cs: Token, arg: Token[]) : Token[] {
+    const ident = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single identifier');
     return [{token: 'num', num: this.macros.has(ident) ? 1 : 0}];
   }
 
-  private definedSymbol(cs: Token, arg: Token[]) {
-    const ident = Token.expectIdentifier(arg[0], cs);
-    Token.expectEol(arg[1], 'a single identifier');
+  private definedSymbol(cs: Token, arg: Token[]) : Token[] {
+    const ident = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single identifier');
     return [{token: 'num', num: this.env.definedSymbol(ident) ? 1 : 0}];
   }
 
-  private constantSymbol(cs: Token, arg: Token[]) {
-    const ident = Token.expectIdentifier(arg[0], cs);
-    Token.expectEol(arg[1], 'a single identifier');
+  private constantSymbol(cs: Token, arg: Token[]) : Token[] {
+    const ident = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single identifier');
     return [{token: 'num', num: this.env.constantSymbol(ident) ? 1 : 0}];
   }
 
-  private referencedSymbol(cs: Token, arg: Token[]) {
-    const ident = Token.expectIdentifier(arg[0], cs);
-    Token.expectEol(arg[1], 'a single identifier');
+  private referencedSymbol(cs: Token, arg: Token[]) : Token[] {
+    const ident = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single identifier');
     return [{token: 'num', num: this.env.referencedSymbol(ident) ? 1 : 0}];
   }
 
@@ -317,9 +319,9 @@ export class Preprocessor extends TokenSource.Abstract {
   }
 
   evaluateConst(expr: Expr): number {
-    expr = Expr.traversePost(expr, Expr.evaluate);
+    expr = Exprs.traversePost(expr, Exprs.evaluate);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
-    const at = Token.at(expr);
+    const at = Tokens.at(expr);
     throw new Error(`Expected a constant${at}`);
   }
 
@@ -359,7 +361,7 @@ export class Preprocessor extends TokenSource.Abstract {
   };
 
   private parseDefine(line: Token[]) {
-    const name = Token.expectIdentifier(line[1], line[0]);
+    const name = Tokens.expectIdentifier(line[1], line[0]);
     const define = Define.from(line);
     const prev = this.macros.get(name);
     if (prev instanceof Define) {
@@ -373,16 +375,16 @@ export class Preprocessor extends TokenSource.Abstract {
 
   private parseUndefine(line: Token[]) {
     const [cs, ident, eol] = line;
-    const name = Token.expectIdentifier(ident, cs);
-    Token.expectEol(eol);
+    const name = Tokens.expectIdentifier(ident, cs);
+    Tokens.expectEol(eol);
     if (!this.macros.has(name)) {
-      throw new Error(`Not defined: ${Token.nameAt(ident)}`);
+      throw new Error(`Not defined: ${Tokens.nameAt(ident)}`);
     }
     this.macros.delete(name);
   }
 
   private parseMacro(line: Token[]) {
-    const name = Token.expectIdentifier(line[1], line[0]);
+    const name = Tokens.expectIdentifier(line[1], line[0]);
     const macro = Macro.from(line, this.stream);
     const prev = this.macros.get(name);
     if (prev) throw new Error(`Already defined: ${name}`);
@@ -390,26 +392,26 @@ export class Preprocessor extends TokenSource.Abstract {
   }
 
   private parseRepeat(line: Token[]) {
-    const [expr, end] = Expr.parse(line, 1);
+    const [expr, end] = Exprs.parse(line, 1);
     const at = line[1] || line[0];
-    if (!expr) throw new Error(`Expected expression: ${Token.nameAt(at)}`);
+    if (!expr) throw new Error(`Expected expression: ${Tokens.nameAt(at)}`);
     const times = this.evaluateConst(expr);
-    if (times == null) throw new Error(`Expected a constant${Token.at(expr)}`);
+    if (times == null) throw new Error(`Expected a constant${Tokens.at(expr)}`);
     let ident: string|undefined;
     if (end < line.length) {
-      if (!Token.eq(line[end], Token.COMMA)) {
-        throw new Error(`Expected comma: ${Token.nameAt(line[end])}`);
+      if (!Tokens.eq(line[end], Tokens.COMMA)) {
+        throw new Error(`Expected comma: ${Tokens.nameAt(line[end])}`);
       }
-      ident = Token.expectIdentifier(line[end + 1]);
-      Token.expectEol(line[end + 2]);
+      ident = Tokens.expectIdentifier(line[end + 1]);
+      Tokens.expectEol(line[end + 2]);
     }
     const lines: Token[][] = [];
     let depth = 1;
     while (depth > 0) {
       line = this.stream.next() ?? fail(`.repeat with no .endrep`);
-      if (Token.eq(line[0], Token.REPEAT)) depth++;
-      if (Token.eq(line[0], Token.ENDREPEAT)) depth--;
-      if (Token.eq(line[0], Token.ENDREP)) depth--;
+      if (Tokens.eq(line[0], Tokens.REPEAT)) depth++;
+      if (Tokens.eq(line[0], Tokens.ENDREPEAT)) depth--;
+      if (Tokens.eq(line[0], Tokens.ENDREP)) depth--;
       lines.push(line);
     }
     this.repeats.push([lines, times, -1, ident]);
@@ -417,9 +419,9 @@ export class Preprocessor extends TokenSource.Abstract {
   }
 
   private parseEndRepeat(line: Token[]) {
-    Token.expectEol(line[1]);
+    Tokens.expectEol(line[1]);
     const top = this.repeats.pop();
-    if (!top) throw new Error(`.endrep with no .repeat${Token.at(line[0])}`);
+    if (!top) throw new Error(`.endrep with no .repeat${Tokens.at(line[0])}`);
     if (++top[2] >= top[1]) return;
     this.repeats.push(top);
     this.stream.unshift(...top[0].map(line => line.map(token => {
@@ -438,23 +440,23 @@ export class Preprocessor extends TokenSource.Abstract {
       const line = this.stream.next();
       if (!line) throw new Error(`EOF looking for .endif`); // TODO: start?
       const front = line[0];
-      if (Token.eq(front, Token.ENDIF)) {
+      if (Tokens.eq(front, Tokens.ENDIF)) {
         depth--;
         if (!depth) break;
       } else if (front.token === 'cs' && front.str.startsWith('.if')) {
         depth++;
       } else if (depth === 1 && !done) {
-        if (cond && (Token.eq(front, Token.ELSE) ||
-                     Token.eq(front, Token.ELSEIF))) {
+        if (cond && (Tokens.eq(front, Tokens.ELSE) ||
+                     Tokens.eq(front, Tokens.ELSEIF))) {
           // if true ... else .....
           cond = false;
           done = true;
           continue;
-        } else if (Token.eq(front, Token.ELSEIF)) {
+        } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
           cond = !!this.evaluateConst(parseOneExpr(line.slice(1), front));
           continue;
-        } else if (Token.eq(front, Token.ELSE)) {
+        } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
           cond = true;
           continue;
@@ -504,10 +506,10 @@ export class Preprocessor extends TokenSource.Abstract {
   //   let curlies = 0;
   //   while (toks.length) {
   //     const tok = toks.shift();
-  //     if (Token.eq(Token.EOL, tok)) break;
-  //     if (Token.eq(Token.LC, tok)) {
+  //     if (Tokens.eq(Tokens.EOL, tok)) break;
+  //     if (Tokens.eq(Tokens.LC, tok)) {
   //       curlies++;
-  //     } else if (Token.eq(Token.RC, tok)) {
+  //     } else if (Tokens.eq(Tokens.RC, tok)) {
   //       if (--curlies < 0) throw new Eror(`unbalanced curly`);
   //     }
   //     line.push(tok);
@@ -516,7 +518,7 @@ export class Preprocessor extends TokenSource.Abstract {
   //   // now do the early expansions
   //   for (let i = 0; i < line.length; i++) {
   //     const tok = line.get(i)!;
-  //     if (Token.eq(Token.SKIP, tok)) {
+  //     if (Tokens.eq(Tokens.SKIP, tok)) {
   //       const next = line.get(i + 1);
   //       const count = next?.token === 'num' ? next.num : 1;
   //       i += count;
@@ -544,7 +546,7 @@ export class Preprocessor extends TokenSource.Abstract {
   //       // look for labels, but could be a mnemonic or macro
   //       const front = line.front()!;
   //       if (front.token === 'ident') {
-  //         if (Token.eq(Token.COLON, line.get(1))) {
+  //         if (Tokens.eq(Tokens.COLON, line.get(1))) {
   //           // it's a label
   //           labels.push(front.str);
   //           line.splice(0, 2);
@@ -562,7 +564,7 @@ export class Preprocessor extends TokenSource.Abstract {
   //         // it's a regular mnemonic
   //         yield {labels, tokens: [...line]};
   //         break;
-  //       } else if (Token.eq(Token.COLON, front)) { // special label
+  //       } else if (Tokens.eq(Tokens.COLON, front)) { // special label
   //         labels.push(':');
   //         line.shift();
   //         continue;
@@ -571,11 +573,11 @@ export class Preprocessor extends TokenSource.Abstract {
   //         if (/^(\++|-+)$/.test(front.str)) {
   //           labels.push(front.str);
   //           line.shift();
-  //           if (Token.eq(Token.COLON, line.front())) line.shift();
+  //           if (Tokens.eq(Tokens.COLON, line.front())) line.shift();
   //           continue;
   //         }
   //         // otherwise... syntax error? any other operator allowed?
-  //         throw new Error(`Syntax error: unexpected ${Token.nameAt(front)}`);
+  //         throw new Error(`Syntax error: unexpected ${Tokens.nameAt(front)}`);
   //       } else if (front.token === 'cs') {
   //         switch (front.str) {
   //           case '.exitmacro':
@@ -599,32 +601,32 @@ export class Preprocessor extends TokenSource.Abstract {
 // Handles scoped names, too.
 function parseOneIdent(ts: Token[], prev?: Token): string {
   const e = parseOneExpr(ts, prev);
-  return Expr.identifier(e);
+  return Exprs.identifier(e);
 }
 
 function parseOneExpr(ts: Token[], prev?: Token): Expr {
   if (!ts.length) {
     if (!prev) throw new Error(`Expected expression`);
-    throw new Error(`Expected expression: ${Token.nameAt(prev)}`);
+    throw new Error(`Expected expression: ${Tokens.nameAt(prev)}`);
   }
-  return Expr.parseOnly(ts);
+  return Exprs.parseOnly(ts);
 }
 
 function noGarbage(token: Token|undefined): void {
-  if (token) throw new Error(`garbage at end of line: ${Token.nameAt(token)}`);
+  if (token) throw new Error(`garbage at end of line: ${Tokens.nameAt(token)}`);
 }
 
 // function fail(t: Token, msg: string): never {
 //   const s = t.stream;
 //   if (s) {
-//     msg += `\n  at ${s.file}:${s.line}:${s.column}: Token.name(t)`;
+//     msg += `\n  at ${s.file}:${s.line}:${s.column}: Tokens.name(t)`;
 //     // TODO - expanded from?
 //   }
 //   throw new Error(msg);
 // }
 
 function badClose(open: string, tok: Token): never {
-  throw new Error(`${Token.name(tok)} with no ${open}${Token.at(tok)}`);
+  throw new Error(`${Tokens.name(tok)} with no ${open}${Tokens.at(tok)}`);
 }
 
 function fail(msg: string): never {

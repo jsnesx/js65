@@ -1,11 +1,12 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Cpu} from '../../src/js/asm/cpu';
-import {Expr} from '../../src/js/asm/expr';
-import {Module} from '../../src/js/asm/module';
-import {Assembler} from '../../src/js/asm/assembler';
-import {Token} from '../../src/js/asm/token';
-import * as util from 'util';
+import {Cpu} from '../cpu.ts';
+import {Expr} from '../expr.ts';
+import {Module} from '../module.ts';
+import {Assembler} from '../assembler.ts';
+import {Token} from '../token.ts';
+import * as Tokens from '../token.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 
@@ -14,7 +15,7 @@ function num(num: number): Token { return {token: 'num', num}; }
 function str(str: string): Token { return {token: 'str', str}; }
 function cs(str: string): Token { return {token: 'cs', str}; }
 function op(str: string): Token { return {token: 'op', str}; }
-const {COLON, COMMA, IMMEDIATE, LP, RP} = Token;
+const {COLON, COMMA, IMMEDIATE, LP, RP} = Tokens;
 const ORG = cs('.org');
 const RELOC = cs('.reloc');
 const ASSERT = cs('.assert');
@@ -36,7 +37,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xa9, 3),
         }],
         symbols: [],
@@ -50,7 +51,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x85, 2),
         }],
         symbols: [],
@@ -64,7 +65,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xac, 0x2f, 3),
         }],
         symbols: [],
@@ -78,7 +79,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x60),
         }],
         symbols: [],
@@ -92,7 +93,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xb1, 0x24),
         }],
         symbols: [],
@@ -106,7 +107,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x81, 0x20, 3),
         }],
         symbols: [],
@@ -120,7 +121,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x4a),
         }],
         symbols: [],
@@ -134,7 +135,7 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x4a),
         }],
         symbols: [],
@@ -148,11 +149,48 @@ describe('Assembler', function() {
         segments: [],
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x1d, 0x80, 4),
         }],
         symbols: [],
       });
+    });
+
+    it('should handle `lda a:$80,x`', function() {
+      const a = new Assembler(Cpu.P02);
+      a.instruction([ident('lda'), ident('a'), COLON, num(0x80), COMMA, ident('x')]);
+      expect(strip(a.module())).to.eql({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xbd, 0x80, 0x00),
+        }],
+        symbols: [],
+      });
+    });
+
+    it('should handle `lda z:a:$80,x`', function() {
+      const a = new Assembler(Cpu.P02);
+      a.instruction([ident('lda'), ident('z'), COLON, ident('a'), COLON, num(0x80), COMMA, ident('x')]);
+      expect(strip(a.module())).to.eql({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xb5, 0x80),
+        }],
+        symbols: [],
+      });
+    });
+
+    it('should error for improper address mode `lda z:$8000,y`', function() {
+      const a = new Assembler(Cpu.P02);
+      try {
+        a.instruction([ident('lda'), ident('z'), COLON, num(0x8000), COMMA, ident('y')]);
+      } catch (err) {
+        expect(err.message).to.eql("Bad address mode zpy for lda");
+      }
     });
   });
 
@@ -164,7 +202,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xa9, 0x23),
         }],
         symbols: [],
@@ -181,7 +219,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           name: 'foo',
           org: 0x9135,
           data: Uint8Array.of(0xa2, 0x35, 0xa0, 0x91),
@@ -200,12 +238,12 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           org: 0x1234,
           data: Uint8Array.of(0x60),
         }, {
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           org: 0x5678,
           data: Uint8Array.of(0xa0, 0x12),
         }],
@@ -223,7 +261,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           org: 0x1234,
           data: Uint8Array.of(0x60, 0xa0, 0x12),
         }],
@@ -239,7 +277,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xa9, 0xff),
           subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
         }],
@@ -258,7 +296,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           org: 0x8000,
           data: Uint8Array.of(0x20, 0xff, 0xff,
                               0xa9, 0x00),
@@ -280,7 +318,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xa9, 5, 0xa9, 6),
         }],
         symbols: [], segments: []});
@@ -311,7 +349,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xa9, 0xff),
           subs: [{offset: 1, size: 1,
                   expr: {op: '+', args: [{op: 'num', num: 1},
@@ -332,7 +370,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xa2, 0xff, 0xa0, 0xff),
           subs: [{
             offset: 1, size: 1,
@@ -355,7 +393,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x20, 0xff, 0xff,
                               0xa9, 0x00),
           subs: [{offset: 1, size: 2, expr: {op: 'sym', num: 0}}],
@@ -387,7 +425,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x20, 0xff, 0xff,
                               0x20, 0xff, 0xff),
           subs: [
@@ -430,7 +468,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xd0, 0xff, 0x90, 0xff, 0x4a, 0x4a),
           subs: [{offset: 1, size: 1,
                   expr: {op: '-', args: [{op: 'sym', num: 0}, off(2)]}},
@@ -456,7 +494,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x4a, 0x4a, 0x4a, 0xd0, 0xfb, 0x90, 0xfc),
         }],
         symbols: [], segments: []});
@@ -470,7 +508,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xd0, 0xff, 0x90, 0xfe),
           subs: [{offset: 1, size: 1,
                   expr: {op: '-', args: [{op: 'sym', num: 0}, off(2)]}}],
@@ -494,7 +532,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(
             0x60,
             0xd0, 0xfd,
@@ -532,7 +570,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xd0, 0xff, 0x90, 0xff, 0x4a, 0x4a),
           subs: [{offset: 1, size: 1,
                   expr: {op: '-', args: [{op: 'sym', num: 0}, off(2)]}},
@@ -556,7 +594,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x4a, 0x4a, 0x4a, 0xd0, 0xfb, 0x90, 0xfc),
         }],
         symbols: [], segments: []});
@@ -570,7 +608,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(1, 2, 3),
         }],
         symbols: [], segments: []});
@@ -582,7 +620,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x61, 0x62, 0x63, 0x64),
         }],
         symbols: [], segments: []});
@@ -594,7 +632,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(3),
         }],
         symbols: [], segments: []});
@@ -607,7 +645,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(5),
         }],
         symbols: [], segments: []});
@@ -620,7 +658,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff),
           subs: [{offset: 0, size: 1,
                   expr: {op: '+', args: [{op: 'sym', num: 0},
@@ -639,7 +677,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(3, 3, 3, 3, 3, 3, 3, 3, 3, 3),
         }],
         symbols: [], segments: []});
@@ -653,7 +691,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(1, 0, 2, 0, 3, 4),
         }],
         symbols: [], segments: []});
@@ -665,7 +703,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(3, 0),
         }],
         symbols: [], segments: []});
@@ -678,7 +716,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(5, 3),
         }],
         symbols: [], segments: []});
@@ -691,7 +729,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff, 0xff),
           subs: [{offset: 0, size: 2,
                   expr: {op: '+', args: [{op: 'sym', num: 0},
@@ -915,7 +953,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           name: 'Foo',
           data: Uint8Array.of(),
           asserts: [{op: '>', meta: {size: 1},
@@ -938,7 +976,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(42, 12),
         }],
         symbols: [], segments: [],
@@ -960,7 +998,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff, 0xff),
           subs: [
             {offset: 0, size: 1, expr: {op: 'sym', num: 0}},
@@ -984,7 +1022,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff),
           subs: [{offset: 0, size: 1, expr: {op: 'sym', num: 0}}],
         }],
@@ -1004,7 +1042,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0x05),
         }],
         symbols: [], segments: [],
@@ -1020,7 +1058,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff),
           subs: [{offset: 0, size: 1, expr: {op: 'sym', num: 0}}],
         }],
@@ -1036,7 +1074,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff),
           subs: [{offset: 0, size: 1, expr: {op: 'sym', num: 0}}],
         }],
@@ -1054,7 +1092,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(0xff),
           subs: [{offset: 0, size: 1, expr: {op: 'sym', num: 0}}],
         }],
@@ -1070,7 +1108,7 @@ describe('Assembler', function() {
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
-          segments: ['code'],
+          segments: [],
           data: Uint8Array.of(2),
         }],
         symbols: [], segments: [],

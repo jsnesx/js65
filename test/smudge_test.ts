@@ -1,7 +1,7 @@
-import { describe, it } from 'mocha';
-import { expect } from 'chai';
-import { Cpu } from '../../src/js/asm/cpu';
-import * as lib from '../../src/js/asm/smudge';
+import {describe, it} from 'std/testing/bdd.ts';
+import {expect} from 'chai';
+import { Cpu } from '../cpu.ts';
+import * as lib from '../smudge.ts';
 
 function smudge(src: string): string {
   return lib.smudge(src, Cpu.P02, prg);

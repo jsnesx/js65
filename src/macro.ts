@@ -1,4 +1,6 @@
-import {Token, TokenSource} from './token';
+import {Token} from './token.ts';
+import * as Tokens from './token.ts';
+
 
 // const DEBUG = true;
 // const [] = [DEBUG];
@@ -11,21 +13,21 @@ export class Macro {
   private constructor(readonly params: string[],
                       readonly production: Token[][]) {}
 
-  static from(line: Token[], source: TokenSource) {
+  static from(line: Token[], source: Tokens.Source) {
     // First line must start with .macro <name> [args]
     // Last line is the line BEFORE the .endmacro
     // Nested macro definitions are not allowed!
-    if (!Token.eq(line[0], Token.MACRO)) throw new Error(`invalid`);
+    if (!Tokens.eq(line[0], Tokens.MACRO)) throw new Error(`invalid`);
     if (line[1]?.token !== 'ident') throw new Error(`invalid`);
-    const params = Token.identsFromCList(line.slice(2));
+    const params = Tokens.identsFromCList(line.slice(2));
     const lines = [];
     let next: Token[]|undefined;
     while ((next = source.next())) {
-      if (Token.eq(next[0], Token.ENDMACRO)) return new Macro(params, lines);
-      if (Token.eq(next[0], Token.ENDMAC)) return new Macro(params, lines);
+      if (Tokens.eq(next[0], Tokens.ENDMACRO)) return new Macro(params, lines);
+      if (Tokens.eq(next[0], Tokens.ENDMAC)) return new Macro(params, lines);
       lines.push(next);
     }
-    throw new Error(`EOF looking for .endmacro: ${Token.nameAt(line[1])}`);
+    throw new Error(`EOF looking for .endmacro: ${Tokens.nameAt(line[1])}`);
   }
 
   expand(tokens: Token[], idGen: Source<number>): Token[][] {
@@ -38,7 +40,7 @@ export class Macro {
     
     // Find a comma, skipping balanced curlies.  Parens are not special.
     for (const param of this.params) {
-      const comma = Token.findComma(tokens, i);
+      const comma = Tokens.findComma(tokens, i);
       let slice = tokens.slice(i, comma);
       i = comma + 1;
       if (slice.length === 1 && slice[0].token === 'grp') {
@@ -48,13 +50,13 @@ export class Macro {
       replacements.set(param, slice);
     }
     if (i < tokens.length) {
-      throw new Error(`Too many macro parameters: ${Token.nameAt(tokens[i])}`);
+      throw new Error(`Too many macro parameters: ${Tokens.nameAt(tokens[i])}`);
     }
     // All params filled in, make replacement
     const locals = new Map<string, string>();
     for (const line of this.production) {
-      if (Token.eq(line[0], Token.LOCAL)) {
-        for (const local of Token.identsFromCList(line.slice(1))) {
+      if (Tokens.eq(line[0], Tokens.LOCAL)) {
+        for (const local of Tokens.identsFromCList(line.slice(1))) {
           // pick a name that is impossible to type due to the '@' in the middle
           locals.set(local, `${local}@${idGen.next()}`);
         }

@@ -1,8 +1,8 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Expr} from '../../src/js/asm/expr';
-import {Linker} from '../../src/js/asm/linker';
-import * as util from 'util';
+import {Expr} from '../expr.ts';
+import {Linker} from '../linker.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 

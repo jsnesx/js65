@@ -1,10 +1,12 @@
-import {Token, TokenSource} from './token';
 
-type Frame = [TokenSource|undefined, Token[][]];
+import {Token} from './token.ts'
+import * as Tokens from './token.ts';
+
+type Frame = [Tokens.Source|undefined, Token[][]];
 
 const MAX_DEPTH = 100;
 
-export class TokenStream implements TokenSource {
+export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
 
   next(): Token[]|undefined {
@@ -31,7 +33,7 @@ export class TokenStream implements TokenSource {
   //   this.stack.push([new Tokenizer(code, file, this.task.opts),  []]);
   // }
   // Enter a macro scope.
-  enter(tokens?: TokenSource) {
+  enter(tokens?: Tokens.Source) {
     const frame: Frame = [undefined, []];
     if (tokens) frame[0] = tokens;
     this.stack.push(frame);

@@ -1,4 +1,4 @@
-import {Expr} from './expr';
+import {Expr} from './expr.ts';
 
 interface Environment {
   pc(): number|undefined; // ??? - undef in a reloc context outside linker

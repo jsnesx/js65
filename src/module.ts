@@ -1,4 +1,4 @@
-import {Expr} from './expr';
+import {Expr} from './expr.ts';
 
 export interface Module {
   /** All chunks, in a determinstic (indexable) order. */
@@ -57,6 +57,8 @@ export interface Segment {
   memory?: number;
   /** Address size. */
   addressing?: number;
+  /** True if this segment is the "default" segment to use if no segment is defined */
+  default?: boolean;
   /** Unallocated ranges (org), half-open [a, b). */
   free?: Array<readonly [number, number]>;
 }

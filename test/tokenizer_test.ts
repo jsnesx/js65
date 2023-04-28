@@ -1,14 +1,15 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Token} from '../../src/js/asm/token';
-import {Tokenizer} from '../../src/js/asm/tokenizer';
-import * as util from 'util';
+import { Token } from '../token.ts';
+import * as Tokens from '../token.ts';
+import {Tokenizer, Options} from '../tokenizer.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 
 //const MATCH = Symbol();
 
-function tokenize(str: string, opts: Tokenizer.Options = {}): Token[][] {
+function tokenize(str: string, opts: Options = {}): Token[][] {
   const out = [];
   const tokenizer = new Tokenizer(str, 'input.s', opts);
   for (let line = tokenizer.next(); line; line = tokenizer.next()) {
@@ -39,7 +40,7 @@ describe('Tokenizer.line', function() {
       .endif`);
 
     expect(toks).to.eql([
-      [{token: 'ident', str: 'label'}, Token.COLON],
+      [{token: 'ident', str: 'label'}, Tokens.COLON],
       [{token: 'ident', str: 'lda'},
        {token: 'op', str: '#'}, {token: 'num', num: 0x1f, width: 1}],
       [{token: 'cs', str: '.org'}, {token: 'num', num: 0x1c, width: 1},

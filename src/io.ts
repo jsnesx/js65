@@ -1,12 +1,14 @@
-import {Token, TokenSource} from './token';
-import {Tokenizer} from './tokenizer';
-import {TokenStream} from './tokenstream';
 
-export class IncludeWrapper implements TokenSource.Async {
+import {Token} from './token.ts'
+import * as Tokens from './token.ts';
+import {Tokenizer, Options} from './tokenizer.ts';
+import {TokenStream} from './tokenstream.ts';
+
+export class IncludeWrapper implements Tokens.Async {
   constructor(
       readonly readFile: (path: string) => Promise<string>,
-      readonly source: TokenSource, readonly stream: TokenStream,
-      readonly opts?: Tokenizer.Options) {}
+      readonly source: Tokens.Source, readonly stream: TokenStream,
+      readonly opts?: Options) {}
 
   async nextAsync(): Promise<Token[]|undefined> {
     while (true) {
@@ -21,8 +23,8 @@ export class IncludeWrapper implements TokenSource.Async {
   }
 }
 
-export class ConsoleWrapper implements TokenSource {
-  constructor(readonly source: TokenSource) {}
+export class ConsoleWrapper implements Tokens.Source {
+  constructor(readonly source: Tokens.Source) {}
 
   next() {
     while (true) {
@@ -47,11 +49,11 @@ export class ConsoleWrapper implements TokenSource {
 
 function err(line: Token[]): never {
   const msg = str(line);
-  throw new Error(msg + Token.at(line[0]));
+  throw new Error(msg + Tokens.at(line[0]));
 }
 
 function str(line: Token[]): string {
-  const str = Token.expectString(line[1], line[0]);
-  Token.expectEol(line[2], 'a single string');
+  const str = Tokens.expectString(line[1], line[0]);
+  Tokens.expectEol(line[2], 'a single string');
   return str;
 }

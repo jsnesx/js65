@@ -278,17 +278,21 @@ export class SparseByteArray extends SparseArray<number> {
   }
 
   toIpsHexString(): string {
-    //return Array.from(this.toIpsPatch(), x => x.toString(16).padStart(2, '0'))
-    // NOTE: this format is compatible with `xxd -r foo.ips.hex > foo.ips`
-    const bytes = [...this.toIpsPatch()];
-    const lines = [];
-    for (let i = 0; i < bytes.length; i += 16) {
-      lines.push([i.toString(16).padStart(8, '0') + ':',
-                  ...bytes.slice(i, i + 16)
-                      .map(x => x.toString(16).padStart(2, '0'))].join(' '));
-    }
-    return lines.join('\n');
+    return toHexString(this.toIpsPatch());
   }
+}
+
+export function toHexString(data: Uint8Array) : string {
+  //return Array.from(this.toIpsPatch(), x => x.toString(16).padStart(2, '0'))
+  // NOTE: this format is compatible with `xxd -r foo.ips.hex > foo.ips`
+  const bytes = [...data];
+  const lines = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    lines.push([i.toString(16).padStart(8, '0') + ':',
+                ...bytes.slice(i, i + 16)
+                    .map(x => x.toString(16).padStart(2, '0'))].join(' '));
+  }
+  return lines.join('\n');
 }
 
 export namespace SparseByteArray {
@@ -461,4 +465,8 @@ export function hash(o: object): string {
     map.set(o, id = ++index);
   }
   return `${o.constructor.name || 'object'}@${id.toString(36)}`;
+}
+
+export function assertNever(x: never): never {
+  throw new Error(`non-exhaustive check: ${x}`);
 }

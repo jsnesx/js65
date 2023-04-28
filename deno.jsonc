@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "run": "deno run --allow-all src/js65.ts",
+    "djs": "deno compile --allow-all src/js65.ts && mv js65 build/js65",
+    "qjs": "deno run --allow-all src/bundle.ts && qjsc -o ./build/qjs65 qjs.js && ./build/qjs65"
+  },
+  "imports": {
+    "std/crypto/": "https://deno.land/std@0.183.0/crypto/",
+    "std/flags/": "https://deno.land/std@0.183.0/flags/",
+    "std/fs/": "https://deno.land/std@0.183.0/fs/",
+    "std/testing/": "https://deno.land/std@0.183.0/testing/",
+    "chai": "https://esm.sh/chai@4.3.7"
+  },
+  "lock": "./lock.file"
+}

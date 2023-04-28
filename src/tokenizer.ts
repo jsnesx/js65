@@ -1,30 +1,31 @@
-import {Buffer} from './buffer';
-import {StringToken, Token, TokenSource} from './token';
+import {Buffer} from './buffer.ts';
+import {Token} from './token.ts'
+import * as Tokens from './token.ts';
 
-export class Tokenizer implements TokenSource {
+export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
 
   constructor(str: string,
               readonly file = 'input.s',
-              readonly opts: Tokenizer.Options = {}) {
+              readonly opts: Options = {}) {
     this.buffer = new Buffer(str);
   }
 
   next(): Token[]|undefined {
     let tok = this.token();
-    while (Token.eq(tok, Token.EOL)) {
+    while (Tokens.eq(tok, Tokens.EOL)) {
       // Skip EOLs at beginning of line.
       tok = this.token();
     }
-    // Group curly brace groups into a single effective token.
+    // Group curly brace groups into a single effective Tokens.
     const stack: Token[][] = [[]];
     let depth = 0;
-    while (!Token.eq(tok, Token.EOL) && !Token.eq(tok, Token.EOF)) {
-      if (Token.eq(tok, Token.LC)) {
+    while (!Tokens.eq(tok, Tokens.EOL) && !Tokens.eq(tok, Tokens.EOF)) {
+      if (Tokens.eq(tok, Tokens.LC)) {
         stack[depth++].push(tok);
         stack.push([]);
-      } else if (Token.eq(tok, Token.RC)) {
-        if (!depth) throw new Error(`Missing open curly: ${Token.nameAt(tok)}`);
+      } else if (Tokens.eq(tok, Tokens.RC)) {
+        if (!depth) throw new Error(`Missing open curly: ${Tokens.nameAt(tok)}`);
         const inner = stack.pop()!;
         const source = stack[--depth].pop()!.source;
         const token: Token = {token: 'grp', inner};
@@ -37,7 +38,7 @@ export class Tokenizer implements TokenSource {
     }
     if (depth) {
       const open = stack[depth - 1].pop()!;
-      throw new Error(`Missing close curly: ${Token.nameAt(open)}`);
+      throw new Error(`Missing close curly: ${Tokens.nameAt(open)}`);
     }
     return stack[0].length ? stack[0] : undefined;
   }
@@ -47,7 +48,7 @@ export class Tokenizer implements TokenSource {
     while (this.buffer.space() ||
            this.buffer.token(/^;.*/) ||
            (this.opts.lineContinuations && this.buffer.token(/^\\(\r\n|\n|\r)/))) {}
-    if (this.buffer.eof()) return Token.EOF;
+    if (this.buffer.eof()) return Tokens.EOF;
 
     // remember position of non-whitespace
     const source = {
@@ -112,7 +113,7 @@ export class Tokenizer implements TokenSource {
     return {token: 'str', str};
   }
 
-  private strTok(token: StringToken['token']): Token {
+  private strTok(token: Tokens.StringToken['token']): Token {
     return {token, str: this.buffer.group()!};
   }
 
@@ -145,11 +146,10 @@ function parseBin(str: string): Token {
   return {token: 'num', num: Number.parseInt(str, 2), width: Math.ceil(str.length / 8)};
 }
 
-export namespace Tokenizer {
-  export interface Options {
-    // caseInsensitive?: boolean; // handle elsewhere?
-    lineContinuations?: boolean;
-    numberSeparators?: boolean;
-    skipSourceAnnotations?: boolean;
-  }
+export interface Options {
+  // caseInsensitive?: boolean; // handle elsewhere?
+  lineContinuations?: boolean;
+  numberSeparators?: boolean;
+  skipSourceAnnotations?: boolean;
 }
+

@@ -1,10 +1,10 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Preprocessor} from '../../src/js/asm/preprocessor';
-import {Token} from '../../src/js/asm/token';
-import {TokenStream} from '../../src/js/asm/tokenstream';
-import {Tokenizer} from '../../src/js/asm/tokenizer';
-import * as util from 'util';
+import {Preprocessor} from '../preprocessor.ts';
+import * as Tokens from '../token.ts';
+import {TokenStream} from '../tokenstream.ts';
+import {Tokenizer} from '../tokenizer.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 
@@ -18,7 +18,7 @@ describe('Preprocessor', function() {
     const out: string[] = [];
     const preprocessor = new Preprocessor(toks, {} as any);
     for (let line = preprocessor.next(); line; line = preprocessor.next()) {
-      out.push(line.map(Token.name).join(' '));
+      out.push(line.map(Tokens.name).join(' '));
     }
     expect(out).to.eql(want);
   }
@@ -361,5 +361,5 @@ function directive(line: string) { return parseLine(line); }
 function parseLine(line: string): string {
   const ts = new TokenStream();
   ts.enter(new Tokenizer(line));
-  return ts.next()!.map(Token.name).join(' ');
+  return ts.next()!.map(Tokens.name).join(' ');
 }

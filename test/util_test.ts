@@ -1,8 +1,8 @@
-import {describe, it} from 'mocha';
+import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
 import {BitSet, IntervalSet, SparseArray, SparseByteArray,
-        binaryInsert, binarySearch} from '../../src/js/asm/util';
-import * as util from 'util';
+        binaryInsert, binarySearch} from '../util.ts';
+import * as util from '../util.ts';
 
 const [] = [util];
 
