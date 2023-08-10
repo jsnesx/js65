@@ -49,7 +49,9 @@ jobs:
       - name: Setup deno
         run: |
           curl -fsSL https://deno.land/x/install/install.sh | sh
-
+          # add deno to path
+          echo '\nexport DENO_INSTALL="/home/runneradmin/.deno"\n' >> ~/.bashrc
+          echo '\nexport PATH="$DENO_INSTALL/bin:$PATH"\n' >> ~/.bashrc
       - name: Cache QuickJS
         uses: actions/cache@v3
         id: cache-qjs-windows
@@ -64,7 +66,6 @@ jobs:
 
       - name: Build Deno and QuickJS release
         run: |
-          export PATH=$PATH:/home/runner/.deno/bin
           deno task djs
           deno task qjs
           quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js
