@@ -1,4 +1,4 @@
-name: 'Link Checker: All English'
+name: 'Compile native JS executables'
 
 on:
   workflow_dispatch:
@@ -37,6 +37,19 @@ jobs:
         run: git config --global core.autocrlf input
       - name: Checkout
         uses: actions/checkout@v3
+      
+      - name: Cache Deno
+        uses: actions/cache@v3
+        with:
+          key: ${{ runner.os }}-deno-${{ hashFiles('**/*') }}
+          restore-keys: ${{ runner.os }}-deno-
+          path: |
+            /home/runner/.deno
+            /home/runner/.cache/deno/deps/https/deno.land
+      - name: Setup deno
+        run: |
+          curl -fsSL https://deno.land/x/install/install.sh | sh
+
       - name: Cache QuickJS
         uses: actions/cache@v3
         id: cache-qjs-windows
@@ -48,13 +61,15 @@ jobs:
         run: |
           wget https://github.com/mengmo/QuickJS-Windows-Build/releases/download/${{ env.QJS_VERSION }}/quickjs-${{ env.QJS_VERSION }}-win64-all.zip
           unzip quickjs-${{ env.QJS_VERSION }}-win64-all.zip -d quickjs
+
       - name: Build Deno and QuickJS release
-        shell: msys2 {0}
         run: |
+          export PATH=$PATH:/home/runner/.deno/bin
           deno task djs
           deno task qjs
           quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js
           gcc -D_GNU_SOURCE -Iquickjs/ -o ./build/qjs65.c ./build/qjs65.c -static -s -Lquickjs/ -lquickjs -lm -ldl -lpthread
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
