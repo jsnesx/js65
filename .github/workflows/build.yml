@@ -46,8 +46,8 @@ jobs:
           key: ${{ runner.os }}-deno-${{ hashFiles('**/*') }}
           restore-keys: ${{ runner.os }}-deno-
           path: |
-            /home/runner/.deno
-            /home/runner/.cache/deno/deps/https/deno.land
+            /home/runneradmin/.deno
+            /home/runneradmin/.cache/deno/deps/https/deno.land
       - name: Setup deno
         run: |
           curl -fsSL https://deno.land/x/install/install.sh | sh
@@ -68,20 +68,20 @@ jobs:
           /home/runneradmin/.deno/bin/deno task djs
           /home/runneradmin/.deno/bin/deno task qjs
           quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js
-          gcc -D_GNU_SOURCE -Iquickjs/include/quickjs/ -o ./build/js65 ./build/qjs65.c -static -s -Lquickjs/lib/quickjs/ -lquickjs -lm -ldl -lpthread
+          gcc -v -D_GNU_SOURCE -Iquickjs/include/quickjs/ -o ./build/js65 ./build/qjs65.c -static -s -Lquickjs/lib/quickjs/ -lquickjs -lm -ldl -lpthread
 
       - name: Upload deno artifact
         uses: actions/upload-artifact@v3
         with:
           name: ${{ runner.os }}-${{ matrix.env }}-deno
           path: |
-            build/djs65
+            build/djs65*
       - name: Upload quickjs artifact
         uses: actions/upload-artifact@v3
         with:
           name: ${{ runner.os }}-${{ matrix.env }}-quickjs
           path: |
-            build/js65
+            build/js65*
 
   build-other:
     strategy:
