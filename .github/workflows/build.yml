@@ -20,8 +20,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - { sys: mingw64, env: x86_64 }
-          - { sys: mingw32, env: i686 }
+          - { sys: mingw64, env: x86_64, name: win64 }
+          - { sys: mingw32, env: i686, name: win32 }
     defaults:
       run:
         shell: msys2 {0}
@@ -41,16 +41,19 @@ jobs:
         uses: actions/checkout@v3
       
       - name: Cache Deno
+        id: cache-deno-windows
         uses: actions/cache@v3
         with:
           key: ${{ runner.os }}-deno-${{ hashFiles('**/*') }}
           restore-keys: ${{ runner.os }}-deno-
           path: |
             /home/runneradmin/.deno
-            /home/runneradmin/.cache/deno/deps/https/deno.land
+            /home/runneradmin/.cache/deno
       - name: Setup deno
+        if: steps.cache-deno-windows.outputs.cache-hit != 'true'
         run: |
           curl -fsSL https://deno.land/x/install/install.sh | sh
+
       - name: Cache QuickJS
         uses: actions/cache@v3
         id: cache-qjs-windows
@@ -60,7 +63,7 @@ jobs:
       - name: Setup quickjs compiler
         if: steps.cache-qjs-windows.outputs.cache-hit != 'true'
         run: |
-          wget https://github.com/mengmo/QuickJS-Windows-Build/releases/download/${{ env.QJS_VERSION }}/quickjs-${{ env.QJS_VERSION }}-win64-all.zip
+          wget https://github.com/mengmo/QuickJS-Windows-Build/releases/download/${{ env.QJS_VERSION }}/quickjs-${{ env.QJS_VERSION }}-${{ matrix.name }}-all.zip
           unzip quickjs-${{ env.QJS_VERSION }}-win64-all.zip -d quickjs
 
       - name: Build Deno and QuickJS release
@@ -73,13 +76,13 @@ jobs:
       - name: Upload deno artifact
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ runner.os }}-${{ matrix.env }}-deno
+          name: ${{ matrix.name }}-${{ matrix.env }}-deno
           path: |
             build/djs65*
       - name: Upload quickjs artifact
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ runner.os }}-${{ matrix.env }}-quickjs
+          name: ${{ matrix.name }}-${{ matrix.env }}-quickjs
           path: |
             build/js65*
 
