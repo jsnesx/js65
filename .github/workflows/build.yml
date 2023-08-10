@@ -15,11 +15,53 @@ env:
   QJS_VERSION: "2021-03-27"
 
 jobs:
-  check-links:
+  build-windows:
+    runs-on: windows-latest
     strategy:
       matrix:
-        container: [dockcross/windows-static-x86, dockcross/windows-static-x64]
-    runs-on: ubuntu-latest
+        include:
+          - { sys: mingw64, env: x86_64 }
+          - { sys: mingw32, env: i686 }
+    steps:
+      - name: Change line Endings
+        run: git config --global core.autocrlf input
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Cache QuickJS
+        uses: actions/cache@v3
+        id: cache-qjs-windows
+        with:
+          path: quickjs
+          key: ${{ runner.os }}-${{ env.QJS_VERSION }}-${{ matrix.sys }}
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{matrix.sys}}
+      - name: Setup quickjs compiler
+        if: steps.cache-qjs-windows.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/mengmo/QuickJS-Windows-Build/releases/download/${{ env.QJS_VERSION }}/quickjs-${{ env.QJS_VERSION }}-win64-all.zip
+          unzip quickjs-${{ env.QJS_VERSION }}-win64-all.zip
+          mv quickjs-${{ env.QJS_VERSION }}-win64-all quickjs
+      - name: Build Deno and QuickJS release
+        shell: msys2 {0}
+        run: |
+          deno task djs
+          deno task qjs
+          quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js
+          gcc -D_GNU_SOURCE -Iquickjs/ -o ./build/qjs65.c ./build/qjs65.c -static -s -Lquickjs/ -lquickjs -lm -ldl -lpthread
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-${{ matrix.sys }}
+          path: |
+            build/djs65
+            build/js65
+
+  build-other:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -52,14 +94,11 @@ jobs:
         run: |
           deno task djs
           deno task qjs
-          quickjs-${{ env.QJS_VERSION }}/qjsc -e -o ./build/qjs65.c ./src/qjs.js
-      - name: Cross Compile quickjs exe
-        run: |
-          docker run --rm ${{ matrix.container }} > ./dockcross
-          chmod +x ./dockcross
-          ./dockcross bash -c '$CC -I./quickjs-${{ env.QJS_VERSION }}/ -L./quickjs-${{ env.QJS_VERSION }}/ -D_GNU_SOURCE -o ./build/js65 ./build/qjs65.c -static -s -lquickjs -lm -lpthread'
+          quickjs-${{ env.QJS_VERSION }}/qjsc -o ./build/js65 ./src/qjs.js
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ matrix.container }}
-          path: build/djs65
+          name: ${{ matrix.os }}
+          path: |
+            build/djs65
+            build/js65
