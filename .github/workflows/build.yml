@@ -33,6 +33,7 @@ jobs:
             wget
             unzip
             git
+            mingw-w64-${{matrix.env}}-gcc
       - name: Change line Endings
         run: git config --global core.autocrlf input
       - name: Checkout
