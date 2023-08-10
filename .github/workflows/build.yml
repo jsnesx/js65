@@ -67,7 +67,7 @@ jobs:
           /home/runneradmin/.deno/bin/deno task djs
           /home/runneradmin/.deno/bin/deno task qjs
           quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js
-          gcc -D_GNU_SOURCE -Iquickjs/ -o ./build/js65 ./build/qjs65.c -static -s -Lquickjs/ -lquickjs -lm -ldl -lpthread
+          gcc -D_GNU_SOURCE -Iquickjs/include/quickjs/ -o ./build/js65 ./build/qjs65.c -static -s -Lquickjs/lib/quickjs/ -lquickjs -lm -ldl -lpthread
 
       - name: Upload deno artifact
         uses: actions/upload-artifact@v3
