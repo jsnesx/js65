@@ -47,8 +47,7 @@ jobs:
         if: steps.cache-qjs-windows.outputs.cache-hit != 'true'
         run: |
           wget https://github.com/mengmo/QuickJS-Windows-Build/releases/download/${{ env.QJS_VERSION }}/quickjs-${{ env.QJS_VERSION }}-win64-all.zip
-          unzip quickjs-${{ env.QJS_VERSION }}-win64-all.zip
-          mv quickjs-${{ env.QJS_VERSION }}-win64-all quickjs
+          unzip quickjs-${{ env.QJS_VERSION }}-win64-all.zip -d quickjs
       - name: Build Deno and QuickJS release
         shell: msys2 {0}
         run: |
