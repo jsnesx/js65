@@ -22,7 +22,17 @@ jobs:
         include:
           - { sys: mingw64, env: x86_64 }
           - { sys: mingw32, env: i686 }
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{matrix.sys}}
+          install: >-
+            wget
+            unzip
+            git
       - name: Change line Endings
         run: git config --global core.autocrlf input
       - name: Checkout
@@ -33,9 +43,6 @@ jobs:
         with:
           path: quickjs
           key: ${{ runner.os }}-${{ env.QJS_VERSION }}-${{ matrix.sys }}
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{matrix.sys}}
       - name: Setup quickjs compiler
         if: steps.cache-qjs-windows.outputs.cache-hit != 'true'
         run: |
