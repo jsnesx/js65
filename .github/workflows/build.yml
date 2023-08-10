@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v3
         id: cache_qjs
         with:
-          path: quickjs-$QJS_VERSION
+          path: quickjs-${{ env.QJS_VERSION }}
           key: ${{ runner.os }}-${{ env.QJS_VERSION }}
       - name: Setup deno
         uses: denoland/setup-deno@v1
@@ -44,17 +44,17 @@ jobs:
       - name: Setup quickjs compiler
         if: steps.cache_qjs.outputs.cache-hit != 'true'
         run: |
-          wget https://bellard.org/quickjs/quickjs-$QJS_VERSION.tar.xz
-          tar xf quickjs-$QJS_VERSION.tar.xz
-          cd quickjs-$QJS_VERSION
+          wget https://bellard.org/quickjs/quickjs-${{ env.QJS_VERSION }}.tar.xz
+          tar xf quickjs-${{ env.QJS_VERSION }}.tar.xz
+          cd quickjs-${{ env.QJS_VERSION }}
           make -j4
       - name: Build Deno and QuickJS release
         run: |
           deno task djs
           deno task qjs
-          quickjs-$QJS_VERSION/qjsc -e -o ./build/qjs65.c ./src/qjs.js
+          quickjs-${{ env.QJS_VERSION }}/qjsc -e -o ./build/qjs65.c ./src/qjs.js
       - name: Cross Compile quickjs exe
         run: |
           docker run --rm ${{ matrix.container }} > ./dockcross
           chmod +x ./dockcross
-          ./dockcross bash -c '$CC -I./quickjs-$QJS_VERSION/ -L./quickjs-$QJS_VERSION/ -D_GNU_SOURCE -o ./build/qjs65 ./build/qjs65.c -static -s -lquickjs -lm -ldl -lpthread'
+          ./dockcross bash -c '$CC -I./quickjs-${{ env.QJS_VERSION }}/ -L./quickjs-${{ env.QJS_VERSION }}/ -D_GNU_SOURCE -o ./build/qjs65 ./build/qjs65.c -static -s -lquickjs -lm -ldl -lpthread'
