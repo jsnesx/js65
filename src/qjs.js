@@ -1,7 +1,7 @@
 import * as std from 'std';
 
 import { sha1 } from './sha1.js'
-import { Cli } from './build/cli.js';
+import { Cli } from 'build/cli.js';
 
 const cli = new Cli({
   fsReadString: readFileAsString,

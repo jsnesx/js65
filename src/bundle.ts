@@ -1,11 +1,11 @@
 
 import * as esbuild from 'https://deno.land/x/esbuild@v0.17.12/mod.js'
-import { denoPlugins } from "https://raw.githubusercontent.com/lucacasonato/esbuild_deno_loader/main/mod.ts";
+import { denoPlugins } from "https://deno.land/x/esbuild_deno_loader@0.8.1/mod.ts";
 
 await esbuild.build({
     plugins: [...denoPlugins()],
     entryPoints: [
-        'cli.ts'
+        'src/cli.ts'
     ],
     bundle: true,
     // minify: true,

@@ -1,8 +1,8 @@
 {
   "tasks": {
     "run": "deno run --allow-all src/js65.ts",
-    "djs": "deno compile --allow-all src/js65.ts && mv js65 build/js65",
-    "qjs": "deno run --allow-all src/bundle.ts && qjsc -o ./build/qjs65 qjs.js && ./build/qjs65"
+    "djs": "deno compile --allow-all src/js65.ts -o build/js65",
+    "qjs": "deno run --allow-all src/bundle.ts"
   },
   "imports": {
     "std/crypto/": "https://deno.land/std@0.183.0/crypto/",
