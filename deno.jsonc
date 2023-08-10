@@ -1,7 +1,7 @@
 {
   "tasks": {
     "run": "deno run --allow-all src/js65.ts",
-    "djs": "deno compile --allow-all src/js65.ts -o build/js65",
+    "djs": "deno compile --allow-all src/js65.ts -o build/djs65",
     "qjs": "deno run --allow-all src/bundle.ts"
   },
   "imports": {

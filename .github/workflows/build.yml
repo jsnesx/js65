@@ -57,3 +57,9 @@ jobs:
         run: |
           docker run --rm ${{ matrix.container }} > ./dockcross
           chmod +x ./dockcross
+          ./dockcross bash -c '$CC -I./quickjs-${{ env.QJS_VERSION }}/ -L./quickjs-${{ env.QJS_VERSION }}/ -D_GNU_SOURCE -o ./build/js65 ./build/qjs65.c -static -s -lquickjs -lm -lpthread'
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.container }}
+          path: build/djs65
