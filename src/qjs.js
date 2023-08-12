@@ -16,44 +16,54 @@ const cli = new Cli({
 });
 
 function readFileAsString(filename) {
-  const err = {errno: 0};
-  const f = filename === Cli.STDIN ? std.in : std.open(filename, 'r', err);
-  if (err.errno != 0) return [undefined, new Error(std.strerror(err.errno))];
-  return f.readAsString();
+  return new Promise((accept) => {
+    const err = {errno: 0};
+    const f = filename === Cli.STDIN ? std.in : std.open(filename, 'r', err);
+    if (err.errno != 0) return accept([undefined, new Error(std.strerror(err.errno))]);
+    accept(f.readAsString());
+  });
 }
 
 function readFileAsBuffer(filename) {
-  const err = {errno: 0};
-  const f = filename === Cli.STDIN ? std.in : std.open(filename, 'rb', err);
-  if (err.errno != 0) return [undefined, new Error(std.strerror(err.errno))];
-  f.seek(std.SEEK_END);
-  const len = f.tell();
-  f.seek(std.SEEK_SET);
-  const bytes = new Uint8Array(len);
-  f.read(bytes, 0, len);
-  f.close();
-  return [bytes, undefined];
+  return new Promise((accept) => {
+    const err = {errno: 0};
+    const f = filename === Cli.STDIN ? std.in : std.open(filename, 'rb', err);
+    if (err.errno != 0) return accept([undefined, new Error(std.strerror(err.errno))]);
+    f.seek(std.SEEK_END);
+    const len = f.tell();
+    f.seek(std.SEEK_SET);
+    const bytes = new Uint8Array(len);
+    f.read(bytes, 0, len);
+    f.close();
+    accept([bytes, undefined]);
+  });
 }
 
 function writeFileAsString(filename, data) {
-  const err = {errno: 0};
-  const f = filename === Cli.STDOUT ? std.out : std.open(filename, 'w', err);
-  if (err.errno != 0) return [undefined, new Error(std.strerror(err.errno))];
-  f.seek(std.SEEK_SET);
-  f.puts(data);
-  f.close();
+  return new Promise((accept) => {
+    const err = {errno: 0};
+    const f = filename === Cli.STDOUT ? std.out : std.open(filename, 'w', err);
+    if (err.errno != 0) return accept(new Error(std.strerror(err.errno)));
+    f.seek(std.SEEK_SET);
+    f.puts(data);
+    f.close();
+    accept();
+  });
 }
 
 function writeFileAsBytes(filename, data) {
-  const err = {errno: 0};
-  const f = filename === Cli.STDOUT ? std.out : std.open(filename, 'wb', err);
-  if (err.errno != 0) return [undefined, new Error(std.strerror(err.errno))];
-  f.seek(std.SEEK_SET);
-  f.write(data, 0, data.length);
-  f.close();
+  return new Promise((accept) => {
+    const err = {errno: 0};
+    const f = filename === Cli.STDOUT ? std.out : std.open(filename, 'wb', err);
+    if (err.errno != 0) return accept(new Error(std.strerror(err.errno)));
+    f.seek(std.SEEK_SET);
+    f.write(data, 0, data.length);
+    f.close();
+    accept();
+  });
 }
 
-function fsWalk(path, action) {
+async function fsWalk(path, action) {
   console.log(`walking through ${path}`);
   const {paths, err} = std.readdir(path)
   if (err) return false;
@@ -66,7 +76,7 @@ function fsWalk(path, action) {
       }
     } else if (f.mode == std.S_IFMT) {
       console.log(`calling ${path}`);
-      if (action(path)) {
+      if (await action(path)) {
         console.log(`action success ${path}`);
         return true;
       }

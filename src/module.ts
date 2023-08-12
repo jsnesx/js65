@@ -138,7 +138,9 @@ export namespace Segment {
 //   segments?: Segment[],
 // }
 
-const ModuleZ = z.object({
+export const ModuleZ = z.object({
+  /** Filename if loaded from a file, otherwise a user provided name */
+  name: z.string().optional(),
   /** All chunks, in a determinstic (indexable) order. */
   chunks: z.optional(z.array(ChunkZ)),
   /** All symbols, in a deterministic (indexable) order. */

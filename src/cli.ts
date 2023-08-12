@@ -6,6 +6,9 @@ import { Preprocessor } from './preprocessor.ts';
 import { clean, smudge } from './smudge.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream } from './tokenstream.ts';
+import { Module, ModuleZ } from "./module.ts";
+import z from 'https://deno.land/x/zod@v3.21.4/index.ts';
+import base64 from 'base64';
 
 export interface CompileOptions {
   files: string[],
@@ -18,11 +21,11 @@ export interface HydrateOptions {
 }
 
 export interface Callbacks {
-  fsReadString: (filename: string) => [string?, Error?],
-  fsReadBytes: (filename: string) => [Uint8Array?, Error?],
-  fsWriteString: (filename: string, data: string) => Error|undefined,
-  fsWriteBytes: (filename: string, data: Uint8Array) => Error|undefined,
-  fsWalk: (path: string, action: (filename: string) => boolean) => void,
+  fsReadString: (filename: string) => Promise<[string?, Error?]>,
+  fsReadBytes: (filename: string) => Promise<[Uint8Array?, Error?]>,
+  fsWriteString: (filename: string, data: string) => Promise<Error|undefined>,
+  fsWriteBytes: (filename: string, data: Uint8Array) => Promise<Error|undefined>,
+  fsWalk: (path: string, action: (filename: string) => Promise<boolean>) => Promise<void>,
   cryptoSha1: (data: Uint8Array) => ArrayBuffer,
   exit: (code: number) => void,
 }
@@ -80,91 +83,135 @@ export class Cli {
   }
 
   public async run(argv: string[]) {
-    console.log(`test1 ${argv}`);
+    console.log(`run: argv ${argv}`);
 
     const args = this.parseArgs(argv);
 
-    console.log("test3");
+    console.log(`parsed args: ${JSON.stringify(args)}`);
     if (args.files.length === 0) {
       return this.usage(1, [new Error("No input files provided")]);
     }
     
-    console.log("test4");
-    if (!args.outfile) args.outfile = args.files[0].substring(0, args.files[0].lastIndexOf(".")) + (args.compileonly) ? ".o" : ".nes";
+    if (args.compileonly && args.files.length != 1) {
+      return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
+    }
+
+    if (args.outfile.length === 0) {
+      const name = (args.files[0] == Cli.STDIN) ? "stdin" : args.files[0];
+      const filename = name.replace(/\.[^/.]+$/, "");
+      args.outfile = `${filename}${(args.compileonly) ? ".o" : ".nes"}`;
+    }
     if (args.outfile == "--stdout") args.outfile = Cli.STDOUT;
-    
-    // assemble
-    if (args.rom) this.usage(1, [new Error('--rom only allowed with rehydrate or dehydrate')]);
+    console.log(`outfile: ${args.outfile}`);
 
     try {
       if (args.op !== undefined) {
         return this.smudge(args);
       }
 
-      await this.assemble(args);
+      // assemble
+      if (args.rom) this.usage(1, [new Error('--rom only allowed with rehydrate or dehydrate')]);
+
+      const modules = await this.assemble(args);
+      
+      if (args.compileonly) {
+        console.log("stopping before linking cause --compileonly");
+        // there should only be one module at this point
+
+        const module = JSON.stringify(modules[0], (k, v) => {
+          if (k === "data" && typeof v === "object") {
+            // v == Uint8Array
+            return base64.fromArrayBuffer(v);
+          }
+          return v;
+        }, "  ");
+        await this.callbacks.fsWriteString(args.outfile, module);
+        return;
+      }
+
+      this.link(args, modules);
     } catch (e) {
       this.printerrors(e);
       throw e;
     }
   }
 
+
   async assemble(args: Arguments) {
-    console.log("test17");
-    const that = this;
-    function tokenizer(path: string) : [Tokenizer|undefined, Error|undefined] {
-      const [str, err] = that.callbacks.fsReadString(path);
-      if (err) return [undefined, err];
-      return [new Tokenizer(str!, path, {lineContinuations: true}), undefined];
+    console.log("calling assemble");
+
+    const modules : Module[] = [];
+    for (const file of args.files) {
+      console.log(`building asm file ${file}`);
+      const asm = new Assembler(Cpu.P02);
+      const toks = new TokenStream();
+
+      console.log("about to read asm file input");
+      const [str, err] = await this.callbacks.fsReadString(file);
+      if (err) throw err;
+      
+      console.log("attempting to parse module");
+      // try to parse the input as a Module first to see if its already compiled
+      try {
+        const obj = JSON.parse(str!);
+        console.log(`parsed json: ${JSON.stringify(obj)}`);
+        const parsedModule = await ModuleZ.safeParseAsync(obj);
+        if (parsedModule.success) {
+          console.log("successfully parsed as a module");
+          // if it parsed as a module, just add it to the module list
+          modules.push(parsedModule.data);
+          continue;
+        } else {
+          // if it doesn't parse as a module, treat it as source code
+          console.log(`not a module because zod parse failed ${parsedModule.error}`);
+        }
+      } catch (err) {
+        // if it doesn't parse as a module, treat it as source code
+        console.log(`not a module because json parse failed ${err}`);
+      }
+      const tokenizer = new Tokenizer(str!, file, {lineContinuations: true});
+      console.log("tokenization complete");
+      toks.enter(Tokens.concat(tokenizer));
+      console.log("running preprocessor");
+      const pre = new Preprocessor(toks, asm);
+      console.log("applying tokens to assembly");
+      asm.tokens(pre);
+      console.log("assembly complete, writing module");
+      const module = asm.module();
+      module.name = file;
+      modules.push(module);
     }
-
-    console.log(`test18 ${args.files}`);
-    const asm = new Assembler(Cpu.P02);
-    const toks = new TokenStream();
-    console.log("test19");
-    const sources = await Promise.all(args.files.map(tokenizer));
-    const [srcs, errs] = unzip(sources);
-    const allErrs = errs.filter((err) => err != undefined).map(err => err!);
-    if (allErrs.length > 0) return this.printerrors(...allErrs);
-    console.log("test20");
-    toks.enter(Tokens.concat(...srcs.map(src => src!)));
-    console.log("test21");
-    const pre = new Preprocessor(toks, asm);
-    asm.tokens(pre);
-    console.log("test22");
-
-    const modules = asm.module();
-    if (args.compileonly) {
-      console.log("ending cause compileonly");
-      // const data = new Uint8Array(modules);
-      // this.callbacks.fsWriteBytes(args.outfile, data);
-      return;
-    }
-
-    const linker = new Linker({ target: args.target });
-    console.log("test23");
-    //linker.base(this.prg, 0);
-    linker.read(modules);
-    console.log("test24");
-    const out = linker.link();
-    console.log("test25");
-    const data = new Uint8Array(out.length);
-    out.apply(data);
-    console.log("test26");
-    this.callbacks.fsWriteBytes(args.outfile, data);
-    console.log("test27");
+    return modules;
   }
 
-  smudge(args: Arguments) {
+  async link(args: Arguments, modules: Module[]) {
+    const linker = new Linker({ target: args.target });
+    console.log("starting linking");
+    //linker.base(this.prg, 0);
+    for (const module of modules) {
+      console.log(`reading module: ${module.name}`);
+      linker.read(module);
+    }
+    console.log("about to run linking");
+    const out = linker.link();
+    console.log("linking complete, writing data to the output array");
+    const data = new Uint8Array(out.length);
+    out.apply(data);
+    console.log("writing data to disk");
+    await this.callbacks.fsWriteBytes(args.outfile, data);
+  }
+
+  async smudge(args: Arguments) {
     console.log(`op ${args.op}`);
     if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
     console.log("test8");
-    let [src, err] = this.callbacks.fsReadString(args.files[0]);
+    let [src, err] = await this.callbacks.fsReadString(args.files[0]);
     if (err) this.usage(3, [err]);
     console.log("test9");
     let fullRom: Uint8Array|undefined;
     if (args.rom) {
       console.log("test10");
-      [fullRom, err] = this.callbacks.fsReadBytes(args.rom);
+      [fullRom, err] = await this.callbacks.fsReadBytes(args.rom);
       if (err) this.usage(4, [err]);
     } else {
       console.log("test11");
@@ -174,10 +221,10 @@ export class Cli {
       console.log("test13");
       const shaTag = match![1];
       console.log("test14");
-      this.callbacks.fsWalk('.', (filename) => {
+      this.callbacks.fsWalk('.', async(filename) => {
         console.log("test callback");
         if (/\.nes$/.test(filename)) {
-          const [data, err] = this.callbacks.fsReadBytes(filename);
+          const [data, err] = await this.callbacks.fsReadBytes(filename);
           if (err) this.usage(5, [err]);
           const sha = Array.from(
               new Uint8Array(this.callbacks.cryptoSha1(data!)),
@@ -197,7 +244,7 @@ export class Cli {
     console.log("test16");
     // TODO - read the header properly
     const prg = fullRom!.subarray(0x10, 0x40010);
-    err = this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));
+    err = await this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));
     if (err) this.printerrors(err);
   }
 
@@ -248,6 +295,7 @@ required arguments:
 }
 
 function unzip<
+// deno-lint-ignore no-explicit-any
   T extends [...{ [K in keyof S]: S[K] }][], S extends any[]
 >(arr: [...T]): T[0] extends infer A 
   ? { [K in keyof A]: T[number][K & keyof T[number]][] } 
@@ -256,6 +304,7 @@ function unzip<
   const maxLength = Math.max(...arr.map((x) => x.length));
 
   return arr.reduce(
+    // deno-lint-ignore no-explicit-any
     (acc: any, val) => {
       val.forEach((v, i) => acc[i].push(v));
 
