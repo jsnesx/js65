@@ -23,6 +23,7 @@ export const NesNrom: Target = {
     name: 'header',
     size: 0x10,
     offset: 0x00,
+    memory: 0x00,
   }, {
     name: 'code',
     default: true,
@@ -34,6 +35,7 @@ export const NesNrom: Target = {
     name: 'chr',
     size: 0x2000,
     offset: 0x08010,
+    memory: 0x00,
   }]
 }
 

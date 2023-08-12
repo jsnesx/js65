@@ -1,3 +1,5 @@
+
+import { z } from 'zod';
 import {assertNever} from './util.ts';
 
 export interface Source {
@@ -44,12 +46,26 @@ export function concat(...sources: Source[]): Source {
   };
 }
 
-export interface SourceInfo {
-  file: string;
-  line: number;
-  column: number;
-  parent?: SourceInfo; // macro-expansion stack...
-}
+const BaseSourceInfo = z.object({
+  file: z.string(),
+  line: z.number(),
+  column: z.number(),
+});
+
+export type SourceInfo = z.infer<typeof BaseSourceInfo> & {
+  parent?: SourceInfo
+};
+
+export const SourceInfoZ : z.ZodType<SourceInfo> = BaseSourceInfo.extend({
+  parent: z.lazy(() => SourceInfoZ).optional(),
+});
+
+// export interface SourceInfo {
+//   file: string;
+//   line: number;
+//   column: number;
+//   parent?: SourceInfo; // macro-expansion stack...
+// }
 
 export type GroupTok = 'grp';
 export type StringTok = 'ident' | 'op' | 'cs' | 'str';

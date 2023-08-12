@@ -1,67 +1,123 @@
-import {Expr} from './expr.ts';
 
-export interface Module {
-  /** All chunks, in a determinstic (indexable) order. */
-  chunks?: Chunk<Uint8Array>[];
-  /** All symbols, in a deterministic (indexable) order. */
-  symbols?: Symbol[];
-  /** All segments.  Indexed by name, but we don't use a map. */
-  segments?: Segment[];
-}
+import { z } from 'zod';
+import {Expr, ExprZ} from './expr.ts';
+import { base64 } from 'base64';
 
-export interface Chunk<T extends number[]|Uint8Array|string> {
+
+// export interface Substitution {
+//   offset: number;
+//   size: number;
+//   expr: Expr;
+// }
+
+const SubstitutionZ = z.object({
+  /** Offset into the chunk to substitute the expression into. */
+  offset: z.number(),
+  /** Number of bytes to substitute. */
+  size: z.number(),
+  /** Expression to substitute. */
+  expr: ExprZ,
+});
+
+export type Substitution = z.infer<typeof SubstitutionZ>;
+// export type Module = z.infer<typeof Module>;
+
+
+// Default is "allow"
+const OverwriteModeZ = z.enum(['forbid', 'allow', 'require']);
+export type OverwriteMode = z.infer<typeof OverwriteModeZ>;
+
+// export interface Chunk<T extends number[]|Uint8Array|string> {
+//   name?: string;
+//   segments: readonly string[];
+//   org?: number;
+//   data: T;
+//   subs?: Substitution[];
+//   asserts?: Expr[];
+//   overwrite?: OverwriteMode;
+// }
+
+const BaseChunk = z.object({
   /** Human-readable identifier. */
-  name?: string;
+  name: z.string().optional(),
   /** Which segments this chunk may be located in. */
-  segments: readonly string[];
+  segments: z.array(z.string()),
   /** Absolute address of the start of the chunk, if not relocatable. */
-  org?: number;
+  org: z.number().optional(),
   /**
    * Data for the chunk, either a Uint8Array or a Base64-encoded string.
    * NOTE: While building this is a number array.  When serialized to disk, it
    * is a base64-encoded string.  When linking, it's a Uint8Array.
    */
-  data: T;
   /** Substitutions to insert into the data. */
-  subs?: Substitution[];
+  subs: z.optional(z.array(SubstitutionZ)),
   /** Assertions within this chunk. Each expression must be nonzero. */
-  asserts?: Expr[];
+  asserts: z.optional(z.array(ExprZ)),
   /** How overwriting previously-written fixed-position data is handled. */
-  overwrite?: OverwriteMode; // NOTE: only set programmatically?
-}
+  overwrite: z.optional(OverwriteModeZ), // NOTE: only set programmatically?
+});
 
-// Default is "allow"
-export type OverwriteMode = 'forbid'|'allow'|'require';
+export type ChunkNum = z.infer<typeof ChunkNumZ>;
+export type Chunk = z.infer<typeof ChunkZ>;
 
-export interface Symbol {
+const ChunkNumZ = BaseChunk.extend({
+  data: z.array(z.number()),
+});
+
+const ChunkZ = BaseChunk.extend({
+  data: z.string().transform((s) => new Uint8Array(base64.toArrayBuffer(s)))
+});
+
+
+// export interface Symbol {
+//   export?: string;
+//   expr?: Expr;
+// }
+
+const SymbolZ = z.object({
   /** Name to export this symbol as, for importing into other objects. */
-  export?: string;
+  export: z.string().optional(),
   // /** Index of the chunk this symbol is defined in. */
   // chunk?: number; // TODO - is this actually necessary?
   // /** Byte offset into the chunk for the definition. */
   // offset?: number;
   /** Value of the symbol. */
-  expr?: Expr;
-}
+  expr: ExprZ.optional(),
+});
 
-export interface Segment {
+export type Symbol = z.infer<typeof SymbolZ>;
+
+// export interface Segment {
+//   name: string;
+//   bank?: number;
+//   size?: number;
+//   offset?: number;
+//   memory?: number;
+//   addressing?: number;
+//   default?: boolean;
+//   free?: Array<readonly [number, number]>;
+// }
+
+const SegmentZ = z.object({
   /** Name of the segment, as used in .segment directives. */
-  name: string;
+  name: z.string(),
   /** Bank for the segment. */
-  bank?: number;
+  bank: z.number().optional(),
   /** Segment size in bytes. */
-  size?: number;
+  size: z.number().optional(),
   /** Offset of the segment in the rom image. */
-  offset?: number;
+  offset: z.number().optional(),
   /** Memory location of the segment in the CPU. */
-  memory?: number;
+  memory: z.number().optional(),
   /** Address size. */
-  addressing?: number;
+  addressing: z.number().optional(),
   /** True if this segment is the "default" segment to use if no segment is defined */
-  default?: boolean;
+  default: z.boolean().optional(),
   /** Unallocated ranges (org), half-open [a, b). */
-  free?: Array<readonly [number, number]>;
-}
+  free: z.array(z.array(z.number())).optional(),
+});
+
+export type Segment = z.infer<typeof SegmentZ>;
 
 export namespace Segment {
   export function merge(a: Segment, b: Segment): Segment {
@@ -76,11 +132,19 @@ export namespace Segment {
   }
 }
 
-export interface Substitution {
-  /** Offset into the chunk to substitute the expression into. */
-  offset: number;
-  /** Number of bytes to substitute. */
-  size: number;
-  /** Expression to substitute. */
-  expr: Expr;
-}
+// export interface Module {
+//   chunks?: Chunk<Uint8Array>[],
+//   symbols?: Symbol[],
+//   segments?: Segment[],
+// }
+
+const ModuleZ = z.object({
+  /** All chunks, in a determinstic (indexable) order. */
+  chunks: z.optional(z.array(ChunkZ)),
+  /** All symbols, in a deterministic (indexable) order. */
+  symbols: z.optional(z.array(SymbolZ)),
+  /** All segments.  Indexed by name, but we don't use a map. */
+  segments: z.optional(z.array(SegmentZ)),
+});
+
+export type Module = z.infer<typeof ModuleZ>;

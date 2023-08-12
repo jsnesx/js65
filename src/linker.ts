@@ -117,7 +117,7 @@ class LinkSegment {
     this.addressing = segment.addressing ?? 2;
     this.size = segment.size ?? fail(`Size must be specified: ${name}`);
     this.offset = segment.offset ?? fail(`Offset must be specified: ${name}`);
-    this.memory = segment.memory ?? fail(`Offset must be specified: ${name}`);
+    this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
   }
 
   // offset = org + delta
@@ -158,7 +158,7 @@ class LinkChunk {
 
   constructor(readonly linker: Link,
               readonly index: number,
-              chunk: Chunk<Uint8Array>,
+              chunk: Chunk,
               chunkOffset: number,
               symbolOffset: number) {
     this.name = chunk.name;

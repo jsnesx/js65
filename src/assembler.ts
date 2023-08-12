@@ -6,7 +6,8 @@ import {Token} from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { IntervalSet, assertNever } from './util.ts';
-type Chunk = mod.Chunk<number[]>;
+
+type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
 
 class Symbol {
@@ -150,13 +151,13 @@ export interface RefExtractor {
 export class Assembler {
 
   /** The currently-open segment(s). */
-  private segments: readonly string[] = [];
+  private segments: /* readonly */ string[] = [];
 
   /** Data on all the segments. */
   private segmentData = new Map<string, mod.Segment>();
 
   /** Stack of segments for .pushseg/.popseg. */
-  private segmentStack: Array<readonly [readonly string[], Chunk?]> = [];
+  private segmentStack: Array<readonly [/* readonly */ string[], Chunk?]> = [];
 
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
@@ -445,7 +446,7 @@ export class Assembler {
     // TODO - add .scope and .endscope and forward scope vars at end to parent
 
     // Process and write the data
-    const chunks: mod.Chunk<Uint8Array>[] = [];
+    const chunks: mod.Chunk[] = [];
     for (const chunk of this.chunks) {
       chunks.push({...chunk, data: Uint8Array.from(chunk.data)});
     }

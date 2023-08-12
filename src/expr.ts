@@ -1,23 +1,74 @@
 
+import { z } from 'zod';
 import {Token} from './token.ts'
 import * as Tokens from './token.ts';
 
-export interface Expr {
-  // operator (e.g. '+' or '.max') or 'sym', 'num', or 'im'
-  //  - sym: an offset into the symbols array (or the name in 'sym')
-  //  - num: a number literal, or an offset into the symbols array.
-  //  - im: an import from another object file (uses 'sym').
+// export interface Expr {
+//   op: string;
+//   args?: Expr[];
+//   num?: number;
+//   meta?: Meta;
+//   sym?: string;
+//   source?: Tokens.SourceInfo;
+// }
+
+
+
+// export interface Meta {
+//   rel?: boolean;
+//   chunk?: number;
+//   org?: number;
+//   bank?: number;
+//   offset?: number;
+//   size?: number;
+// }
+
+/** Extra information for 'num' values. */
+const MetaZ = z.object({
+  /** Whether this is relative to the start of the chunk. */
+  rel: z.boolean().optional(),
+  /** Relative chunk the value is defined in. */
+  chunk: z.number().optional(),
+  /** Org value of chunk, if known. */
+  org: z.number().optional(),
+  /** Bank value of chunk, if known. */
+  bank: z.number().optional(),
+  /** Offset value of chunk, if known. */
+  offset: z.number().optional(),
+  /** Size hint for number. */
+  size: z.number().optional(),
+});
+
+export type Meta = z.infer<typeof MetaZ>;
+
+const BaseExpr = z.object({
   // TODO - what about different address types? bank hint/etc?
   //      - does bank hint need to get stored in the object file?
   //        - probably not...?
-  op: string;
-  args?: Expr[];
-  num?: number; // only used when op === 'num'
-  meta?: Meta;
-  sym?: string; // only used when op === 'sym'
-  source?: Tokens.SourceInfo;
-}
+  
+  /**
+   * operator (e.g. '+' or '.max') or 'sym', 'num', or 'im'
+   * - sym: an offset into the symbols array (or the name in 'sym')
+   *  - num: a number literal, or an offset into the symbols array.
+   *  - im: an import from another object file (uses 'sym').
+   */
+  op: z.string(),
+  /** only used when op === 'num' */
+  num: z.number().optional(),
+  meta: MetaZ.optional(),
+  /** only used when op === 'sym' */
+  sym: z.string().optional(),
+  source: Tokens.SourceInfoZ.optional(),
+});
 
+// Work around for the recursive Expr type
+export type Expr = z.infer<typeof BaseExpr> & {
+  args?: Expr[];
+};
+
+export const ExprZ : z.ZodType<Expr> = BaseExpr.extend({
+  args: z.lazy(() => ExprZ.array()).optional(),
+});
 
 function jsSource(e: Expr): {source?: Tokens.SourceInfo} {
   return e.source ?
@@ -31,22 +82,6 @@ export function loByte(e: Expr) {
 /** Given an Expr, returns a new Expr for the high byte. */
 export function hiByte(e: Expr) {
   return {op: '>', args: [e], ...jsSource(e)};
-}
-
-/** Extra information for 'num' values. */
-export interface Meta {
-  /** Whether this is relative to the start of the chunk. */
-  rel?: boolean;
-  /** Relative chunk the value is defined in. */
-  chunk?: number;
-  /** Org value of chunk, if known. */
-  org?: number;
-  /** Bank value of chunk, if known. */
-  bank?: number;
-  /** Offset value of chunk, if known. */
-  offset?: number;
-  /** Size hint for number. */
-  size?: number;
 }
 
 type Rec = (expr: Expr) => Expr; // recurses into children

@@ -27,6 +27,15 @@ export interface Callbacks {
   exit: (code: number) => void,
 }
 
+class Arguments {
+  outfile = "";
+  op: ((src: string, cpu: Cpu, prg: Uint8Array) => string) | undefined = undefined;
+  rom = "";
+  files : string[] = [];
+  target = 'nes-nrom';
+  compileonly = false;
+}
+
 export class Cli {
   public static readonly STDIN : string = "//stdin";
   public static readonly STDOUT : string = "//stdout";
@@ -34,97 +43,72 @@ export class Cli {
     this.callbacks = callbacks;
   }
 
-  public async run(argv: string[]) {
-    console.log(`test1 ${argv}`);
-    let op: ((src: string, cpu: Cpu, prg: Uint8Array) => string)|undefined = undefined;
-    console.log("test2");
-    let files: string[] = [];
-    let outfile: string|undefined = undefined;
-    let rom: string|undefined = undefined;
-    let target: string|undefined = undefined;
-    console.log("test3");
-    for (let i = 0; i < argv.length; i++) {
-      const arg = argv[i];
-      if (arg === '--help') {
+  parseArgs(args : string[]) : Arguments {
+    const out = new Arguments();
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '-h' || arg === '--help') {
         console.log("test help");
         this.usage(0);
-      } else if (arg === '-o') {
-        if (outfile) this.usage();
-        outfile = argv[++i];
+      } else if (arg === '-o' || arg === '--outfile') {
+        if (out.outfile) this.usage();
+        out.outfile = args[++i];
+      } else if (arg === '-c' || arg === '--compileonly') {
+        out.compileonly = true;
+      } else if (arg === '--output=') {
+        if (out.outfile) this.usage();
+        out.outfile = arg.substring('--rom='.length);
       } else if (arg === 'rehydrate') {
-        op = smudge;
+        out.op = smudge;
       } else if (arg === 'dehydrate') {
-        op = clean;
+        out.op = clean;
+      } else if (arg === '--stdin') {
+        out.files.push(Cli.STDIN);
       } else if (arg === '--rom') {
-        rom = argv[++i];
+        out.rom = args[++i];
       } else if (arg === '--target') {
-        target = argv[++i];
+        out.target = args[++i];
       } else if (arg.startsWith('--rom=')) {
-        rom = arg.substring('--rom='.length);
+        out.rom = arg.substring('--rom='.length);
       } else if (arg.startsWith('--target=')) {
-        target = arg.substring('--target='.length);
+        out.target = arg.substring('--target='.length);
       } else {
-        files.push(arg);
+        out.files.push(arg);
       }
     }
+    return out;
+  }
+
+  public async run(argv: string[]) {
+    console.log(`test1 ${argv}`);
+
+    const args = this.parseArgs(argv);
+
+    console.log("test3");
+    if (args.files.length === 0) {
+      return this.usage(1, [new Error("No input files provided")]);
+    }
+    
     console.log("test4");
-    if (!files.length) {
-      files.push(Cli.STDIN);
-    }
-    console.log("test5");
-    if (!outfile) outfile = Cli.STDOUT;
+    if (!args.outfile) args.outfile = args.files[0].substring(0, args.files[0].lastIndexOf(".")) + (args.compileonly) ? ".o" : ".nes";
+    if (args.outfile == "--stdout") args.outfile = Cli.STDOUT;
+    
+    // assemble
+    if (args.rom) this.usage(1, [new Error('--rom only allowed with rehydrate or dehydrate')]);
 
-    console.log(`op ${op}`);
-    if (op) {
-      console.log("test7");
-      if (files.length > 1) this.usage(1, new Error('rehydrate and dehydrate only allow one input'));
-      console.log("test8");
-      let [src, err] = this.callbacks.fsReadString(files[0]);
-      if (err) this.usage(3, err);
-      console.log("test9");
-      let fullRom: Uint8Array|undefined;
-      if (rom) {
-        console.log("test10");
-        [fullRom, err] = this.callbacks.fsReadBytes(rom);
-        if (err) this.usage(4, err);
-      } else {
-        console.log("test11");
-        const match = /smudge sha1 ([0-9a-f]{40})/.exec(src!);
-        console.log("test12");
-        if (!match) throw this.usage(1, new Error('no sha1 tag, must specify rom'));
-        console.log("test13");
-        const shaTag = match[1];
-        console.log("test14");
-        this.callbacks.fsWalk('.', (filename) => {
-          console.log("test callback");
-          if (/\.nes$/.test(filename)) {
-            const [data, err] = this.callbacks.fsReadBytes(filename);
-            if (err) this.usage(5, err);
-            const sha = Array.from(
-                new Uint8Array(this.callbacks.cryptoSha1(data!)),
-                x => x.toString(16).padStart(2, '0')).join('');
-            if (sha === shaTag) {
-              fullRom = Uint8Array.from(data!);
-              return true;
-            }
-          }
-          return false;
-        }
-        );
-        console.log("test15");
-        if (!fullRom) this.usage(1, new Error(`could not find rom with sha ${shaTag}`));
+    try {
+      if (args.op !== undefined) {
+        return this.smudge(args);
       }
 
-      console.log("test16");
-      // TODO - read the header properly
-      const prg = fullRom!.subarray(0x10, 0x40010);
-      err = this.callbacks.fsWriteString(outfile, op(src!, Cpu.P02, prg));
-      if (err) this.usage(6, err);
-      return;
+      await this.assemble(args);
+    } catch (e) {
+      this.printerrors(e);
+      throw e;
     }
+  }
 
-    // assemble
-    if (rom) this.usage(1, new Error('--rom only allowed with rehydrate or dehydrate'));
+  async assemble(args: Arguments) {
     console.log("test17");
     const that = this;
     function tokenizer(path: string) : [Tokenizer|undefined, Error|undefined] {
@@ -133,14 +117,14 @@ export class Cli {
       return [new Tokenizer(str!, path, {lineContinuations: true}), undefined];
     }
 
-    console.log(`test18 ${files}`);
+    console.log(`test18 ${args.files}`);
     const asm = new Assembler(Cpu.P02);
     const toks = new TokenStream();
     console.log("test19");
-    const sources = await Promise.all(files.map(tokenizer));
+    const sources = await Promise.all(args.files.map(tokenizer));
     const [srcs, errs] = unzip(sources);
     const allErrs = errs.filter((err) => err != undefined).map(err => err!);
-    if (allErrs.length > 0) this.usage(1, allErrs);
+    if (allErrs.length > 0) return this.printerrors(...allErrs);
     console.log("test20");
     toks.enter(Tokens.concat(...srcs.map(src => src!)));
     console.log("test21");
@@ -148,60 +132,116 @@ export class Cli {
     asm.tokens(pre);
     console.log("test22");
 
-    const linker = new Linker({ target: target });
+    const modules = asm.module();
+    if (args.compileonly) {
+      console.log("ending cause compileonly");
+      // const data = new Uint8Array(modules);
+      // this.callbacks.fsWriteBytes(args.outfile, data);
+      return;
+    }
+
+    const linker = new Linker({ target: args.target });
     console.log("test23");
     //linker.base(this.prg, 0);
-    linker.read(asm.module());
+    linker.read(modules);
     console.log("test24");
     const out = linker.link();
     console.log("test25");
     const data = new Uint8Array(out.length);
     out.apply(data);
     console.log("test26");
-    this.callbacks.fsWriteBytes(outfile, data);
+    this.callbacks.fsWriteBytes(args.outfile, data);
     console.log("test27");
   }
 
-  public usage(code = 1, err: Error[]|Error|undefined = undefined) {
-    if (err) {
-      if (Array.isArray(err) && err.length > 1) {
-        console.log(`js65: Multiple errors`);
-        for (const mess in err) {
-          console.log(`${mess}`);
+  smudge(args: Arguments) {
+    console.log(`op ${args.op}`);
+    if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
+    console.log("test8");
+    let [src, err] = this.callbacks.fsReadString(args.files[0]);
+    if (err) this.usage(3, [err]);
+    console.log("test9");
+    let fullRom: Uint8Array|undefined;
+    if (args.rom) {
+      console.log("test10");
+      [fullRom, err] = this.callbacks.fsReadBytes(args.rom);
+      if (err) this.usage(4, [err]);
+    } else {
+      console.log("test11");
+      const match = /smudge sha1 ([0-9a-f]{40})/.exec(src!);
+      console.log("test12");
+      if (match === undefined) this.usage(1, [new Error('no sha1 tag, must specify rom')]);
+      console.log("test13");
+      const shaTag = match![1];
+      console.log("test14");
+      this.callbacks.fsWalk('.', (filename) => {
+        console.log("test callback");
+        if (/\.nes$/.test(filename)) {
+          const [data, err] = this.callbacks.fsReadBytes(filename);
+          if (err) this.usage(5, [err]);
+          const sha = Array.from(
+              new Uint8Array(this.callbacks.cryptoSha1(data!)),
+              x => x.toString(16).padStart(2, '0')).join('');
+          if (sha === shaTag) {
+            fullRom = Uint8Array.from(data!);
+            return true;
+          }
         }
-      } else { 
-        console.log(`js65: ${err}`);
+        return false;
       }
+      );
+      console.log("test15");
+      if (!fullRom) this.usage(1, [new Error(`could not find rom with sha ${shaTag}`)]);
     }
-    console.log(`
-  Usage: js65 [-o FILE] [FILE...]
-    Assembles and links all files into output
-  Usage: js65 rehydrate|dehydrate [-r,--rom=<rom>] [FILE]
-    Remove/Re-add data in an assembly file from the original ROM.
 
-  ===
+    console.log("test16");
+    // TODO - read the header properly
+    const prg = fullRom!.subarray(0x10, 0x40010);
+    err = this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));
+    if (err) this.printerrors(err);
+  }
 
-  Assembler Options:
+  printerrors(...err: Error[]) {
+    for (let i = 0; i < err.length; i++) {
+      console.log(`js65 Error: ${err[i].message}`);
+    }
+    if (err.length > 1) {
+      console.log(`js65: Multiple errors`);
+    }
+  }
 
-  positional arguments:
-    [FILE...] a list of files or stdin if no files are provided.
+  public usage(code = 1, err: Error[]|undefined = undefined) {
+    if (err) this.printerrors(...err);
+    console.log(`\
+Usage: js65 [options] FILE[...]
+  Assembles and links all files into output
+Usage: js65 rehydrate|dehydrate -r|--rom=<rom> FILE
+  Remove/Re-add data in an assembly file from the original ROM.
 
-  optional arguments:
-    -o/--output Name of the file to write. If not provided, writes to standard out
+===
 
-    The smudged asm file can be rebuilt into a regular file by providing the same rom image.
-    This can be used to share a disassembled game's code without sharing the data.
+Assembler Options:
 
-  ===
+positional arguments:
+  FILE[...] a list of one or more files or --stdin to read input from stdin
 
-  Hydrate Options:
+optional arguments:
+  -o FILE/--output=FILE   Name of the file to write or --stdout. If not provided, writes to \`<filename>.nes\`
+  -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
+  -h/--help               Print this help text and exit.
 
-  required arguments:
-    [FILE] The assembly file to dehydrate or rehydrate
-    rehydrate|dehydrate Convert the file to either remove all data (dehydrate) or re-add data from rom ()
-    -r/--rom ROM image to use. If not provided, js65 will search in the directory structure for a rom that matches the
-             sha-1 provided in the header of the assembly FILE
-  `);
+===
+
+Hydrate Options:
+  The smudged asm file can be rebuilt into a regular file by providing the same rom image.
+  This can be used to share a disassembled game's code without sharing the data.
+
+required arguments:
+  FILE                 The assembly file to dehydrate or rehydrate
+  rehydrate|dehydrate  Convert the file to either remove all data (dehydrate) or re-add data from rom ()
+  -r/--rom             ROM image to use. If not provided, js65 will search in the directory structure for
+                        a rom that matches the sha-1 provided in the header of the assembly FILE
+`);
     this.callbacks.exit(code);
   }
 
