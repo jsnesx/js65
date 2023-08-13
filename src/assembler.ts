@@ -291,6 +291,11 @@ export class Assembler {
     return Exprs.evaluate({op: 'num', num, meta});
   }
 
+  // Returns an expr resolving to a symbol name (e.g. a label)
+  symbol(name: string): Expr {
+    return Exprs.evaluate(Exprs.parseOnly([{token: 'ident', str: name}]));
+  }
+
   where(): string {
     if (!this._chunk) return '';
     if (this.chunk.org == null) return '';
@@ -462,7 +467,7 @@ export class Assembler {
   }
 
   // Assemble from a list of tokens
-  line(tokens: Token[]) {
+  async line(tokens: Token[]) {
     this._source = tokens[0].source;
     if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
       this.label(tokens[0]);
@@ -473,25 +478,25 @@ export class Assembler {
     } else if (tokens[0].token === 'cs') {
       this.directive(tokens);
     } else {
-      this.instruction(tokens);
+      await this.instruction(tokens);
     }
   }
 
   // Assemble from a token source
-  tokens(source: Tokens.Source) {
+  async tokens(source: Tokens.Source) {
     let line;
-    while ((line = source.next())) {
+    while ((line = await source.next())) {
       this.line(line);
     }
   }
 
   // Assemble from an async token source
-  async tokensAsync(source: Tokens.Async): Promise<void> {
-    let line;
-    while ((line = await source.nextAsync())) {
-      this.line(line);
-    }
-  }
+  // async tokensAsync(source: Tokens.Async): Promise<void> {
+  //   let line;
+  //   while ((line = await source.nextAsync())) {
+  //     this.line(line);
+  //   }
+  // }
 
   directive(tokens: Token[]) {
     // TODO - record line information, rewrap error messages?
@@ -621,9 +626,9 @@ export class Assembler {
     sym.expr = expr;
   }
 
-  instruction(mnemonic: string, arg?: Arg|string): void;
-  instruction(tokens: Token[]): void;
-  instruction(...args: [Token[]]|[string, (Arg|string)?]): void {
+  async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;
+  async instruction(tokens: Token[]): Promise<void>;
+  async instruction(...args: [Token[]]|[string, (Arg|string)?]): Promise<void> {
     let mnemonic: string;
     let arg: Arg;
     if (args.length === 1 && Array.isArray(args[0])) {
@@ -635,7 +640,7 @@ export class Assembler {
       // parse the tokens first
       mnemonic = args[0] as string;
       const tokenizer = new Tokenizer(args[1]);
-      arg = this.parseArg(tokenizer.next()!, 0);
+      arg = this.parseArg((await tokenizer.next())!, 0);
     } else {
       [mnemonic, arg] = args as [string, Arg];
       if (!arg) arg = ['imp'];

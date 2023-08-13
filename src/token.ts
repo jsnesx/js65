@@ -3,42 +3,18 @@ import { z } from 'zod';
 import {assertNever} from './util.ts';
 
 export interface Source {
-  next(): Token[]|undefined;
-}
-
-export interface Async {
-  nextAsync(): Promise<Token[]|undefined>;
+  next(): Promise<Token[]|undefined>;
 }
 
 // TODO - consider moving into a namespace?
-export abstract class Abstract implements Source {
-  // TODO - move pump() into here, refactor Preprocessor as a TokenSource
-  // TODO - rename Processor into Assembler, fix up the clunky methods
-  //      - add line(Token[]), tokens(TokenSource) and asyncTokens(ATS)
-  //        the latter returns Promise<void> and must be awaited.
-  // Delegate the 
-  private sink: Iterator<Token[]|undefined>|undefined;
-
-  abstract pump(): Generator<Token[]|undefined>;
-
-  next(): Token[]|undefined {
-    while (true) {
-      if (!this.sink) this.sink = this.pump();
-      const {value, done} = this.sink.next();
-      if (!done) return value;
-      this.sink = undefined;
-    }
-  }
-}
-
 export function concat(...sources: Source[]): Source {
   let source: Source|undefined;
   return {
-    next: (): Token[]|undefined => {
+    next: async (): Promise<Token[]|undefined> => {
       while (true) {
         if (!source) source = sources.shift();
         if (!source) return undefined;
-        const line = source.next();
+        const line = await source.next();
         if (line) return line;
         source = undefined;
       }

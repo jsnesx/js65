@@ -13,7 +13,7 @@ export class Macro {
   private constructor(readonly params: string[],
                       readonly production: Token[][]) {}
 
-  static from(line: Token[], source: Tokens.Source) {
+  static async from(line: Token[], source: Tokens.Source) {
     // First line must start with .macro <name> [args]
     // Last line is the line BEFORE the .endmacro
     // Nested macro definitions are not allowed!
@@ -22,7 +22,7 @@ export class Macro {
     const params = Tokens.identsFromCList(line.slice(2));
     const lines = [];
     let next: Token[]|undefined;
-    while ((next = source.next())) {
+    while ((next = await source.next())) {
       if (Tokens.eq(next[0], Tokens.ENDMACRO)) return new Macro(params, lines);
       if (Tokens.eq(next[0], Tokens.ENDMAC)) return new Macro(params, lines);
       lines.push(next);

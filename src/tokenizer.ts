@@ -11,7 +11,7 @@ export class Tokenizer implements Tokens.Source {
     this.buffer = new Buffer(str);
   }
 
-  next(): Token[]|undefined {
+  async next(): Promise<Token[]|undefined> {
     let tok = this.token();
     while (Tokens.eq(tok, Tokens.EOL)) {
       // Skip EOLs at beginning of line.

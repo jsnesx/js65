@@ -4,15 +4,15 @@ import * as Tokens from './token.ts';
 import {Tokenizer, Options} from './tokenizer.ts';
 import {TokenStream} from './tokenstream.ts';
 
-export class IncludeWrapper implements Tokens.Async {
+export class IncludeWrapper implements Tokens.Source {
   constructor(
       readonly readFile: (path: string) => Promise<string>,
       readonly source: Tokens.Source, readonly stream: TokenStream,
       readonly opts?: Options) {}
 
-  async nextAsync(): Promise<Token[]|undefined> {
+  async next(): Promise<Token[]|undefined> {
     while (true) {
-      const line = this.source.next();
+      const line = await this.source.next();
       if (line?.[0].token !== 'cs') return line;
       if (line[0].str !== '.include') return line;
       const path = str(line);
@@ -26,9 +26,9 @@ export class IncludeWrapper implements Tokens.Async {
 export class ConsoleWrapper implements Tokens.Source {
   constructor(readonly source: Tokens.Source) {}
 
-  next() {
+  async next() {
     while (true) {
-      const line = this.source.next();
+      const line = await this.source.next();
       if (line?.[0].token !== 'cs') return line;
       switch (line[0].str) {
         case '.out':

@@ -9,11 +9,11 @@ const MAX_DEPTH = 100;
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
 
-  next(): Token[]|undefined {
+  async next(): Promise<Token[]|undefined> {
     while (this.stack.length) {
       const [tok, front] = this.stack[this.stack.length - 1];
       if (front.length) return front.pop()!;
-      const line = tok?.next();
+      const line = await tok?.next();
       if (line) return line;
       this.stack.pop();
     }

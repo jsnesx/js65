@@ -39,8 +39,19 @@ interface Env {
   //  - turn it into a json tree...?
 }
 
-export class Preprocessor extends Tokens.Abstract {
+// export abstract class Abstract implements Source {
+//   // TODO - move pump() into here, refactor Preprocessor as a TokenSource
+//   // TODO - rename Processor into Assembler, fix up the clunky methods
+//   //      - add line(Token[]), tokens(TokenSource) and asyncTokens(ATS)
+//   //        the latter returns Promise<void> and must be awaited.
+//   // Delegate the 
+
+//   abstract pump(): Generator<Token[]|undefined>;
+// }
+
+export class Preprocessor implements Tokens.Source {
   private readonly macros: Map<string, Define|Macro>;
+  private sink: AsyncGenerator<Token[]|undefined>|undefined;
 
   // builds up repeating tokens...
   private repeats: Array<[Token[][], number, number, string?]> = [];
@@ -50,13 +61,22 @@ export class Preprocessor extends Tokens.Abstract {
 
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor) {
-    super();
     this.macros = parent ? parent.macros : new Map();
   }
 
+
+  async next(): Promise<Token[] | undefined> {
+    while (true) {
+      if (!this.sink) this.sink = await this.pump();
+      const {value, done} = await this.sink.next();
+      if (!done) return value;
+      this.sink = undefined;
+    }
+  }
+
   // For use as a token source in the next stage.
-  * pump(): Generator<Token[]|undefined> {
-    const line = this.readLine();
+  async * pump(): AsyncGenerator<Token[]|undefined> {
+    const line = await this.readLine();
     if (line == null) return void (yield line); // EOF
     while (line.length) {
       const front = line[0];
@@ -101,9 +121,9 @@ export class Preprocessor extends Tokens.Abstract {
   }
 
   // Expand a single line of tokens from the front of toks.
-  private readLine(): Token[]|undefined {
+  private async readLine(): Promise<Token[]|undefined> {
     // Apply .define expansions as necessary.
-    const line = this.stream.next();
+    const line = await this.stream.next();
     if (line == null) return line;
     return this.expandLine(line);
   }
@@ -383,15 +403,15 @@ export class Preprocessor extends Tokens.Abstract {
     this.macros.delete(name);
   }
 
-  private parseMacro(line: Token[]) {
+  private async parseMacro(line: Token[]) {
     const name = Tokens.expectIdentifier(line[1], line[0]);
-    const macro = Macro.from(line, this.stream);
+    const macro = await Macro.from(line, this.stream);
     const prev = this.macros.get(name);
     if (prev) throw new Error(`Already defined: ${name}`);
     this.macros.set(name, macro);
   }
 
-  private parseRepeat(line: Token[]) {
+  private async parseRepeat(line: Token[]) {
     const [expr, end] = Exprs.parse(line, 1);
     const at = line[1] || line[0];
     if (!expr) throw new Error(`Expected expression: ${Tokens.nameAt(at)}`);
@@ -408,7 +428,7 @@ export class Preprocessor extends Tokens.Abstract {
     const lines: Token[][] = [];
     let depth = 1;
     while (depth > 0) {
-      line = this.stream.next() ?? fail(`.repeat with no .endrep`);
+      line = await this.stream.next() ?? fail(`.repeat with no .endrep`);
       if (Tokens.eq(line[0], Tokens.REPEAT)) depth++;
       if (Tokens.eq(line[0], Tokens.ENDREPEAT)) depth--;
       if (Tokens.eq(line[0], Tokens.ENDREP)) depth--;
@@ -432,12 +452,12 @@ export class Preprocessor extends Tokens.Abstract {
     })));
   }
 
-  private parseIf(cond: boolean) {
+  private async parseIf(cond: boolean) {
     let depth = 1;
     let done = false;
     const result: Token[][] = [];
     while (depth > 0) {
-      const line = this.stream.next();
+      const line = await this.stream.next();
       if (!line) throw new Error(`EOF looking for .endif`); // TODO: start?
       const front = line[0];
       if (Tokens.eq(front, Tokens.ENDIF)) {
