@@ -1,7 +1,7 @@
 import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
-import * as Tokens from './token.ts';
+// import * as Tokens from './token.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { clean, smudge } from './smudge.ts';
 import { Tokenizer } from './tokenizer.ts';
@@ -144,13 +144,13 @@ export class Cli {
       console.log(`building asm file ${file}`);
       const asm = new Assembler(Cpu.P02);
       const opts = {lineContinuations: true};
-      const readfile = (path: string) => {
-        return this.callbacks.fsReadString(path)
-        .then((result) => {
-          const [str, err] = result;
-          if (err) throw err;
-          return str!;
-        });
+      const readfile = async (path: string) => {
+        return await this.callbacks.fsReadString(path)
+          .then((result) => {
+            const [str, err] = result;
+            if (err) throw err;
+            return str!;
+          });
       }
       const toks = new TokenStream(readfile, opts);
 
@@ -179,11 +179,12 @@ export class Cli {
       }
       const tokenizer = new Tokenizer(str!, file, opts);
       console.log("tokenization complete");
-      toks.enter(Tokens.concat(tokenizer));
+      // toks.enter(Tokens.concat(tokenizer));
+      toks.enter(tokenizer);
       console.log("running preprocessor");
       const pre = new Preprocessor(toks, asm);
       console.log("applying tokens to assembly");
-      asm.tokens(pre);
+      await asm.tokens(pre);
       console.log("assembly complete, writing module");
       const module = asm.module();
       module.name = file;

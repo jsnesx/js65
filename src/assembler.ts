@@ -10,7 +10,7 @@ import { IntervalSet, assertNever } from './util.ts';
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
 
-class Symbol {
+export class Symbol {
   /**
    * Index into the global symbol array.  Only applies to immutable
    * symbols that need to be accessible at link time.  Mutable symbols
@@ -487,7 +487,7 @@ export class Assembler {
   async tokens(source: Tokens.Source) {
     let line;
     while ((line = await source.next())) {
-      this.line(line);
+      await this.line(line);
     }
   }
 

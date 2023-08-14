@@ -64,7 +64,6 @@ export class Preprocessor implements Tokens.Source {
     this.macros = parent ? parent.macros : new Map();
   }
 
-
   async next(): Promise<Token[] | undefined> {
     while (true) {
       if (!this.sink) this.sink = await this.pump();
