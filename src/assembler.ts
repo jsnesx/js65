@@ -1,4 +1,4 @@
-import { AddressingMode, Cpu } from './cpu.ts';
+import { Cpu } from './cpu.ts';
 import { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import * as mod from './module.ts';
@@ -63,7 +63,7 @@ abstract class BaseScope {
       Symbol|undefined {
     const {allowForwardRef = false, ref} = opts;
     const [tail, scope] = this.pickScope(name);
-    let sym = scope.symbols.get(tail);
+    const sym = scope.symbols.get(tail);
 //console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
     if (sym) {
       if (tail !== name) sym.scoped = true;
@@ -94,6 +94,7 @@ class Scope extends BaseScope {
 
   pickScope(name: string): [string, Scope] {
     // TODO - plumb the source information through here?
+    // deno-lint-ignore no-this-alias
     let scope: Scope = this;
     const split = name.split(/::/g);
     const tail = split.pop()!;
@@ -498,7 +499,7 @@ export class Assembler {
   //   }
   // }
 
-  directive(tokens: Token[]) {
+  directive(tokens: Token[]) : void {
     // TODO - record line information, rewrap error messages?
     this.errorToken = tokens[0];
     try {
@@ -811,7 +812,7 @@ export class Assembler {
     }
     // Append the number or placeholder
     expr = this.resolve(expr);
-    let val = expr.num!;
+    const val = expr.num!;
     if (expr.op !== 'num' || expr.meta?.rel) {
       // use a placeholder and add a substitution
       const offset = chunk.data.length;
@@ -1013,7 +1014,7 @@ export class Assembler {
     if (val != null) return val;
     this.fail(`Expression is not constant`, tokens[1]);
   }
-  parseNoArgs(tokens: Token[], start: number) {
+  parseNoArgs(tokens: Token[], _start: number) {
     Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {

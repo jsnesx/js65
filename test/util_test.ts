@@ -1,10 +1,10 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
 import {BitSet, IntervalSet, SparseArray, SparseByteArray,
-        binaryInsert, binarySearch} from '../util.ts';
-import * as util from '../util.ts';
+        binaryInsert, binarySearch} from '/src/util.ts';
+import * as util from '/src/util.ts';
 
-const [] = [util];
+const [_] = [util];
 
 describe('binarySearch', function() {
   const arr = [3, 6, 8, 10, 12, 16, 18, 22, 27, 35];

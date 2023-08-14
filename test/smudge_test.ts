@@ -1,7 +1,7 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import { Cpu } from '../cpu.ts';
-import * as lib from '../smudge.ts';
+import { Cpu } from '/src/cpu.ts';
+import * as lib from '/src/smudge.ts';
 
 function smudge(src: string): string {
   return lib.smudge(src, Cpu.P02, prg);

@@ -21,10 +21,11 @@ export class Linker {
   opts: Options;
   // TODO - accept a list of [filename, contents]?
   static assemble(contents: string): Uint8Array {
+    const opts = {lineContinuations: true};
     const source = new Tokenizer(contents, 'contents.s',
-                                 {lineContinuations: true});
+                                 opts);
     const asm = new Assembler(Cpu.P02);
-    const toks = new TokenStream();
+    const toks = new TokenStream(undefined, opts);
     toks.enter(source);
     const pre = new Preprocessor(toks, asm);
     asm.tokens(pre);
@@ -213,7 +214,8 @@ class LinkChunk {
     this._segment = segment;
     const offset = this._offset = org + segment.delta;
     for (const w of this.linker.watches) {
-      if (w >= offset && w < offset + this.size) debugger;
+      if (w >= offset && w < offset + this.size) 
+        fail("Unable to place");
     }
     binaryInsert(this.linker.placed, x => x[0], [offset, this]);
     // Copy data, leaving out any holes
@@ -428,7 +430,7 @@ class Link {
 
   watches: number[] = []; // debugging aid: offsets to watch.
   placed: Array<[number, LinkChunk]> = [];
-  initialReport: string = '';
+  initialReport = '';
 
   // TODO - deferred - store some sort of dependency graph?
 

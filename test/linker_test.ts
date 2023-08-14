@@ -1,10 +1,10 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Expr} from '../expr.ts';
-import {Linker} from '../linker.ts';
-import * as util from '../util.ts';
+import {Expr} from '/src/expr.ts';
+import {Linker} from '/src/linker.ts';
+import * as util from '/src/util.ts';
 
-const [] = [util];
+const [_] = [util];
 
 const link = Linker.link;
 
@@ -155,7 +155,7 @@ describe('Linker', function() {
       segments: [{
         name: 'code',
         size: 0x400, offset: 0x0010, memory: 0xc000,
-        free: [[0xc200, 0xc300] as const],
+        free: [[0xc200, 0xc300]],
       }],
     };
     expect([...link(m).chunks()])
@@ -194,10 +194,10 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 6, offset: 0, memory: 0x80,
-        free: [[0x80, 0x84] as const],
+        free: [[0x80, 0x84]],
       }, {
         name: 'b', size: 100, offset: 100, memory: 0x100,
-        free: [[0x100, 0x164] as const],
+        free: [[0x100, 0x164]],
       }],
     };
     expect([...link(m).chunks()])
@@ -219,10 +219,10 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 0, memory: 0,
-        free: [[0, 100] as const],
+        free: [[0, 100]],
       }, {
         name: 'b', size: 100, offset: 100, memory: 100,
-        free: [[100, 200] as const],
+        free: [[100, 200]],
       }],
     };
     expect([...link(m).chunks()])
@@ -247,7 +247,7 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 0, memory: 0x8000,
-        free: [[0x8005, 0x800a] as const],
+        free: [[0x8005, 0x800a]],
       }],
     };
     const patch = new Linker().base(base, 10).read(m).link();      
@@ -272,7 +272,7 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 100, memory: 0,
-        free: [[50, 100] as const],
+        free: [[50, 100]],
       }, {name: 'b', size: 40, offset: 0, memory: 0}],
     };
     const patch = new Linker().base(base, 10).read(m).link();
@@ -299,7 +299,7 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 100, memory: 0,
-        free: [[50, 100] as const],
+        free: [[50, 100]],
       }, {name: 'b', size: 40, offset: 0, memory: 0}],
     };
     const patch = new Linker().base(base, 10).read(m).link();
@@ -326,10 +326,10 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 0, memory: 0x8000, bank: 8,
-        free: [[0x8000, 0x8064] as const],
+        free: [[0x8000, 0x8064]],
       }, {
         name: 'b', size: 100, offset: 100, memory: 0x8000, bank: 9,
-        free: [[0x8000, 0x8064] as const],
+        free: [[0x8000, 0x8064]],
       }],
     };
     expect([...link(m).chunks()]).to.eql([
@@ -347,7 +347,7 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 0, memory: 0,
-        free: [[0, 100] as const],
+        free: [[0, 100]],
       }],
     };
     const m2 = {
@@ -358,7 +358,7 @@ describe('Linker', function() {
       symbols: [{export: 'foo', expr: off(0, 1)}],
       segments: [{
         name: 'b', size: 100, offset: 100, memory: 100,
-        free: [[100, 200] as const],
+        free: [[100, 200]],
       }],
     };
     expect([...link(m1, m2).chunks()])
@@ -404,7 +404,7 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 0x2000, offset: 0, memory: 0x8000,
-        free: [[0x8000, 0xa000] as const],
+        free: [[0x8000, 0xa000]],
       }],
     };
     expect([...link(m).chunks()])

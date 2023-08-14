@@ -63,7 +63,7 @@ export class Macro {
       }
       // TODO - check for .local here and rename?  move into assemlber
       // or preprocessing...?  probably want to keep track elsewhere.
-      function map(toks: Token[]): Token[] {
+      const map = (toks: Token[]): Token[] => {
         const mapped: Token[] = [];
         for (const tok of toks) {
           if (tok.token === 'ident') {

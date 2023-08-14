@@ -7,10 +7,13 @@
     "qjsrun": "deno task qjsbuild && build/js65"
   },
   "imports": {
+    "/": "./",
+    "./": "./",
     "std/": "https://deno.land/std@0.198.0/",
     "esbuild": "https://deno.land/x/esbuild@v0.17.12/mod.js",
     "esbuild_deno_loader": "https://deno.land/x/esbuild_deno_loader@0.8.1/mod.ts",
     "chai": "https://esm.sh/chai@4.3.7/",
+    "chai-as-promised": "https://esm.sh/chai-as-promised@7.1.1/",
     "zod": "https://deno.land/x/zod@v3.21.4/mod.ts",
     "base64": "https://deno.land/x/b64@1.1.27/src/base64.js"
   },

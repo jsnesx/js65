@@ -98,6 +98,7 @@ class AbstractCpu {
   }
 }
 
+// deno-lint-ignore no-namespace
 export namespace Cpu {
   export const P02: Cpu = new AbstractCpu({
     adc: {abs: 0x6d, abx: 0x7d, aby: 0x79, imm: 0x69,

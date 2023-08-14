@@ -1,7 +1,7 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import { Token } from '../token.ts';
-import * as Tokens from '../token.ts';
+import { Token } from '/src/token.ts';
+import * as Tokens from '/src/token.ts';
 
 const {LP, LB, RP, RB} = Tokens;
 
@@ -110,7 +110,7 @@ describe('Token', function() {
     });
     it('should throw on a non-grouping token', function() {
       expect(() => Tokens.findBalanced([num(1), LP, RP, num(2)], 0))
-          .to.throw(Error, /non-grouping token/);;
+          .to.throw(Error, /non-grouping token/);
     });
     it('should return -1 on a non-balanced group', function() {
       expect(Tokens.findBalanced([num(1), LP, num(2)], 1)).to.equal(-1);

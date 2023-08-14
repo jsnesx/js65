@@ -92,7 +92,7 @@ export class Preprocessor implements Tokens.Source {
           return;
 
         case 'cs':
-          if (!this.tryRunDirective(line)) yield line;
+          if (!(await this.tryRunDirective(line))) yield line;
           return;
 
         case 'op':
@@ -275,16 +275,16 @@ export class Preprocessor implements Tokens.Source {
     return [{token: 'str', str: strs.join(''), source: cs.source}];
   }
 
-  private sprintf(cs: Token, fmtToks: Token[], ...args: Token[][]) : Token[] {
+  private sprintf(cs: Token, fmtToks: Token[], ..._args: Token[][]) : Token[] {
     const fmt = Tokens.expectString(fmtToks[0], cs);
     Tokens.expectEol(fmtToks[1], 'a single format string');
     // figure out what placeholders...
     // TODO - evaluate numeric args as exprs, strings left as is
-    const [] = [fmt];
+    const [_] = [fmt];
     throw new Error('unimplemented');
   }
 
-  private cond(cs: Token, ...args: Token[][]) : Token[] {
+  private cond(_cs: Token, ..._args: Token[][]) : Token[] {
     throw new Error('unimplemented');
   }
 
@@ -329,12 +329,12 @@ export class Preprocessor implements Tokens.Source {
   ////////////////////////////////////////////////////////////////
   // RUN DIRECTIVES
 
-  tryRunDirective(line: Token[]): boolean {
+  async tryRunDirective(line: Token[]): Promise<boolean> {
     const first = line[0];
     if (first.token !== 'cs') throw new Error(`impossible`);
     const handler = this.runDirectives[first.str];
     if (!handler) return false;
-    handler(line);
+    await handler(line);
     return true;
   }
 
@@ -345,7 +345,7 @@ export class Preprocessor implements Tokens.Source {
     throw new Error(`Expected a constant${at}`);
   }
 
-  private readonly runDirectives: Record<string, (ts: Token[]) => void> = {
+  private readonly runDirectives: Record<string, (ts: Token[]) => Promise<void>> = {
     '.define': (line) => this.parseDefine(line),
     '.undefine': (line) => this.parseUndefine(line),
     '.else': ([cs]) => badClose('.if', cs),
@@ -355,7 +355,8 @@ export class Preprocessor implements Tokens.Source {
     '.endmacro': ([cs]) => badClose('.macro', cs),
     '.endrep': (line) => this.parseEndRepeat(line),
     '.endrepeat': (line) => this.parseEndRepeat(line),
-    '.exitmacro': ([, a]) => { noGarbage(a); this.stream.exit(); },
+    '.exitmacro': async ([, a]) => { noGarbage(a); this.stream.exit(); 
+      return await Promise.resolve(); },
     '.if': ([cs, ...args]) =>
         this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs))),
     '.ifdef': ([cs, ...args]) =>
@@ -380,7 +381,7 @@ export class Preprocessor implements Tokens.Source {
     '.repeat': (line) => this.parseRepeat(line),
   };
 
-  private parseDefine(line: Token[]) {
+  private async parseDefine(line: Token[]) {
     const name = Tokens.expectIdentifier(line[1], line[0]);
     const define = Define.from(line);
     const prev = this.macros.get(name);
@@ -391,9 +392,10 @@ export class Preprocessor implements Tokens.Source {
     } else {
       this.macros.set(name, define);
     }
+    return await Promise.resolve();
   }
 
-  private parseUndefine(line: Token[]) {
+  private async parseUndefine(line: Token[]) {
     const [cs, ident, eol] = line;
     const name = Tokens.expectIdentifier(ident, cs);
     Tokens.expectEol(eol);
@@ -401,6 +403,7 @@ export class Preprocessor implements Tokens.Source {
       throw new Error(`Not defined: ${Tokens.nameAt(ident)}`);
     }
     this.macros.delete(name);
+    return await Promise.resolve();
   }
 
   private async parseMacro(line: Token[]) {
@@ -438,11 +441,11 @@ export class Preprocessor implements Tokens.Source {
     this.parseEndRepeat(line);
   }
 
-  private parseEndRepeat(line: Token[]) {
+  private async parseEndRepeat(line: Token[]) {
     Tokens.expectEol(line[1]);
     const top = this.repeats.pop();
     if (!top) throw new Error(`.endrep with no .repeat${Tokens.at(line[0])}`);
-    if (++top[2] >= top[1]) return;
+    if (++top[2] >= top[1]) return await Promise.resolve();
     this.repeats.push(top);
     this.stream.unshift(...top[0].map(line => line.map(token => {
       if (token.token !== 'ident' || token.str !== top[3]) return token;
@@ -450,6 +453,7 @@ export class Preprocessor implements Tokens.Source {
       if (token.source) t.source = token.source;
       return t;
     })));
+    return await Promise.resolve();
   }
 
   private async parseIf(cond: boolean) {

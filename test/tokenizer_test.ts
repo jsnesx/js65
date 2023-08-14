@@ -1,18 +1,21 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import { Token } from '../token.ts';
-import * as Tokens from '../token.ts';
-import {Tokenizer, Options} from '../tokenizer.ts';
-import * as util from '../util.ts';
+import chai from 'chai';
+import chaiAsPromised from 'chai-as-promised';
+import { Token } from '/src/token.ts';
+import * as Tokens from '/src/token.ts';
+import {Tokenizer, Options} from '/src/tokenizer.ts';
+import * as util from '/src/util.ts';
 
-const [] = [util];
+const [_] = [util];
 
+chai.use(chaiAsPromised);
 //const MATCH = Symbol();
 
-function tokenize(str: string, opts: Options = {}): Token[][] {
+async function tokenize(str: string, opts: Options = {}): Promise<Token[][]> {
   const out = [];
   const tokenizer = new Tokenizer(str, 'input.s', opts);
-  for (let line = tokenizer.next(); line; line = tokenizer.next()) {
+  for (let line = await tokenizer.next(); line; line = await tokenizer.next()) {
     out.push(line.map(strip));
   }
   return out;
@@ -24,8 +27,8 @@ function strip(token: Token): Token {
 }
 
 describe('Tokenizer.line', function() {
-  it('should tokenize a source file', function() {
-    const toks = tokenize(`
+  it('should tokenize a source file', async function() {
+    const toks = await tokenize(`
       ; comment is ignored
       label:
         lda #$1f ; also ignored
@@ -59,34 +62,34 @@ describe('Tokenizer.line', function() {
     ]);
   });
 
-  it('should tokenize a label', function() { 
-    expect(tokenize('foo:')).to.eql([
+  it('should tokenize a label', async function() { 
+    expect(await tokenize('foo:')).to.eql([
       [{token: 'ident', str: 'foo'}, {token: 'op', str: ':'}],
     ]);
   });
 
-  it('should ignore comments', function() { 
-    expect(tokenize('x ; ignored')).to.eql([
+  it('should ignore comments', async function() { 
+    expect(await tokenize('x ; ignored')).to.eql([
       [{token: 'ident', str: 'x'}],
     ]);
   });
 
-  it('should tokenize an .assert', function() {
-    expect(tokenize('.assert * = $0c:$8000')).to.eql([
+  it('should tokenize an .assert', async function() {
+    expect(await tokenize('.assert * = $0c:$8000')).to.eql([
       [{token: 'cs', str: '.assert'}, {token: 'op', str: '*'},
        {token: 'op', str: '='}, {token: 'num', num: 0x0c, width: 1},
        {token: 'op', str: ':'}, {token: 'num', num: 0x8000, width: 2}],
     ]);
   });
 
-  it('should tokenize a string literal with escapes', function() {
-    expect(tokenize(String.raw`"a\u1234\x12\;\"'"`)).to.eql([
+  it('should tokenize a string literal with escapes', async function() {
+    expect(await tokenize(String.raw`"a\u1234\x12\;\"'"`)).to.eql([
       [{token: 'str', str: 'a\u1234\x12;"\''}],
     ]);
   });
 
-  it('should tokenize grouping characters', function() {
-    expect(tokenize('{([}])')).to.eql([
+  it('should tokenize grouping characters', async function() {
+    expect(await tokenize('{([}])')).to.eql([
       [{token: 'grp',
         inner: [{token: 'lp'}, {token: 'lb'}]},
        {token: 'rb'},
@@ -94,8 +97,8 @@ describe('Tokenizer.line', function() {
     ]);
   });
 
-  it('should tokenize a line with mismatched parens', function() {
-    expect(tokenize('qux foo({x}, {y)}, {z})')).to.eql([
+  it('should tokenize a line with mismatched parens', async function() {
+    expect(await tokenize('qux foo({x}, {y)}, {z})')).to.eql([
       [{token: 'ident', str: 'qux'},
        {token: 'ident', str: 'foo'},
        {token: 'lp'},
@@ -108,8 +111,8 @@ describe('Tokenizer.line', function() {
     ]);
   });
 
-  it('should tokenize all kinds of numbers', function() {
-    expect(tokenize('123 0123 %10110 $123d')).to.eql([
+  it('should tokenize all kinds of numbers', async function() {
+    expect(await tokenize('123 0123 %10110 $123d')).to.eql([
       [{token: 'num', num: 123},
        {token: 'num', num: 0o123},
        {token: 'num', num: 0b10110, width: 1},
@@ -117,78 +120,66 @@ describe('Tokenizer.line', function() {
     ]);
   });
 
-  it('should tokenize relative and anonymous labels', function() {
-    expect(tokenize('bcc :++')).to.eql([
+  it('should tokenize relative and anonymous labels', async function() {
+    expect(await tokenize('bcc :++')).to.eql([
       [{token: 'ident', str: 'bcc'},
        {token: 'ident', str: ':++'}],
     ]);
-    expect(tokenize('bcc :+3')).to.eql([
+    expect(await tokenize('bcc :+3')).to.eql([
       [{token: 'ident', str: 'bcc'},
        {token: 'ident', str: ':+3'}],
     ]);
-    expect(tokenize('bne :---')).to.eql([
+    expect(await tokenize('bne :---')).to.eql([
       [{token: 'ident', str: 'bne'},
        {token: 'ident', str: ':---'}],
     ]);
-    expect(tokenize('beq :-7')).to.eql([
+    expect(await tokenize('beq :-7')).to.eql([
       [{token: 'ident', str: 'beq'},
        {token: 'ident', str: ':-7'}],
     ]);
-    expect(tokenize('beq ++')).to.eql([
+    expect(await tokenize('beq ++')).to.eql([
       [{token: 'ident', str: 'beq'},
        {token: 'op', str: '++'}],
     ]);
-    expect(tokenize('bvc -')).to.eql([
+    expect(await tokenize('bvc -')).to.eql([
       [{token: 'ident', str: 'bvc'},
        {token: 'op', str: '-'}],
     ]);
-    expect(tokenize('bpl :>>>rts')).to.eql([
+    expect(await tokenize('bpl :>>>rts')).to.eql([
       [{token: 'ident', str: 'bpl'},
        {token: 'ident', str: ':>>>rts'}],
     ]);
-    expect(tokenize('bpl :rts')).to.eql([
+    expect(await tokenize('bpl :rts')).to.eql([
       [{token: 'ident', str: 'bpl'},
        {token: 'ident', str: ':rts'}],
     ]);
-    expect(tokenize('bpl :<<rts')).to.eql([
+    expect(await tokenize('bpl :<<rts')).to.eql([
       [{token: 'ident', str: 'bpl'},
        {token: 'ident', str: ':<<rts'}],
     ]);
   });
 
   it('should fail to parse a bad hex number', function() {
-    expect(() => {
-      tokenize('  adc $1g');
-    }).to.throw(Error, /Bad hex number.*at input.s:1:6 near '\$1g'/s);
+    expect(tokenize('  adc $1g')).to.be.rejectedWith(Error, /Bad hex number.*at input.s:1:6 near '\$1g'/s);
   });
 
   it('should fail to parse a bad decimal number', function() {
-    expect(() => {
-      tokenize('  12a');
-    }).to.throw(Error, /Bad decimal.*at input.s:1:2 near '12a'/s);
+    expect(tokenize('  12a')).to.be.rejectedWith(Error, /Bad decimal.*at input.s:1:2 near '12a'/s);
   });
 
   it('should fail to parse a bad octal number', function() {
-    expect(() => {
-      tokenize('  018');
-    }).to.throw(Error, /Bad octal.*at input.s:1:2 near '018'/s);
+    expect(tokenize('  018')).to.be.rejectedWith(Error, /Bad octal.*at input.s:1:2 near '018'/s);
   });
 
   it('should fail to parse a bad binary number', function() {
-    expect(() => {
-      tokenize('  %012');
-    }).to.throw(Error, /Bad binary.*at input.s:1:2 near '%012'/s);
+    expect(tokenize('  %012')).to.be.rejectedWith(Error, /Bad binary.*at input.s:1:2 near '%012'/s);
   });
 
   it('should fail to parse a bad character', function() {
-    expect(() => {
-      tokenize('  `abc');
-    }).to.throw(Error, /Syntax error.*at input.s:1:2/s);
+    expect(tokenize('  `abc')).to.be.rejectedWith(Error, /Syntax error.*at input.s:1:2/s);
   });
 
   it('should fail to parse a bad string', function() {
-    expect(() => {
-      tokenize('  "abc');
-    }).to.throw(Error, /EOF while looking for "/);
+    expect(tokenize('  "abc')).to.be.rejectedWith(Error, /EOF while looking for "/);
   });
 });

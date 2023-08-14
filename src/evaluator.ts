@@ -8,15 +8,15 @@ export class Evaluator {
 
   constructor(readonly env: Environment) {}
 
-  definedSymbol(name: string): boolean {
+  definedSymbol(_name: string): boolean {
     throw new Error(`unimplemented`);
   }
 
-  referencedSymbol(name: string): boolean {
+  referencedSymbol(_name: string): boolean {
     throw new Error(`unimplemented`);
   }
 
-  evaluate(expr: Expr): number {
+  evaluate(_expr: Expr): number {
     throw new Error(`unimplemented`);
   }
 
@@ -42,7 +42,7 @@ export class Evaluator {
     return {op: 'num', num: result};
   }
 
-  private byteAt(addr: number): number {
+  private byteAt(_addr: number): number {
     throw new Error(`not implemented`);
   }
 

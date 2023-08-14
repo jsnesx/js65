@@ -1,21 +1,21 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Define} from '../define.ts';
-import {Token} from '../token.ts';
-import * as Tokens from '../token.ts';
-import {Tokenizer} from '../tokenizer.ts';
-import * as util from '../util.ts';
+import {Define} from '/src/define.ts';
+import {Token} from '/src/token.ts';
+import * as Tokens from '/src/token.ts';
+import {Tokenizer} from '/src/tokenizer.ts';
+import * as util from '/src/util.ts';
 
-const [] = [util];
+const [_] = [util];
 
 describe('Define', function() {
 
-  function testExpand(define: string, input: string, output: string,
+  async function testExpand(define: string, input: string, output: string,
                       extra?: string) {
-    const defTok = tok(define);
+    const defTok = await tok(define);
     const defName = defTok[1] || expect.fail('no name');
     const def = Define.from(defTok);
-    const tokens = tok(input);
+    const tokens = await tok(input);
     // TODO - handle this better...
     let found = -1;
     for (let i = 0; i < tokens.length; i++) {
@@ -27,8 +27,8 @@ describe('Define', function() {
     expect(found).to.not.equal(-1);
     const overflow = def.expand(tokens, found);
     expect(overflow).to.be.ok;
-    expect(tokens.map(strip)).to.eql(tok(output));
-    expect(overflow!.map(ts => ts.map(strip))).to.eql(extra ? toks(extra) : []);
+    expect(tokens.map(strip)).to.eql(await tok(output));
+    expect(overflow!.map(ts => ts.map(strip))).to.eql(extra ? await toks(extra) : []);
   }
 
   describe('with no parameters', function() {
@@ -144,9 +144,9 @@ describe('Define', function() {
                  '[1 : {2} 3]'); 
     });
 
-    it('should fail on parenthesized calls with too many args', function() {
-      const define = Define.from(tok('.define foo(a, b) [a:b]'));
-      expect(define.expand(tok('foo(1, 2, 3)'), 0)).to.not.be.ok;
+    it('should fail on parenthesized calls with too many args', async function() {
+      const define = Define.from(await tok('.define foo(a, b) [a:b]'));
+      expect(define.expand(await tok('foo(1, 2, 3)'), 0)).to.not.be.ok;
     });
 
     // TODO - is it possible to make an invalid call???
@@ -165,14 +165,14 @@ describe('Define', function() {
                  'qux [bar:baz:]');
     });
 
-    it('should fail on empty undelimited argument', function() {
-      const define = Define.from(tok('.define foo {a b} [a:b]'));
-      expect(define.expand(tok('foo bar'), 0)).to.not.be.ok;      
+    it('should fail on empty undelimited argument', async function() {
+      const define = Define.from(await tok('.define foo {a b} [a:b]'));
+      expect(define.expand(await tok('foo bar'), 0)).to.not.be.ok;      
     });
 
-    it('should fail on missing delimiter', function() {
-      const define = Define.from(tok('.define foo {a,b} [a:b]'));
-      expect(define.expand(tok('foo bar baz qux'), 0)).to.not.be.ok;      
+    it('should fail on missing delimiter', async function() {
+      const define = Define.from(await tok('.define foo {a,b} [a:b]'));
+      expect(define.expand(await tok('foo bar baz qux'), 0)).to.not.be.ok;      
     });
 
     it('should capture entire group for undelimited arg', function() {
@@ -224,9 +224,9 @@ describe('Define', function() {
                  'bar:qux\nbaz'); // overflow
     });
 
-    it('should not expand .eol if not at end of line', function() {
-      const define = Define.from(tok('.define foo {a b c} [a:b:c] .eol a:c'));
-      expect(define.expand(tok('foo bar baz qux not_eol'), 0)).to.not.be.ok;      
+    it('should not expand .eol if not at end of line', async function() {
+      const define = Define.from(await tok('.define foo {a b c} [a:b:c] .eol a:c'));
+      expect(define.expand(await tok('foo bar baz qux not_eol'), 0)).to.not.be.ok;      
     });
   });
 
@@ -236,15 +236,15 @@ function strip(t: Token): Token {
   delete t.source;
   if (t.token === 'grp') t.inner.map(strip);
   return t;
-};
-
-function tok(str: string): Token[] {
-  return new Tokenizer(str).next()!.map(strip);
 }
-function toks(str: string): Token[][] {
+
+async function tok(str: string): Promise<Token[]> {
+  return (await new Tokenizer(str).next())!.map(strip);
+}
+async function toks(str: string): Promise<Token[][]> {
   const lines: Token[][] = [];
   const tokenizer = new Tokenizer(str);
-  for (let line = tokenizer.next(); line; line = tokenizer.next()) {
+  for (let line = await tokenizer.next(); line; line = await tokenizer.next()) {
     lines.push(line.map(strip));
   }
   return lines;

@@ -92,7 +92,7 @@ export function traverse(expr: Expr, f: Traverser) {
   function rec(e: Expr) {
     if (!e.args) return e;
     return {...e, args: e.args.map(c => t(c, e))};
-  };
+  }
   function t(e: Expr, p?: Expr) {
     const source = e.source;
     e = f(e, rec, p);
@@ -116,6 +116,7 @@ export function evaluate(expr: Expr): Expr {
     case 'num':
       if (expr.meta?.rel && expr.meta.org != null) {
         // Remove the 'rel' tag since it's no longer relative.
+        // deno-lint-ignore no-unused-vars
         const {rel, ...meta} = expr.meta;
         // TODO - pull size from meta?
         return {op: 'num', num: expr.num! + meta.org!, meta};
@@ -424,7 +425,7 @@ export function parse(tokens: Token[], index = 0): [Expr|undefined, number] {
 
 // works on absolute numbers, or relative numbers if all in same chunk.
 // may not mix relative + absolute.
-function sameChunk(expr: Expr, f: (...nums: number[]) => number): Expr {
+function sameChunk(_expr: Expr, _f: (...nums: number[]) => number): Expr {
   throw new Error();
 }
 

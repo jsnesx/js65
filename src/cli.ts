@@ -7,7 +7,6 @@ import { clean, smudge } from './smudge.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream } from './tokenstream.ts';
 import { Module, ModuleZ } from "./module.ts";
-import z from 'https://deno.land/x/zod@v3.21.4/index.ts';
 import base64 from 'base64';
 
 export interface CompileOptions {
@@ -144,7 +143,16 @@ export class Cli {
     for (const file of args.files) {
       console.log(`building asm file ${file}`);
       const asm = new Assembler(Cpu.P02);
-      const toks = new TokenStream();
+      const opts = {lineContinuations: true};
+      const readfile = (path: string) => {
+        return this.callbacks.fsReadString(path)
+        .then((result) => {
+          const [str, err] = result;
+          if (err) throw err;
+          return str!;
+        });
+      }
+      const toks = new TokenStream(readfile, opts);
 
       console.log("about to read asm file input");
       const [str, err] = await this.callbacks.fsReadString(file);
@@ -169,7 +177,7 @@ export class Cli {
         // if it doesn't parse as a module, treat it as source code
         console.log(`not a module because json parse failed ${err}`);
       }
-      const tokenizer = new Tokenizer(str!, file, {lineContinuations: true});
+      const tokenizer = new Tokenizer(str!, file, opts);
       console.log("tokenization complete");
       toks.enter(Tokens.concat(tokenizer));
       console.log("running preprocessor");
@@ -294,26 +302,26 @@ required arguments:
 
 }
 
-function unzip<
-// deno-lint-ignore no-explicit-any
-  T extends [...{ [K in keyof S]: S[K] }][], S extends any[]
->(arr: [...T]): T[0] extends infer A 
-  ? { [K in keyof A]: T[number][K & keyof T[number]][] } 
-  : never 
-{
-  const maxLength = Math.max(...arr.map((x) => x.length));
+// function unzip<
+// // deno-lint-ignore no-explicit-any
+//   T extends [...{ [K in keyof S]: S[K] }][], S extends any[]
+// >(arr: [...T]): T[0] extends infer A 
+//   ? { [K in keyof A]: T[number][K & keyof T[number]][] } 
+//   : never 
+// {
+//   const maxLength = Math.max(...arr.map((x) => x.length));
 
-  return arr.reduce(
-    // deno-lint-ignore no-explicit-any
-    (acc: any, val) => {
-      val.forEach((v, i) => acc[i].push(v));
+//   return arr.reduce(
+//     // deno-lint-ignore no-explicit-any
+//     (acc: any, val) => {
+//       val.forEach((v, i) => acc[i].push(v));
 
-      return acc;
-    },
-    range(maxLength).map(() => [])
-  );
-}
+//       return acc;
+//     },
+//     range(maxLength).map(() => [])
+//   );
+// }
 
-function range(size: number, startAt = 0) {
-  return [...Array(size).keys()].map(i => i + startAt);
-}
+// function range(size: number, startAt = 0) {
+//   return [...Array(size).keys()].map(i => i + startAt);
+// }

@@ -1,14 +1,14 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Cpu} from '../cpu.ts';
-import {Expr} from '../expr.ts';
-import {Module} from '../module.ts';
-import {Assembler} from '../assembler.ts';
-import {Token} from '../token.ts';
-import * as Tokens from '../token.ts';
-import * as util from '../util.ts';
+import {Cpu} from '/src/cpu.ts';
+import {Expr} from '/src/expr.ts';
+import {Module} from '/src/module.ts';
+import {Assembler} from '/src/assembler.ts';
+import {Token} from '/src/token.ts';
+import * as Tokens from '/src/token.ts';
+import * as util from '/src/util.ts';
 
-const [] = [util];
+const [_a] = [util];
 
 function ident(str: string): Token { return {token: 'ident', str}; }
 function num(num: number): Token { return {token: 'num', num}; }
@@ -25,14 +25,14 @@ function off(num: number, chunk = 0): Expr {
   return {op: 'num', num, meta: {chunk, rel: true}};
 }
 
-const [] = [str, COMMA, LP, RP, ORG, RELOC, ASSERT, SEGMENT];
+const [_b] = [str, COMMA, LP, RP, ORG, RELOC, ASSERT, SEGMENT];
 
 describe('Assembler', function() {
 
   describe('Simple instructions', function() {
-    it('should handle `lda #$03`', function() {
+    it('should handle `lda #$03`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lda'), IMMEDIATE, num(3)]);
+      await a.instruction([ident('lda'), IMMEDIATE, num(3)]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -44,9 +44,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `sta $02`', function() {
+    it('should handle `sta $02`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('sta'), num(2)]);
+      await a.instruction([ident('sta'), num(2)]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -58,9 +58,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `ldy $032f`', function() {
+    it('should handle `ldy $032f`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('ldy'), num(0x32f)]);
+      await a.instruction([ident('ldy'), num(0x32f)]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -72,9 +72,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `rts`', function() {
+    it('should handle `rts`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('rts')]);
+      await a.instruction([ident('rts')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -86,9 +86,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lda ($24),y`', function() {
+    it('should handle `lda ($24),y`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lda'), LP, num(0x24), RP, COMMA, ident('y')]);
+      await a.instruction([ident('lda'), LP, num(0x24), RP, COMMA, ident('y')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -100,9 +100,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `sta ($0320,x)`', function() {
+    it('should handle `sta ($0320,x)`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('sta'), LP, num(0x320), COMMA, ident('x'), RP]);
+      await a.instruction([ident('sta'), LP, num(0x320), COMMA, ident('x'), RP]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -114,9 +114,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lsr`', function() {
+    it('should handle `lsr`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -128,9 +128,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lsr a`', function() {
+    it('should handle `lsr a`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lsr'), ident('A')]);
+      await a.instruction([ident('lsr'), ident('A')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -142,9 +142,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `ora $480,x`', function() {
+    it('should handle `ora $480,x`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('ora'), num(0x480), COMMA, ident('x')]);
+      await a.instruction([ident('ora'), num(0x480), COMMA, ident('x')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -156,9 +156,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lda a:$80,x`', function() {
+    it('should handle `lda a:$80,x`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lda'), ident('a'), COLON, num(0x80), COMMA, ident('x')]);
+      await a.instruction([ident('lda'), ident('a'), COLON, num(0x80), COMMA, ident('x')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -170,9 +170,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lda z:a:$80,x`', function() {
+    it('should handle `lda z:a:$80,x`', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lda'), ident('z'), COLON, ident('a'), COLON, num(0x80), COMMA, ident('x')]);
+      await a.instruction([ident('lda'), ident('z'), COLON, ident('a'), COLON, num(0x80), COMMA, ident('x')]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
@@ -184,10 +184,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should error for improper address mode `lda z:$8000,y`', function() {
+    it('should error for improper address mode `lda z:$8000,y`', async function() {
       const a = new Assembler(Cpu.P02);
       try {
-        a.instruction([ident('lda'), ident('z'), COLON, num(0x8000), COMMA, ident('y')]);
+        await a.instruction([ident('lda'), ident('z'), COLON, num(0x8000), COMMA, ident('y')]);
       } catch (err) {
         expect(err.message).to.eql("Bad address mode zpy for lda");
       }
@@ -195,10 +195,10 @@ describe('Assembler', function() {
   });
 
   describe('Symbols', function() {
-    it('should fill in an immediately-available value', function() {
+    it('should fill in an immediately-available value', async function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', 0x23);
-      a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -210,12 +210,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should fill in an immediately-available label', function() {
+    it('should fill in an immediately-available label', async function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x9135);
       a.label('foo');
-      a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('foo')]);
-      a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('foo')]);
+      await a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('foo')]);
+      await a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('foo')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -229,12 +229,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should make a separate chunk for separate .org directives', function() {
+    it('should make a separate chunk for separate .org directives', async function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x1234);
-      a.instruction([ident('rts')]);
+      await a.instruction([ident('rts')]);
       a.org(0x5678);
-      a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
+      await a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -252,12 +252,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should merge chunks when .org is redundant with PC', function() {
+    it('should merge chunks when .org is redundant with PC', async function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x1234);
-      a.instruction([ident('rts')]);
+      await a.instruction([ident('rts')]);
       a.org(0x1235);
-      a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
+      await a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -270,9 +270,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should substitute a forward referenced value', function() {
+    it('should substitute a forward referenced value', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
       a.assign('val', 0x23);
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -286,12 +286,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should substitute a forward referenced label', function() {
+    it('should substitute a forward referenced label', async function() {
       const a = new Assembler(Cpu.P02);
       a.directive([cs('.org'), num(0x8000)]);
-      a.instruction([ident('jsr'), ident('foo')]);
+      await a.instruction([ident('jsr'), ident('foo')]);
       expect(a.definedSymbol('foo')).to.eql(false);
-      a.instruction([ident('lda'), IMMEDIATE, num(0)]);
+      await a.instruction([ident('lda'), IMMEDIATE, num(0)]);
       a.label('foo');
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -308,12 +308,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should allow overwriting mutable symbols', function() {
+    it('should allow overwriting mutable symbols', async function() {
       const a = new Assembler(Cpu.P02);
       a.set('foo', 5);
-      a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
       a.set('foo', 6);
-      a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
 
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -340,11 +340,11 @@ describe('Assembler', function() {
       expect(() => a.label('foo')).to.throw(Error, /Redefining symbol foo/);
     });
 
-    it('should substitute a formula', function() {
+    it('should substitute a formula', async function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', {op: '+', args: [{op: 'num', num: 1},
                                        {op: 'sym', sym: 'x'}]});
-      a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
       a.assign('x', 2);
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -362,11 +362,11 @@ describe('Assembler', function() {
   });
 
   describe('Cheap locals', function() {
-    it('should handle backward refs', function() {
+    it('should handle backward refs', async function() {
       const a = new Assembler(Cpu.P02);
       a.label('@foo');
-      a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('@foo')]);
-      a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('@foo')]);
+      await a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('@foo')]);
+      await a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('@foo')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -385,10 +385,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle forward refs', function() {
+    it('should handle forward refs', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('jsr'), ident('@foo')]);
-      a.instruction([ident('lda'), IMMEDIATE, num(0)]);
+      await a.instruction([ident('jsr'), ident('@foo')]);
+      await a.instruction([ident('lda'), IMMEDIATE, num(0)]);
       a.label('@foo');
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -415,12 +415,12 @@ describe('Assembler', function() {
       expect(() => a.label('@foo')).to.throw(Error, /Redefining symbol @foo/);
     });
 
-    it('should clear the scope on a non-cheap label', function() {
+    it('should clear the scope on a non-cheap label', async function() {
       const a = new Assembler(Cpu.P02);
       a.label('@foo');
-      a.instruction([ident('jsr'), ident('@foo')]);
+      await a.instruction([ident('jsr'), ident('@foo')]);
       a.label('bar');
-      a.instruction([ident('jsr'), ident('@foo')]);
+      await a.instruction([ident('jsr'), ident('@foo')]);
       a.label('@foo');
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -444,9 +444,9 @@ describe('Assembler', function() {
       expect(() => a.label('@foo')).to.throw(Error, /Redefining symbol @foo/);
     });
 
-    it('should be an error if a cheap label is never defined', function() {
+    it('should be an error if a cheap label is never defined', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('jsr'), ident('@foo')]);
+      await a.instruction([ident('jsr'), ident('@foo')]);
       expect(() => a.label('bar'))
           .to.throw(Error, /Cheap local label never defined: @foo/);
       expect(() => a.module())
@@ -455,15 +455,15 @@ describe('Assembler', function() {
   });
 
   describe('Anonymous labels', function() {
-    it('should work for forward references', function() {
+    it('should work for forward references', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('bne'), op(':'), op('++')]);
+      await a.instruction([ident('bne'), op(':'), op('++')]);
       a.label(':');
-      a.instruction([ident('bcc'), ident(':+3')]);
+      await a.instruction([ident('bcc'), ident(':+3')]);
       a.label(':'); // first target
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       a.label(':');
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       a.label(':'); // second target
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -480,17 +480,17 @@ describe('Assembler', function() {
         segments: []});
     });
 
-    it('should work for backward references', function() {
+    it('should work for backward references', async function() {
       const a = new Assembler(Cpu.P02);
       a.label(':'); // first target
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       a.label(':');
-      a.instruction([ident('lsr')]);
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       a.label(':'); // second target
-      a.instruction([ident('bne'), op(':'), op('---')]);
+      await a.instruction([ident('bne'), op(':'), op('---')]);
       a.label(':');
-      a.instruction([ident('bcc'), ident(':-2')]);
+      await a.instruction([ident('bcc'), ident(':-2')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -500,11 +500,11 @@ describe('Assembler', function() {
         symbols: [], segments: []});
     });
 
-    it('should allow one label for both forward directions', function() {
+    it('should allow one label for both forward directions', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('bne'), op(':'), op('+')]);
+      await a.instruction([ident('bne'), op(':'), op('+')]);
       a.label(':');
-      a.instruction([ident('bcc'), ident(':-')]);
+      await a.instruction([ident('bcc'), ident(':-')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -517,18 +517,18 @@ describe('Assembler', function() {
         segments: []});
     });
 
-    it('should handle rts references', function() {
+    it('should handle rts references', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('rts')]);
-      a.instruction([ident('bne'), ident(':<rts')]);
-      a.instruction([ident('bne'), ident(':rts')]);
-      a.instruction([ident('rts')]);
-      a.instruction([ident('bne'), ident(':>>rts')]);
-      a.instruction([ident('bne'), ident(':<<rts')]);
-      a.instruction([ident('bne'), ident(':>>rts')]);
-      a.instruction([ident('bne'), ident(':<<rts')]);
-      a.instruction([ident('rts')]);
-      a.instruction([ident('rts')]);
+      await a.instruction([ident('rts')]);
+      await a.instruction([ident('bne'), ident(':<rts')]);
+      await a.instruction([ident('bne'), ident(':rts')]);
+      await a.instruction([ident('rts')]);
+      await a.instruction([ident('bne'), ident(':>>rts')]);
+      await a.instruction([ident('bne'), ident(':<<rts')]);
+      await a.instruction([ident('bne'), ident(':>>rts')]);
+      await a.instruction([ident('bne'), ident(':<<rts')]);
+      await a.instruction([ident('rts')]);
+      await a.instruction([ident('rts')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -558,14 +558,14 @@ describe('Assembler', function() {
   });
 
   describe('Relative labels', function() {
-    it('should work for forward references', function() {
+    it('should work for forward references', async function() {
       const a = new Assembler(Cpu.P02);
-      a.instruction([ident('bne'), op('++')]);
+      await a.instruction([ident('bne'), op('++')]);
       a.label('+');
-      a.instruction([ident('bcc'), ident('+++')]);
+      await a.instruction([ident('bcc'), ident('+++')]);
       a.label('++');
-      a.instruction([ident('lsr')]);
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       a.label('+++');
       expect(strip(a.module())).to.eql({
         chunks: [{
@@ -582,15 +582,15 @@ describe('Assembler', function() {
         segments: []});
     });
 
-    it('should work for backward references', function() {
+    it('should work for backward references', async function() {
       const a = new Assembler(Cpu.P02);
       a.label('--'); // first target
-      a.instruction([ident('lsr')]);
-      a.instruction([ident('lsr')]);
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       a.label('-'); // second target
-      a.instruction([ident('bne'), op('--')]);
-      a.instruction([ident('bcc'), ident('-')]);
+      await a.instruction([ident('bne'), op('--')]);
+      await a.instruction([ident('bcc'), ident('-')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',
@@ -806,11 +806,11 @@ describe('Assembler', function() {
         }]});
     });
 
-    it('should allow setting a prefix', function() {
+    it('should allow setting a prefix', async function() {
       const a = new Assembler(Cpu.P02);
       a.segmentPrefix('cr:');
       a.directive([cs('.segment'), str('02')]);
-      a.instruction([ident('lsr')]);
+      await a.instruction([ident('lsr')]);
       expect(strip(a.module())).to.eql({
         chunks: [{
           overwrite: 'allow',

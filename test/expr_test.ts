@@ -1,14 +1,14 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import {expect} from 'chai';
-import {Expr} from '../expr.ts';
-import * as Exprs from '../expr.ts';
-import {Token} from '../token.ts';
-import * as Tokens from '../token.ts';
-import * as util from '../util.ts';
+import {Expr} from '/src/expr.ts';
+import * as Exprs from '/src/expr.ts';
+import {Token} from '/src/token.ts';
+import * as Tokens from '/src/token.ts';
+import * as util from '/src/util.ts';
 
-const [] = [util];
+const [_a] = [util];
 const {COMMA, LP, RP} = Tokens;
-const [] = [tstr, tcs, tid, num, op, sym, COMMA, LP, RP];
+const [_b] = [tstr, tcs, tid, num, op, sym, COMMA, LP, RP];
 function tid(str: string): Token { return {token: 'ident', str}; }
 function tnum(num: number): Token { return {token: 'num', num}; }
 function tstr(str: string): Token { return {token: 'str', str}; }

@@ -12,42 +12,46 @@ export class Tokenizer implements Tokens.Source {
   }
 
   async next(): Promise<Token[]|undefined> {
-    let tok = this.token();
-    while (Tokens.eq(tok, Tokens.EOL)) {
-      // Skip EOLs at beginning of line.
-      tok = this.token();
-    }
-    // Group curly brace groups into a single effective Tokens.
-    const stack: Token[][] = [[]];
-    let depth = 0;
-    while (!Tokens.eq(tok, Tokens.EOL) && !Tokens.eq(tok, Tokens.EOF)) {
-      if (Tokens.eq(tok, Tokens.LC)) {
-        stack[depth++].push(tok);
-        stack.push([]);
-      } else if (Tokens.eq(tok, Tokens.RC)) {
-        if (!depth) throw new Error(`Missing open curly: ${Tokens.nameAt(tok)}`);
-        const inner = stack.pop()!;
-        const source = stack[--depth].pop()!.source;
-        const token: Token = {token: 'grp', inner};
-        if (source) token.source = source;
-        stack[depth].push(token);
-      } else {
-        stack[depth].push(tok);
+    return await new Promise( (resolve) => {
+      let tok = this.token();
+      while (Tokens.eq(tok, Tokens.EOL)) {
+        // Skip EOLs at beginning of line.
+        tok = this.token();
       }
-      tok = this.token();
-    }
-    if (depth) {
-      const open = stack[depth - 1].pop()!;
-      throw new Error(`Missing close curly: ${Tokens.nameAt(open)}`);
-    }
-    return stack[0].length ? stack[0] : undefined;
+      // Group curly brace groups into a single effective Tokens.
+      const stack: Token[][] = [[]];
+      let depth = 0;
+      while (!Tokens.eq(tok, Tokens.EOL) && !Tokens.eq(tok, Tokens.EOF)) {
+        if (Tokens.eq(tok, Tokens.LC)) {
+          stack[depth++].push(tok);
+          stack.push([]);
+        } else if (Tokens.eq(tok, Tokens.RC)) {
+          if (!depth) throw new Error(`Missing open curly: ${Tokens.nameAt(tok)}`);
+          const inner = stack.pop()!;
+          const source = stack[--depth].pop()!.source;
+          const token: Token = {token: 'grp', inner};
+          if (source) token.source = source;
+          stack[depth].push(token);
+        } else {
+          stack[depth].push(tok);
+        }
+        tok = this.token();
+      }
+      if (depth) {
+        const open = stack[depth - 1].pop()!;
+        throw new Error(`Missing close curly: ${Tokens.nameAt(open)}`);
+      }
+      resolve(stack[0].length ? stack[0] : undefined);
+    });
   }
 
   private token(): Token {
     // skip whitespace
     while (this.buffer.space() ||
            this.buffer.token(/^;.*/) ||
-           (this.opts.lineContinuations && this.buffer.token(/^\\(\r\n|\n|\r)/))) {}
+           (this.opts.lineContinuations && this.buffer.token(/^\\(\r\n|\n|\r)/))) {
+            // intentionally empty
+           }
     if (this.buffer.eof()) return Tokens.EOF;
 
     // remember position of non-whitespace

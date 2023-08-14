@@ -1,6 +1,6 @@
 
 import { z } from 'zod';
-import {Expr, ExprZ} from './expr.ts';
+import { ExprZ } from './expr.ts';
 import { base64 } from 'base64';
 
 
@@ -119,6 +119,7 @@ const SegmentZ = z.object({
 
 export type Segment = z.infer<typeof SegmentZ>;
 
+// deno-lint-ignore no-namespace
 export namespace Segment {
   export function merge(a: Segment, b: Segment): Segment {
     const seg = {...a, ...b};
