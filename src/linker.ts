@@ -118,7 +118,9 @@ class LinkSegment {
     this.addressing = segment.addressing ?? 2;
     this.size = segment.size ?? fail(`Size must be specified: ${name}`);
     this.offset = segment.offset ?? fail(`Offset must be specified: ${name}`);
-    this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
+    // this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
+    // Allow memory offset to be null for non-prg segments
+    this.memory = segment.memory ?? 0;
   }
 
   // offset = org + delta
@@ -676,7 +678,7 @@ class Link {
       // chunk is resolved: search for an existing copy of it first
       const pattern = this.data.pattern(chunk.data);
       for (const name of chunk.segments) {
-        const segment = this.segments.get(name)!;
+        const segment = this.segments.get(name) ?? fail(`Segment not found with name: ${name}`);
         const start = segment.offset!;
         const end = start + segment.size!;
         const index = pattern.search(start, end);
@@ -689,7 +691,7 @@ class Link {
     // either unresolved, or didn't find a match; just allocate space.
     // look for the smallest possible free block.
     for (const name of chunk.segments) {
-      const segment = this.segments.get(name)!;
+      const segment = this.segments.get(name) ?? fail(`Segment not found with name: ${name}`);
       const s0 = segment.offset!;
       const s1 = s0 + segment.size!;
       let found: number|undefined;
