@@ -2,6 +2,10 @@
 import {Token} from './token.ts'
 import {Tokenizer, Options} from './tokenizer.ts'
 import * as Tokens from './token.ts';
+// TODO: import raw text files seems painful right now.
+import * as Generic from './macpack/generic.ts'
+import * as Longbranch from './macpack/longbranch.ts'
+import * as Nes2header from './macpack/nes2header.ts'
 
 type Frame = [Tokens.Source|undefined, Token[][]];
 
@@ -53,6 +57,29 @@ export class TokenStream implements Tokens.Source {
             this.enter(new Tokenizer(code, path, this.opts));
             continue;
           }
+          case '.macpack': {
+            const pack = Tokens.expectIdentifier(line[1]);
+            let code = "";
+            switch (pack.toLowerCase()) {
+              case "generic": {
+                code = Generic.text;
+                break;
+              }
+              case "longbranch": {
+                code = Longbranch.text;
+                break;
+              }
+              case "nes2header": {
+                code = Nes2header.text;
+                break;
+              }
+              default: {
+                throw new Error(`Could not load macpack ${pack}}`);
+              }
+            }
+            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts));
+            continue;
+          }
           default:
             return line;
         }
@@ -102,6 +129,3 @@ export class TokenStream implements Tokens.Source {
   }
 
 }
-
-
-// TODO - probably no need for anything that delegates to an AsyncTS...?
