@@ -16,6 +16,6 @@
     "chai-as-promised": "https://esm.sh/chai-as-promised@7.1.1/",
     "zod": "https://deno.land/x/zod@v3.21.4/mod.ts",
     "base64": "https://deno.land/x/b64@1.1.27/src/base64.js"
-  },
-  "lock": "./lock.file"
+  }
+  // "lock": "./lock.file"
 }
