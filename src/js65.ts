@@ -1,7 +1,7 @@
 import * as fs from 'std/fs/mod.ts';
-import { resolve } from "https://deno.land/std@0.198.0/path/mod.ts";
-import * as reader from "https://deno.land/std@0.184.0/streams/read_all.ts";
-import * as writer from "https://deno.land/std@0.184.0/streams/write_all.ts";
+import { resolve } from "std/path/mod.ts";
+import * as reader from "std/streams/read_all.ts";
+import * as writer from "std/streams/write_all.ts";
 import { crypto } from 'std/crypto/crypto.ts';
 import { Cli } from './cli.ts';
 
