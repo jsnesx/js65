@@ -151,6 +151,7 @@ function parseBin(str: string): Token {
 }
 
 export interface Options {
+  includePaths?: string[];
   // caseInsensitive?: boolean; // handle elsewhere?
   lineContinuations?: boolean;
   numberSeparators?: boolean;

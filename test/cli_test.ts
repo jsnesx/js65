@@ -18,6 +18,9 @@ describe('CLI', function() {
 
 function make(input: string, output: string) : Cli {
   return new Cli({
+    fsResolve: async (path: string, filename: string) => {
+      return await Promise.resolve(path + filename);
+    },
     fsReadString: async (_filename: string) => {
       return await Promise.resolve([input, undefined]);
     },

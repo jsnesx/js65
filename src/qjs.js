@@ -4,6 +4,7 @@ import { sha1 } from './sha1.js'
 import { Cli } from 'build/cli.js';
 
 const cli = new Cli({
+  fsToAbsPath: abspath,
   fsReadString: readFileAsString,
   fsReadBytes: readFileAsBuffer,
   fsWriteString: writeFileAsString,
@@ -14,6 +15,15 @@ const cli = new Cli({
   stdin: std.in,
   stdout: std.out,
 });
+
+function abspath(filename) {
+  return new Promise((resolve) => {
+    const f = filename === Cli.STDIN ? './' : filename;
+    const [str, err] = std.realpath(f);
+    if (err.errno != 0) throw new Error(std.strerror(err.errno));
+    resolve(str);
+  });
+}
 
 function readFileAsString(filename) {
   return new Promise((accept) => {

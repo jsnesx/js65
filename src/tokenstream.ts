@@ -11,7 +11,7 @@ export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
   
   constructor(
-    readonly readFile?: (path: string) => Promise<string>,
+    readonly readFile?: (path: string, filename: string) => Promise<string>,
     readonly opts?: Options) {}
 
   async next(): Promise<Token[]|undefined> {
@@ -34,10 +34,24 @@ export class TokenStream implements Tokens.Source {
           case '.include': {
             const path = this.str(line);
             if (!this.readFile) this.err(line);
-            const code = await this.readFile(path);
+            const paths = this.opts?.includePaths ?? ['./'];
+            let code = "";
+            let loaded = false;
+            for (const base of paths) {
+              try {
+                console.log(`gonna try including base: ${base} path: ${path}`);
+                code = await this.readFile(base, path);
+                loaded = true;
+              } catch (_e) {
+                // unable to load the files at that path.
+              }
+            }
+            if (!loaded) {
+              throw new Error(`Could not find file ${path} in include directories: ${paths.join(",")}`)
+            }
             // TODO - options?
             this.enter(new Tokenizer(code, path, this.opts));
-            break;
+            continue;
           }
           default:
             return line;

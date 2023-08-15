@@ -395,7 +395,7 @@ export class Assembler {
         if (sym.expr || sym.id == null) continue;
         if (scope.parent) {
           // TODO - record where it was referenced?
-          if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${Tokens.nameAt(sym.ref)}`);
+          if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
           const parentSym = scope.parent.symbols.get(name);
           if (!parentSym) {
             // just alias it directly in the parent scope
@@ -441,7 +441,8 @@ export class Assembler {
     }
 
     for (const [name, sym] of this.currentScope.symbols) {
-      if (!sym.expr) throw new Error(`Symbol '${name}' undefined: ${Tokens.nameAt(sym.ref)}`);
+      if (!sym.expr) 
+        throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
     }
   }
 

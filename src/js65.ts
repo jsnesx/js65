@@ -1,10 +1,14 @@
 import * as fs from 'std/fs/mod.ts';
+import { resolve } from "https://deno.land/std@0.198.0/path/mod.ts";
 import * as reader from "https://deno.land/std@0.184.0/streams/read_all.ts";
 import * as writer from "https://deno.land/std@0.184.0/streams/write_all.ts";
 import { crypto } from 'std/crypto/crypto.ts';
 import { Cli } from './cli.ts';
 
 const cli = new Cli({
+  fsResolve: async (path: string, filename: string) => {
+    return await Promise.resolve(resolve(path, (filename === Cli.STDIN) ? '.' : filename));
+  },
   fsReadString: async (filename: string) => {
     try {
       return [new TextDecoder().decode(filename === Cli.STDIN ? await reader.readAll(Deno.stdin) : await Deno.readFile(filename)), undefined];

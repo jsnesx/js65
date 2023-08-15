@@ -20,6 +20,7 @@ export interface HydrateOptions {
 }
 
 export interface Callbacks {
+  fsResolve: (path: string, filename: string) => Promise<string>,
   fsReadString: (filename: string) => Promise<[string?, Error?]>,
   fsReadBytes: (filename: string) => Promise<[Uint8Array?, Error?]>,
   fsWriteString: (filename: string, data: string) => Promise<Error|undefined>,
@@ -34,8 +35,9 @@ class Arguments {
   op: ((src: string, cpu: Cpu, prg: Uint8Array) => string) | undefined = undefined;
   rom = "";
   files : string[] = [];
-  target = 'nes-nrom';
+  target = '';
   compileonly = false;
+  includePaths : string[] = [];
 }
 
 export class Cli {
@@ -68,10 +70,16 @@ export class Cli {
         out.files.push(Cli.STDIN);
       } else if (arg === '--rom') {
         out.rom = args[++i];
-      } else if (arg === '--target') {
-        out.target = args[++i];
       } else if (arg.startsWith('--rom=')) {
         out.rom = arg.substring('--rom='.length);
+      } else if (arg === '-I' || arg === '--include-dir') {
+        out.includePaths.push(args[++i]);
+      } else if (arg.startsWith('-I')) {
+        out.includePaths.push(arg.substring('-I'.length));
+      } else if (arg.startsWith('--include-dir')) {
+        out.includePaths.push(arg.substring('--include-dir'.length));
+      } else if (arg === '--target') {
+        out.target = args[++i];
       } else if (arg.startsWith('--target=')) {
         out.target = arg.substring('--target='.length);
       } else {
@@ -143,9 +151,18 @@ export class Cli {
     for (const file of args.files) {
       console.log(`building asm file ${file}`);
       const asm = new Assembler(Cpu.P02);
-      const opts = {lineContinuations: true};
-      const readfile = async (path: string) => {
-        return await this.callbacks.fsReadString(path)
+      const opts = {
+        includePaths: [
+          file.substring(0, file.lastIndexOf("/")),
+          ...args.includePaths
+        ],
+        lineContinuations: true
+      };
+      const readfile = async (path: string, filename: string) => {
+        const fullpath = await this.callbacks.fsResolve(path, filename);
+        console.log(`resolved ${fullpath}`);
+        if (err) throw err;
+        return await this.callbacks.fsReadString(fullpath)
           .then((result) => {
             const [str, err] = result;
             if (err) throw err;
