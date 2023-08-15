@@ -1,7 +1,8 @@
 
 import { z } from 'zod';
 import {Token} from './token.ts'
-import * as Tokens from './token.ts';
+import { Symbol } from './assembler.ts'
+import * as Tokens from './token.ts'
 
 // export interface Expr {
 //   op: string;
@@ -289,10 +290,10 @@ export function identifier(expr: Expr): string {
 // }
 
 /** Parse a single expression, must occupy the rest of the line. */
-export function parseOnly(tokens: Token[], index = 0): Expr {
-  const [expr, i] = parse(tokens, index);
+export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symbol>): Expr {
+  const [expr, i] = parse(tokens, index, symbols);
   if (i < tokens.length) {
-    parse(tokens, index);
+    parse(tokens, index, symbols);
     throw new Error(`Garbage after expression: ${Tokens.nameAt(tokens[i])}`);
   } else if (!expr) {
     throw new Error(`No expression?`);
@@ -303,7 +304,7 @@ export function parseOnly(tokens: Token[], index = 0): Expr {
 // Returns [undefined, -1] if a bad parse.
 // Give up on normal parsing, just use a shunting yard again...
 //  - but handle parens recursively.
-export function parse(tokens: Token[], index = 0): [Expr|undefined, number] {
+export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>): [Expr|undefined, number] {
 //console.log('PARSE: tokens=', tokens, 'index=', index);
 //try { throw new Error(); } catch (e) { console.log(e.stack); }
   const ops: [string, OperatorMeta][] = [];
@@ -344,7 +345,7 @@ export function parse(tokens: Token[], index = 0): [Expr|undefined, number] {
           }
           const args: Expr[] = [];
           for (const arg of Tokens.parseArgList(tokens, i + 2, close)) {
-            args.push(parseOnly(arg));
+            args.push(parseOnly(arg, 0, symbols));
           }
           i = close;
           exprs.push(fixSize({op, args}));
@@ -361,14 +362,15 @@ export function parse(tokens: Token[], index = 0): [Expr|undefined, number] {
         if (close < 0) {
           throw new Error(`No close paren: ${Tokens.nameAt(front)}`);
         } // return [undefined, -1];
-        const e = parseOnly(tokens.slice(i + 1, close));
+        const e = parseOnly(tokens.slice(i + 1, close), 0, symbols);
         exprs.push(e);
         i = close;
         val = false;
       } else if (front.token === 'ident') {
         // add symbol
-        exprs.push({op: 'sym', sym: front.str});
-        // TODO - use scope information to determine size?
+        // use scope information to determine size
+        const expr = symbols?.get(front.str)?.expr;
+        exprs.push((expr) ? expr : {op: 'sym', sym: front.str});
         val = false;
       } else if (front.token === 'num') {
         // add number

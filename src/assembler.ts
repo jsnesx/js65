@@ -294,7 +294,7 @@ export class Assembler {
 
   // Returns an expr resolving to a symbol name (e.g. a label)
   symbol(name: string): Expr {
-    return Exprs.evaluate(Exprs.parseOnly([{token: 'ident', str: name}]));
+    return Exprs.evaluate(Exprs.parseOnly([{token: 'ident', str: name}], 0, this.currentScope.symbols));
   }
 
   where(): string {
@@ -1019,7 +1019,7 @@ export class Assembler {
     Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {
-    return Exprs.parseOnly(tokens, start);
+    return Exprs.parseOnly(tokens, start, this.currentScope.symbols);
   }
   // parseStringList(tokens: Token[], start = 1): string[] {
   //   return Tokens.parseArgList(tokens, 1).map(ts => {
