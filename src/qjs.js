@@ -4,7 +4,7 @@ import { sha1 } from './sha1.js'
 import { Cli } from 'build/cli.js';
 
 const cli = new Cli({
-  fsToAbsPath: abspath,
+  fsResolve: abspath,
   fsReadString: readFileAsString,
   fsReadBytes: readFileAsBuffer,
   fsWriteString: writeFileAsString,

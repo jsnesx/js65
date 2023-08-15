@@ -1,3 +1,4 @@
+import base64 from 'base64';
 import { Cpu } from './cpu.ts';
 import { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
@@ -500,17 +501,18 @@ export class Assembler {
   //   }
   // }
 
-  directive(tokens: Token[]) : void {
+  directive(tokens: Token[]) {
     // TODO - record line information, rewrap error messages?
     this.errorToken = tokens[0];
     try {
       switch (Tokens.str(tokens[0])) {
         case '.org': return this.org(this.parseConst(tokens, 1));
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
-        case '.assert': return this.assert(this.parseExpr(tokens, 1));
+        case '.assert': return this.assert(...this.parseAssert(tokens));
         case '.segment': return this.segment(...this.parseSegmentList(tokens, 1));
         case '.byt':
         case '.byte': return this.byte(...this.parseDataList(tokens, true));
+        case '.bytestr': return this.byte(...this.parseByteStr(tokens));
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
@@ -856,7 +858,7 @@ export class Assembler {
     this._name = undefined;
   }
 
-  assert(expr: Expr) {
+  assert(expr: Expr, _level?: string, message?: string) {
     expr = this.resolve(expr);
     const val = this.evaluate(expr);
     if (val != null) {
@@ -866,7 +868,7 @@ export class Assembler {
         if (chunk.org != null) {
           pc = ` (PC=$${(chunk.org + chunk.data.length).toString(16)})`;
         }
-        this.fail(`Assertion failed${pc}`, expr);
+        this.fail(`${message}\nAssertion failed${pc}`, expr);
       }
     } else {
       const {chunk} = this;
@@ -1145,6 +1147,24 @@ export class Assembler {
     } else {
       this.fail(`Expected a constant offset`, args[1][0]);
     }
+  }
+
+  parseByteStr(tokens: Token[]): number[] {
+    const bytestr = Tokens.expectString(tokens[1]);
+    Tokens.expectEol(tokens[2]);
+    return Array.from(new Uint8Array(base64.toArrayBuffer(bytestr)));
+  }
+
+  parseAssert(tokens: Token[]) : [Expr, string, string] {
+    const args = Tokens.parseArgList(tokens, 1);
+    if (!args[0]) {
+      this.fail(`No assertion expression provided`);
+    }
+    const expr = this.parseExpr(args[0], 0);
+    const level = Tokens.optionalIdentifier(args.at(1)?.at(0)) ?? 'error';
+    const message = Tokens.optionalString(args.at(2)?.at(0)) ?? "Assertion failed";
+    
+    return [expr, level, message]
   }
 
   // Diagnostics

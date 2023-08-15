@@ -160,7 +160,7 @@ export class Cli {
       };
       const readfile = async (path: string, filename: string) => {
         const fullpath = await this.callbacks.fsResolve(path, filename);
-        console.log(`resolved ${fullpath}`);
+        // console.log(`resolved ${fullpath}`);
         if (err) throw err;
         return await this.callbacks.fsReadString(fullpath)
           .then((result) => {
@@ -169,7 +169,18 @@ export class Cli {
             return str!;
           });
       }
-      const toks = new TokenStream(readfile, opts);
+      const readfilebin = async (path: string, filename: string) => {
+        const fullpath = await this.callbacks.fsResolve(path, filename);
+        // console.log(`resolved ${fullpath}`);
+        if (err) throw err;
+        return await this.callbacks.fsReadBytes(fullpath)
+          .then((result) => {
+            const [str, err] = result;
+            if (err) throw err;
+            return str!;
+          });
+      }
+      const toks = new TokenStream(readfile, readfilebin, opts);
 
       console.log("about to read asm file input");
       const [str, err] = await this.callbacks.fsReadString(file);

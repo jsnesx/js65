@@ -25,7 +25,7 @@ export class Linker {
     const source = new Tokenizer(contents, 'contents.s',
                                  opts);
     const asm = new Assembler(Cpu.P02);
-    const toks = new TokenStream(undefined, opts);
+    const toks = new TokenStream(undefined, undefined, opts);
     toks.enter(source);
     const pre = new Preprocessor(toks, asm);
     asm.tokens(pre);

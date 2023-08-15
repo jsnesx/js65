@@ -109,7 +109,8 @@ export function traversePost(expr: Expr, f: Rec): Expr {
 }
 
 export function evaluate(expr: Expr): Expr {
-  switch (expr.op) { // var-arg functions
+  const mapped = NAME_MAP.get(expr.op) ?? expr.op;
+  switch (mapped) { // var-arg functions
     case '.move':
     case 'im':
     case 'sym':
@@ -130,7 +131,7 @@ export function evaluate(expr: Expr): Expr {
 
   // Special case for unaries
   if (expr.args?.length === 1) {
-    switch (expr.op) {
+    switch (mapped) {
       case '+': return expr.args![0];
       case '-': return unary(expr, x => -x);
       case '~': return unary(expr, x => ~x);
@@ -138,11 +139,11 @@ export function evaluate(expr: Expr): Expr {
       case '<': return unary(expr, x => x & 0xff);
       case '>': return unary(expr, x => (x >> 8) & 0xff);
       case '^': return num(expr.args![0].meta?.bank) ?? expr;
-      default: throw new Error(`Unknown unary operator: ${expr.op}`);
+      default: throw new Error(`Unknown unary operator: ${mapped}`);
     }
   }
 
-  switch (expr.op) {
+  switch (mapped) {
     case '+': return plus(expr);
     case '-': return minus(expr);
     case '*': return binary(expr, (a, b) => a * b);
@@ -162,7 +163,7 @@ export function evaluate(expr: Expr): Expr {
     case '&&': return binary(expr, (a, b) => a && b);
     case '||': return binary(expr, (a, b) => a || b);
     case '.xor': return binary(expr, (a, b) => !a && b || !b && a || 0);
-    default: throw new Error(`Unknown operator: ${expr.op}`);
+    default: throw new Error(`Unknown operator: ${mapped}`);
   }
 }
 

@@ -42,7 +42,7 @@ export const SourceInfoZ : z.ZodType<SourceInfo> = BaseSourceInfo.extend({
 //   column: number;
 //   parent?: SourceInfo; // macro-expansion stack...
 // }
-
+export type ErrorLevel = 'warning' | 'error' | 'ldwarning' | 'lderror';
 export type GroupTok = 'grp';
 export type StringTok = 'ident' | 'op' | 'cs' | 'str';
 export type NumberTok = 'num';
@@ -103,6 +103,7 @@ export const SKIP: Token = {token: 'cs', str: '.skip'};
 
 // Tokens we match
 export const BYTE: Token = {token: 'cs', str: '.byte'};
+export const BYTESTR: Token = {token: 'cs', str: '.bytestr'};
 export const WORD: Token = {token: 'cs', str: '.word'};
 
 // Important operator tokens
@@ -182,12 +183,20 @@ export function expect(want: Token, token: Token, prev?: Token) {
 }
 
 export function expectIdentifier(token: Token|undefined,
-                                  prev?: Token): string {
-  return expectStringToken('ident', 'identifier', token, prev);
+  prev?: Token): string {
+return expectStringToken('ident', 'identifier', token, prev);
+}
+
+export function optionalIdentifier(token: Token|undefined): string|undefined {
+return optionalStringToken('ident', 'identifier', token);
 }
 
 export function expectString(token: Token|undefined, prev?: Token): string {
   return expectStringToken('str', 'constant string', token, prev);
+}
+
+export function optionalString(token: Token|undefined): string|undefined {
+  return optionalStringToken('str', 'constant string', token);
 }
 
 function expectStringToken(want: StringTok,
@@ -197,6 +206,18 @@ function expectStringToken(want: StringTok,
   if (!token) {
     if (!prev) throw new Error(`Expected ${name}`);
     throw new Error(`Expected ${name} after ${nameAt(prev)}`);
+  }
+  if (token.token !== want) {
+    throw new Error(`Expected ${name}: ${nameAt(token)}`);
+  }
+  return token.str;
+}
+
+function optionalStringToken(want: StringTok,
+                            name: string,
+                            token: Token|undefined): string|undefined {
+  if (!token) {
+    return undefined;
   }
   if (token.token !== want) {
     throw new Error(`Expected ${name}: ${nameAt(token)}`);
@@ -416,8 +437,10 @@ export const DIRECTIVES = [
   '.ifndef',
   '.ifnref',
   '.ifref',
+  '.incbin',
   '.include',
   '.local',
+  '.macpack',
   '.macro',
   '.proc',
   '.scope',

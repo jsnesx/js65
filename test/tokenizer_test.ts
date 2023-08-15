@@ -25,9 +25,12 @@ async function tokenize(str: string, opts: Options = {}): Promise<Token[][]> {
 async function tokenstream(str: string, included: string, opts: Options = {}): Promise<Token[][]> {
   const out : Token[][] = [];
   const readfile = async(_path: string, _filename: string) => {
-    return await Promise.resolve(included);
+      return await Promise.resolve(included);
   }
-  const tokenstream = new TokenStream(readfile, opts);
+  const readfilebin = async(_path: string, _filename: string) => {
+      return await Promise.resolve(new TextEncoder().encode(included));
+  }
+  const tokenstream = new TokenStream(readfile, readfilebin, opts);
   const tokenizer = new Tokenizer(str, 'input.s', opts);
   tokenstream.enter(tokenizer);
   for (let line = await tokenstream.next(); line; line = await tokenstream.next()) {

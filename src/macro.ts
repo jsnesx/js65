@@ -56,7 +56,8 @@ export class Macro {
     const locals = new Map<string, string>();
     for (const line of this.production) {
       if (Tokens.eq(line[0], Tokens.LOCAL)) {
-        for (const local of Tokens.identsFromCList(line.slice(1))) {
+        const locallist = Tokens.identsFromCList(line.slice(1));
+        for (const local of locallist) {
           // pick a name that is impossible to type due to the '@' in the middle
           locals.set(local, `${local}@${idGen.next()}`);
         }
@@ -66,6 +67,9 @@ export class Macro {
       const map = (toks: Token[]): Token[] => {
         const mapped: Token[] = [];
         for (const tok of toks) {
+          // skip over the line declaring the local variables
+          if (Tokens.eq(tok, Tokens.LOCAL))
+            return mapped;
           if (tok.token === 'ident') {
             const param = replacements.get(tok.str);
             if (param) {
