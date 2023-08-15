@@ -35,6 +35,7 @@ interface Env {
   definedSymbol(sym: string): boolean;
   constantSymbol(sym: string): boolean;
   referencedSymbol(sym: string): boolean;
+  evaluate(expr: Expr): number|undefined;
   // also want methods to apply shunting yard to token list?
   //  - turn it into a json tree...?
 }
@@ -338,7 +339,16 @@ export class Preprocessor implements Tokens.Source {
   }
 
   evaluateConst(expr: Expr): number {
-    expr = Exprs.traversePost(expr, Exprs.evaluate);
+    // Attempt to look up a symbol and see if its a constant value
+    const evalWrapper = (ex: Expr) => {
+      if (ex.op === 'sym' && this.env.definedSymbol(ex.sym!)) {
+        // HACK? If its defined but not set, default it to zero?
+        const num = this.env.evaluate(ex) ?? 0;
+        return Exprs.evaluate({op: 'num', num, meta: Exprs.size(num, undefined)});
+      }
+      return Exprs.evaluate(ex);
+    }
+    expr = Exprs.traversePost(expr, evalWrapper);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
     const at = Tokens.at(expr);
     throw new Error(`Expected a constant${at}`);

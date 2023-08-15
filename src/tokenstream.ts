@@ -94,12 +94,12 @@ export class TokenStream implements Tokens.Source {
             let length = undefined;
             if (line.length > 2) {
               const args = Tokens.parseArgList(line, 2);
-              if (args[0]) {
-                const expr = Exprs.evaluate(Exprs.parseOnly(args[0]));
+              if (args[1]) {
+                const expr = Exprs.evaluate(Exprs.parseOnly(args[1]));
                 offset = expr.num ?? 0;
               }
-              if (args[1]) {
-                const expr = Exprs.evaluate(Exprs.parseOnly(args[0]));
+              if (args[2]) {
+                const expr = Exprs.evaluate(Exprs.parseOnly(args[2]));
                 length = expr.num ?? -1;
               }
             }

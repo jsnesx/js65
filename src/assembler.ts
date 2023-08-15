@@ -509,7 +509,7 @@ export class Assembler {
         case '.org': return this.org(this.parseConst(tokens, 1));
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
         case '.assert': return this.assert(...this.parseAssert(tokens));
-        case '.segment': return this.segment(...this.parseSegmentList(tokens, 1));
+        case '.segment': return this.segment(...this.parseSegmentList(tokens, 1, false));
         case '.byt':
         case '.byte': return this.byte(...this.parseDataList(tokens, true));
         case '.bytestr': return this.byte(...this.parseByteStr(tokens));
@@ -523,7 +523,7 @@ export class Assembler {
         case '.endscope': return this.parseNoArgs(tokens, 1), this.endScope();
         case '.proc': return this.proc(this.parseRequiredIdentifier(tokens));
         case '.endproc': return this.parseNoArgs(tokens, 1), this.endProc();
-        case '.pushseg': return this.pushSeg(...this.parseSegmentList(tokens, 1));
+        case '.pushseg': return this.pushSeg(...this.parseSegmentList(tokens, 1, true));
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
         case '.move': return this.move(...this.parseMoveArgs(tokens));
       }
@@ -586,7 +586,7 @@ export class Assembler {
     }
     // Now make the assignment.
     if (typeof expr !== 'number') expr = this.resolve(expr);
-    this.assignSymbol(ident, false, expr);
+    this.assignSymbol(ident, true, expr);
     // TODO - no longer needed?
     if (this.opts.refExtractor?.assign && typeof expr === 'number') {
       this.opts.refExtractor.assign(ident, expr);
@@ -997,7 +997,10 @@ export class Assembler {
 
   pushSeg(...segments: Array<string|mod.Segment>) {
     this.segmentStack.push([this.segments, this._chunk]);
-    this.segment(...segments);
+    // If pushseg was called without any segments, just keep the current segment
+    if (segments) {
+      this.segment(...segments);
+    }
   }
 
   popSeg() {
@@ -1036,8 +1039,11 @@ export class Assembler {
     return str;
   }
 
-  parseSegmentList(tokens: Token[], start: number): Array<string|mod.Segment> {
+  parseSegmentList(tokens: Token[], start: number, allowEmptySegmentList: boolean): Array<string|mod.Segment> {
     if (tokens.length < start + 1) {
+      if (allowEmptySegmentList) {
+        return [];
+      }
       this.fail(`Expected a segment list`, tokens[start - 1]);
     }
     return Tokens.parseArgList(tokens, 1).map(ts => {

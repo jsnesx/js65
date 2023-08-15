@@ -114,6 +114,8 @@ export function evaluate(expr: Expr): Expr {
     case '.move':
     case 'im':
     case 'sym':
+      // check if the current symbol is a constant number
+      // symbolMap?.get(expr.args)
       return expr;
     case 'num':
       if (expr.meta?.rel && expr.meta.org != null) {
@@ -378,6 +380,15 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
         const num = front.num;
         exprs.push({op: 'num', num, meta: size(num, front)});
         val = false;
+      } else if (front.token === 'str') { 
+        // TODO: use the charmap to look up literal value
+        const s = front.str
+        if (s.length > 1) {
+          throw new Error(`Literal string value larger than a single byte: ${Tokens.nameAt(front)}`);
+        }
+        const num = s.charCodeAt(0)
+        exprs.push({op: 'num', num, meta: size(num, front)});
+        val = false;
       } else {
         // bad token??
         throw new Error(`Bad expression token: ${Tokens.nameAt(front)}`);
@@ -615,7 +626,7 @@ function fixSize(expr: Expr): Expr {
   return expr;
 }
 
-function size(num: number, token?: Token): Meta {
+export function size(num: number, token?: Token): Meta {
   if (num < 256 && token && token.token === 'num' && token.width != null) {
     return {size: token.width};
   }
