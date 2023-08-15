@@ -1,8 +1,9 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
+import chai from 'chai';
 import { Token } from '/src/token.ts';
 import * as Tokens from '/src/token.ts';
 
+const expect = chai.expect;
 const {LP, LB, RP, RB} = Tokens;
 
 describe('Token', function() {

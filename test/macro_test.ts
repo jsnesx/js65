@@ -1,5 +1,4 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import {Macro} from '/src/macro.ts';
@@ -11,6 +10,7 @@ const [_] = [util];
 
 const nullId = {next() { return 1; }};
 
+const expect = chai.expect;
 chai.use(chaiAsPromised);
 
 describe('Macro', function() {

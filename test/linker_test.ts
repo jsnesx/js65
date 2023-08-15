@@ -1,10 +1,11 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
+import chai from 'chai';
 import {Expr} from '/src/expr.ts';
 import {Linker} from '/src/linker.ts';
 import * as util from '/src/util.ts';
 
 const [_] = [util];
+const expect = chai.expect;
 
 const link = Linker.link;
 

@@ -1,9 +1,11 @@
 import {describe, it} from 'std/testing/bdd.ts';
 import { crypto } from 'std/crypto/crypto.ts';
 
-import {expect} from 'chai';
+import chai from 'chai';
 import {Cli} from '/src/cli.ts'
 import { toHexString } from "/src/util.ts";
+
+const expect = chai.expect;
 
 describe('CLI', function() {
   describe('STDIN', function() {

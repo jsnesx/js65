@@ -1,5 +1,4 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
 import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import {Preprocessor} from '/src/preprocessor.ts';
@@ -10,6 +9,7 @@ import * as util from '/src/util.ts';
 
 const [_] = [util];
 
+const expect = chai.expect;
 chai.use(chaiAsPromised);
 
 describe('Preprocessor', function() {

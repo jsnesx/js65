@@ -1,5 +1,5 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
+import chai from 'chai';
 import {Define} from '/src/define.ts';
 import {Token} from '/src/token.ts';
 import * as Tokens from '/src/token.ts';
@@ -7,6 +7,7 @@ import {Tokenizer} from '/src/tokenizer.ts';
 import * as util from '/src/util.ts';
 
 const [_] = [util];
+const expect = chai.expect;
 
 describe('Define', function() {
 

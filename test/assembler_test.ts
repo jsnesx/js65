@@ -1,5 +1,5 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
+import chai from 'chai';
 import {Cpu} from '/src/cpu.ts';
 import {Expr} from '/src/expr.ts';
 import {Module} from '/src/module.ts';
@@ -9,6 +9,7 @@ import * as Tokens from '/src/token.ts';
 import * as util from '/src/util.ts';
 
 const [_a] = [util];
+const expect = chai.expect;
 
 function ident(str: string): Token { return {token: 'ident', str}; }
 function num(num: number): Token { return {token: 'num', num}; }

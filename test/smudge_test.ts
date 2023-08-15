@@ -1,8 +1,9 @@
 import {describe, it} from 'std/testing/bdd.ts';
-import {expect} from 'chai';
+import chai from 'chai';
 import { Cpu } from '/src/cpu.ts';
 import * as lib from '/src/smudge.ts';
 
+const expect = chai.expect;
 function smudge(src: string): string {
   return lib.smudge(src, Cpu.P02, prg);
 }
