@@ -111,6 +111,7 @@ class LinkSegment {
   readonly offset: number;
   readonly memory: number;
   readonly addressing: number;
+  readonly fill: number;
 
   constructor(segment: Segment) {
     const name = this.name = segment.name;
@@ -121,6 +122,7 @@ class LinkSegment {
     // this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
     // Allow memory offset to be null for non-prg segments
     this.memory = segment.memory ?? 0;
+    this.fill = segment.fill ?? 0;
   }
 
   // offset = org + delta
@@ -646,6 +648,14 @@ class Link {
     // At this point, everything should be placed, so do one last resolve.
 
     const patch = new SparseByteArray();
+    // Before placing the data, add the fill bytes to segments with fill
+    for (const [_name, seg] of this.segments) {
+      if (seg.fill) {
+        const buf = new Uint8Array(new ArrayBuffer(seg.size));
+        buf.fill(seg.fill);
+        patch.set(seg.offset, buf);
+      }
+    }
     for (const c of this.chunks) {
       for (const a of c.asserts) {
         const v = this.resolveExpr(a);

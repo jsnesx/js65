@@ -225,12 +225,20 @@
   },
   "npm": {
     "specifiers": {
+      "chai-as-promised@7.1.1": "chai-as-promised@7.1.1_chai@4.3.7",
       "chai@4.3.7": "chai@4.3.7"
     },
     "packages": {
       "assertion-error@1.1.0": {
         "integrity": "sha512-jgsaNduz+ndvGyFt3uSuWqvy4lCnIJiovtouQN5JZHOKCS2QuhEdbcQHFhVksz2N2U9hXJo8odG7ETyWlEeuDw==",
         "dependencies": {}
+      },
+      "chai-as-promised@7.1.1_chai@4.3.7": {
+        "integrity": "sha512-azL6xMoi+uxu6z4rhWQ1jbdUhOMhis2PvscD/xjLqNMkv3BPPp2JyyuTHOrf9BOosGpNQ11v6BKv/g57RXbiaA==",
+        "dependencies": {
+          "chai": "chai@4.3.7",
+          "check-error": "check-error@1.0.2"
+        }
       },
       "chai@4.3.7": {
         "integrity": "sha512-HLnAzZ2iupm25PlN0xFreAlBA5zaBSv3og0DdeGA4Ar6h6rJ3A0rolRUKJhSF2V10GZKDgWF/VmAEsNWjCRB+A==",

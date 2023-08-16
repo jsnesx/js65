@@ -219,6 +219,12 @@ export class Assembler {
   /** Supports refExtractor. */
   private _exprMap?: WeakMap<Expr, Expr> = undefined;
 
+  /** 
+   * When defining segments, this tracks the current offset in the output file
+   * That way users don't have to define segment offsets if they are sequential
+   */
+  private _segmentOffset = 0;
+
   constructor(readonly cpu = Cpu.P02, readonly opts: Options = {}) {}
 
   private get chunk(): Chunk {
@@ -1061,10 +1067,20 @@ export class Assembler {
           case 'size': seg.size = this.parseConst(val, 0); break;
           case 'off': seg.offset = this.parseConst(val, 0); break;
           case 'mem': seg.memory = this.parseConst(val, 0); break;
-          // TODO - I don't fully understand these...
-          // case 'zeropage': seg.addressing = 1;
+          case 'fill': seg.fill = this.parseConst(val, 0); break;
+          case 'out': seg.out = true; break;
+          // TODO allow setting free space
+          // case 'free': seg.free = this.parseConst(val, 0); break;
+          case 'zp': seg.addressing = 1; break;
           default: this.fail(`Unknown segment attr: ${key}`);
         }
+      }
+      if (seg.offset === undefined && seg.size !== undefined) {
+        seg.offset = this._segmentOffset;
+        this._segmentOffset += seg.size;
+      }
+      if (seg.fill !== undefined && seg.size !== undefined) {
+        seg.free = [[seg.memory ?? 0, (seg.memory ?? 0) + seg.size]];
       }
       return seg;
     });

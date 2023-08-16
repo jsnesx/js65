@@ -111,6 +111,10 @@ const SegmentZ = z.object({
   memory: z.number().optional(),
   /** Address size. */
   addressing: z.number().optional(),
+  /** Address size. */
+  fill: z.number().optional(),
+  /** True if the segment should be written to the output file. */
+  out: z.boolean().optional(),
   /** True if this segment is the "default" segment to use if no segment is defined */
   default: z.boolean().optional(),
   /** Unallocated ranges (org), half-open [a, b). */

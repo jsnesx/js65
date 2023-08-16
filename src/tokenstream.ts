@@ -4,6 +4,7 @@ import {Token} from './token.ts'
 import {Tokenizer, Options} from './tokenizer.ts'
 import * as Tokens from './token.ts';
 // TODO: import raw text files seems painful right now.
+import * as Common from './macpack/common.ts'
 import * as Generic from './macpack/generic.ts'
 import * as Longbranch from './macpack/longbranch.ts'
 import * as Nes2header from './macpack/nes2header.ts'
@@ -12,6 +13,15 @@ import base64 from 'base64';
 type Frame = [Tokens.Source|undefined, Token[][]];
 
 const MAX_DEPTH = 100;
+
+const MACPACK: Map<string, string> = new Map(
+  [
+    ['common', Common.text],
+    ['generic', Generic.text],
+    ['longbranch', Longbranch.text],
+    ['nes2header', Nes2header.text],
+  ]
+);
 
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
@@ -60,25 +70,8 @@ export class TokenStream implements Tokens.Source {
             continue;
           }
           case '.macpack': {
-            const pack = Tokens.expectIdentifier(line[1]);
-            let code = "";
-            switch (pack.toLowerCase()) {
-              case "generic": {
-                code = Generic.text;
-                break;
-              }
-              case "longbranch": {
-                code = Longbranch.text;
-                break;
-              }
-              case "nes2header": {
-                code = Nes2header.text;
-                break;
-              }
-              default: {
-                throw new Error(`Could not load macpack ${pack}}`);
-              }
-            }
+            const pack = Tokens.expectIdentifier(line[1])?.toLowerCase();
+            const code = MACPACK.get(pack) ?? this.err(line);
             this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts));
             continue;
           }
