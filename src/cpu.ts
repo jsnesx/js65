@@ -54,12 +54,12 @@ class AbstractCpu {
       case 'zpx':
       case 'zpy':
       case 'iny':
+      case 'inx':
         return 1;
       case 'abs':
       case 'abx':
       case 'aby':
       case 'ind':
-      case 'inx':
         return 2;
     }
   }

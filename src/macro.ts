@@ -96,6 +96,6 @@ export class Macro {
       }
       lines.push(map(line));
     }
-    return lines;
+    return lines.filter(m => m.length != 0);
   }
 }

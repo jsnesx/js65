@@ -101,15 +101,15 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `sta ($0320,x)`', async function() {
+    it('should handle `sta ($20,x)`', async function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('sta'), LP, num(0x320), COMMA, ident('x'), RP]);
+      await a.instruction([ident('sta'), LP, num(0x20), COMMA, ident('x'), RP]);
       expect(strip(a.module())).to.eql({
         segments: [],
         chunks: [{
           overwrite: 'allow',
           segments: [],
-          data: Uint8Array.of(0x81, 0x20, 3),
+          data: Uint8Array.of(0x81, 0x20),
         }],
         symbols: [],
       });
@@ -152,6 +152,20 @@ describe('Assembler', function() {
           overwrite: 'allow',
           segments: [],
           data: Uint8Array.of(0x1d, 0x80, 4),
+        }],
+        symbols: [],
+      });
+    });
+
+    it('should handle `ora ($ff,x)`', async function() {
+      const a = new Assembler(Cpu.P02);
+      await a.instruction([ident('ora'), LP, num(0xff), COMMA, ident('x'), RP]);
+      expect(strip(a.module())).to.eql({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0x01, 0xff),
         }],
         symbols: [],
       });

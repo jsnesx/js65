@@ -664,7 +664,7 @@ class Link {
         throw new Error(`Assertion failed${at}`);
       }
       if (c.overlaps) continue;
-      patch.set(c.offset!, ...this.data.slice(c.offset!, c.offset! + c.size!));
+      patch.set(c.offset!, Uint8Array.from(this.data.slice(c.offset!, c.offset! + c.size!)));
     }
     if (DEBUG) console.log(this.report(true));
     return patch;
@@ -684,7 +684,8 @@ class Link {
       })
     }
     const size = chunk.size;
-    if (!chunk.subs.size && !chunk.selfSubs.size) {
+    // Hueristic, don't search for duplicates for large chunk sizes
+    if (chunk.size < 256 && !chunk.subs.size && !chunk.selfSubs.size) {
       // chunk is resolved: search for an existing copy of it first
       const pattern = this.data.pattern(chunk.data);
       for (const name of chunk.segments) {

@@ -51,7 +51,7 @@ interface Env {
 // }
 
 export class Preprocessor implements Tokens.Source {
-  private readonly macros: Map<string, Define|Macro>;
+  private readonly macros: Map<string, Define|Macro|string>;
   private sink: AsyncGenerator<Token[]|undefined>|undefined;
 
   // builds up repeating tokens...
@@ -63,6 +63,16 @@ export class Preprocessor implements Tokens.Source {
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor) {
     this.macros = parent ? parent.macros : new Map();
+  }
+
+  
+  async tokens() {
+    const tokens = [];
+    let tok;
+    while ((tok = await this.next())) {
+      tokens.push(tok);
+    }
+    return tokens;
   }
 
   async next(): Promise<Token[] | undefined> {
@@ -343,7 +353,8 @@ export class Preprocessor implements Tokens.Source {
     const evalWrapper = (ex: Expr) => {
       if (ex.op === 'sym' && this.env.definedSymbol(ex.sym!)) {
         // HACK? If its defined but not set, default it to zero?
-        const num = this.env.evaluate(ex) ?? 0;
+        const num = this.env.evaluate(ex);
+        if (num === undefined) throw new Error(`Symbol ${ex.sym} is undefined`);
         return Exprs.evaluate({op: 'num', num, meta: Exprs.size(num, undefined)});
       }
       return Exprs.evaluate(ex);
@@ -369,9 +380,9 @@ export class Preprocessor implements Tokens.Source {
     '.if': ([cs, ...args]) =>
         this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs))),
     '.ifdef': ([cs, ...args]) =>
-        this.parseIf(this.macros.has(parseOneIdent(args, cs))),
+        this.parseIf(this.parseIfDef(args, cs)),
     '.ifndef': ([cs, ...args]) =>
-        this.parseIf(!this.macros.has(parseOneIdent(args, cs))),
+        this.parseIf(!this.parseIfDef(args, cs)),
     '.ifblank': ([, ...args]) => this.parseIf(!args.length),
     '.ifnblank': ([, ...args]) => this.parseIf(!!args.length),
     '.ifref': ([cs, ...args]) =>
@@ -500,6 +511,11 @@ export class Preprocessor implements Tokens.Source {
     }
     // result has the expansion: unshift it
     this.stream.unshift(...result);
+  }
+
+  private parseIfDef(args: Token[], cs: Token) {
+    return this.macros.has(parseOneIdent(args, cs)) ||
+      this.env.definedSymbol(parseOneIdent(args, cs));
   }
 
       // if (front.str === '.define' || front.str === '.undefine') {

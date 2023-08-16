@@ -495,7 +495,12 @@ export class Assembler {
   async tokens(source: Tokens.Source) {
     let line;
     while ((line = await source.next())) {
+      // console.log(`running line:`);
+      // console.log(line);
       await this.line(line);
+      // console.log(`checking output:`);
+      // console.log(this.currentScope.global.symbols);
+      // console.log(`\n\n`);
     }
   }
 
@@ -518,7 +523,7 @@ export class Assembler {
         case '.segment': return this.segment(...this.parseSegmentList(tokens, 1, false));
         case '.byt':
         case '.byte': return this.byte(...this.parseDataList(tokens, true));
-        case '.bytestr': return this.byte(...this.parseByteStr(tokens));
+        case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
@@ -883,6 +888,9 @@ export class Assembler {
   }
 
   byte(...args: Array<Expr|string|number>) {
+    this.byteInternal(args);
+  }
+  byteInternal(args: Array<Expr|string|number>) {
     const {chunk} = this;
     this.markWritten(args.length);
     for (const arg of args) {
@@ -1069,6 +1077,7 @@ export class Assembler {
           case 'mem': seg.memory = this.parseConst(val, 0); break;
           case 'fill': seg.fill = this.parseConst(val, 0); break;
           case 'out': seg.out = true; break;
+          case 'overlay': seg.overlay = this.parseStr(val, 0); break;
           // TODO allow setting free space
           // case 'free': seg.free = this.parseConst(val, 0); break;
           case 'zp': seg.addressing = 1; break;
@@ -1171,10 +1180,11 @@ export class Assembler {
     }
   }
 
-  parseByteStr(tokens: Token[]): number[] {
+  parseByteStr(tokens: Token[]): Array<number> {
     const bytestr = Tokens.expectString(tokens[1]);
     Tokens.expectEol(tokens[2]);
-    return Array.from(new Uint8Array(base64.toArrayBuffer(bytestr)));
+    const buf = base64.toArrayBuffer(bytestr);
+    return Array.from(new Uint8Array(buf));
   }
 
   parseAssert(tokens: Token[]) : [Expr, string, string] {

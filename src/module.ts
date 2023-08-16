@@ -44,11 +44,6 @@ const BaseChunk = z.object({
   segments: z.array(z.string()),
   /** Absolute address of the start of the chunk, if not relocatable. */
   org: z.number().optional(),
-  /**
-   * Data for the chunk, either a Uint8Array or a Base64-encoded string.
-   * NOTE: While building this is a number array.  When serialized to disk, it
-   * is a base64-encoded string.  When linking, it's a Uint8Array.
-   */
   /** Substitutions to insert into the data. */
   subs: z.optional(z.array(SubstitutionZ)),
   /** Assertions within this chunk. Each expression must be nonzero. */
@@ -61,6 +56,11 @@ export type ChunkNum = z.infer<typeof ChunkNumZ>;
 export type Chunk = z.infer<typeof ChunkZ>;
 
 const ChunkNumZ = BaseChunk.extend({
+  /**
+   * Data for the chunk, either a Uint8Array or a Base64-encoded string.
+   * NOTE: While building this is a number array.  When serialized to disk, it
+   * is a base64-encoded string.  When linking, it's a Uint8Array.
+   */
   data: z.array(z.number()),
 });
 
@@ -115,6 +115,8 @@ const SegmentZ = z.object({
   fill: z.number().optional(),
   /** True if the segment should be written to the output file. */
   out: z.boolean().optional(),
+  /** Name of the segment that this should be placed inside. */
+  overlay: z.string().optional(),
   /** True if this segment is the "default" segment to use if no segment is defined */
   default: z.boolean().optional(),
   /** Unallocated ranges (org), half-open [a, b). */

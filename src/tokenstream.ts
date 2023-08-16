@@ -99,7 +99,8 @@ export class TokenStream implements Tokens.Source {
             // TODO this is a little jank, but we base64 encode the binary file for now
             // so it can be loaded faster without parsing later.
             const binary = await this.loadFile<ArrayBuffer>(path, this.readFileBinary);
-            const bin = base64.fromArrayBuffer(binary).slice(offset, length);
+            const end = length !== undefined ? offset + length : undefined;
+            const bin = base64.fromArrayBuffer(binary.slice(offset, end));
             const out : Token[] = [
               Tokens.BYTESTR,
               {token: 'str', str: bin}

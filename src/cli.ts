@@ -211,7 +211,9 @@ export class Cli {
       toks.enter(tokenizer);
       console.log("running preprocessor");
       const pre = new Preprocessor(toks, asm);
+      // const appliedPreprocessor = await pre.tokens();
       console.log("applying tokens to assembly");
+      // const pre2 = new Preprocessor(toks, asm);
       await asm.tokens(pre);
       console.log("assembly complete, writing module");
       const module = asm.module();
