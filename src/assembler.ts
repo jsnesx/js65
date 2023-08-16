@@ -537,6 +537,9 @@ export class Assembler {
         case '.pushseg': return this.pushSeg(...this.parseSegmentList(tokens, 1, true));
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
         case '.move': return this.move(...this.parseMoveArgs(tokens));
+        case '.out': return this.log('info', tokens);
+        case '.warning': return this.log('warn', tokens);
+        case '.error': return this.log('error', tokens);
       }
       this.fail(`Unknown directive: ${Tokens.nameAt(tokens[0])}`);
     } finally {
@@ -597,7 +600,7 @@ export class Assembler {
     }
     // Now make the assignment.
     if (typeof expr !== 'number') expr = this.resolve(expr);
-    this.assignSymbol(ident, true, expr);
+    this.assignSymbol(ident, false, expr);
     // TODO - no longer needed?
     if (this.opts.refExtractor?.assign && typeof expr === 'number') {
       this.opts.refExtractor.assign(ident, expr);
@@ -1025,6 +1028,18 @@ export class Assembler {
 
   move(size: number, source: Expr) {
     this.append({op: '.move', args: [source], meta: {size}}, size);
+  }
+
+  log(level: 'info'|'warn'|'error', line: Token[]) {
+    // TODO properly handle logging
+    const str = Tokens.expectString(line[1], line[0]);
+    Tokens.expectEol(line[2], 'a single string');
+    if (level === 'error')
+      throw new Error(str);
+    if (level === 'info')
+      console.log(str);
+    else
+      console.warn(str);
   }
 
   // Utility methods for processing arguments

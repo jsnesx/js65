@@ -52,15 +52,6 @@ export class TokenStream implements Tokens.Source {
       if (line) {
         if (line?.[0].token !== 'cs') return line;
         switch (line[0].str) {
-          case '.out':
-            console.log(this.str(line));
-            break;
-          case '.warning':
-            console.warn(this.str(line));
-            break;
-          case '.error':
-            this.err(line);
-            break;
           case '.include': {
             const path = this.str(line);
             if (!this.readFile) this.err(line);

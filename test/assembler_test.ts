@@ -792,6 +792,7 @@ describe('Assembler', function() {
           name: '03',
           bank: 3,
           size: 100,
+          offset: 0,
         }]});
     });
 
@@ -804,6 +805,7 @@ describe('Assembler', function() {
           name: '02',
           bank: 2,
           size: 200,
+          offset: 0,
         }]});
     });
 

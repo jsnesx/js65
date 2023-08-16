@@ -35,7 +35,7 @@ export function binaryInsert<T>(arr: T[], f: (t: T) => number, t: T) {
 
 export class SparseArray<T> {
   protected _chunks: Array<readonly [number, T[]]> = [];
-  protected _length: number = 0;
+  protected _length = 0;
 
   // NOTE: length is a high water mark.
   get length() { return this._length; }
@@ -65,7 +65,7 @@ export class SparseArray<T> {
   }
 
   get(index: number): T|undefined {
-    let i = this._find(index);
+    const i = this._find(index);
     if (i < 0) return undefined;
     const [start, data] = this._chunks[i];
     return data[index - start];
@@ -105,7 +105,7 @@ export class SparseArray<T> {
       const [s1, a1] = this._chunks[i1];
       values = spliceTail(values, end - s1, a1)
     }
-    let s = i0 < 0 ? ~i0 : i0;
+    const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
     if (!Array.isArray(values)) values = Array.from(values);
@@ -140,7 +140,7 @@ export class SparseArray<T> {
     if (e0) entries.push(e0);
     if (e1) entries.push(e1);
 
-    let s = i0 < 0 ? ~i0 : i0;
+    const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
     
@@ -295,6 +295,7 @@ export function toHexString(data: Uint8Array) : string {
   return lines.join('\n');
 }
 
+// deno-lint-ignore no-namespace
 export namespace SparseByteArray {
   export interface Pattern {
     search(start?: number, end?: number): number;
@@ -403,7 +404,7 @@ export class IntervalSet implements Iterable<readonly [number, number]> {
     const entry: [number, number] = [start, end];
     if (i0 >= 0) entry[0] = this.data[i0][0];
     if (i1 >= 0) entry[1] = this.data[i1][1];
-    let s = i0 < 0 ? ~i0 : i0;
+    const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
     this.data.splice(s, e - s, entry);
@@ -433,7 +434,7 @@ export class IntervalSet implements Iterable<readonly [number, number]> {
     if (e0) entries.push(e0);
     if (e1) entries.push(e1);
 
-    let s = i0 < 0 ? ~i0 : i0;
+    const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
     
