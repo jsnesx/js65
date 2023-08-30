@@ -3,7 +3,7 @@
     "run": "deno run --allow-all src/js65.ts",
     "djs": "deno compile --allow-all src/js65.ts -o build/djs65",
     "qjs": "deno run --allow-all bundle.ts",
-    "qjsbuild": "deno task qjs && quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js && gcc -D_GNU_SOURCE -Iquickjs/include/quickjs/ -o ./build/js65 ./build/qjs65.c -static -s -Lquickjs/lib/quickjs/ -lquickjs -lm -ldl -lpthread",
+    "qjsbuild": "deno task qjs && quickjs/bin/qjsc -e -o ./build/qjs65.c ./src/qjs.js && gcc -O3 -D_GNU_SOURCE -Iquickjs/include/quickjs/ -o ./build/js65 ./build/qjs65.c -static -s -Lquickjs/lib/quickjs/ -lquickjs -lm -ldl -lpthread",
     "qjsrun": "deno task qjsbuild && build/js65"
   },
   "imports": {

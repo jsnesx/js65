@@ -496,10 +496,10 @@ export class Assembler {
     let line;
     while ((line = await source.next())) {
       // console.log(`running line:`);
-      // console.log(line);
+      // console.log(`${JSON.stringify(line)}`);
       await this.line(line);
       // console.log(`checking output:`);
-      // console.log(this.currentScope.global.symbols);
+      // console.log(`${JSON.stringify(this.currentScope.global.symbols)}`);
       // console.log(`\n\n`);
     }
   }

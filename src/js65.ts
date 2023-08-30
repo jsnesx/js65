@@ -10,35 +10,17 @@ const cli = new Cli({
     return await Promise.resolve(resolve(path, (filename === Cli.STDIN) ? '.' : filename));
   },
   fsReadString: async (filename: string) => {
-    try {
-      return [new TextDecoder().decode(filename === Cli.STDIN ? await reader.readAll(Deno.stdin) : await Deno.readFile(filename)), undefined];
-    } catch (err) {
-      return [undefined, err]
-    }
+    return new TextDecoder().decode(filename === Cli.STDIN ? await reader.readAll(Deno.stdin) : await Deno.readFile(filename));
   },
   fsReadBytes: async (filename: string) => {
-    try {
-      return [filename === Cli.STDIN ? await reader.readAll(Deno.stdin) : await Deno.readFile(filename), undefined];
-    } catch (err) {
-      return [undefined, err];
-    }
+      return filename === Cli.STDIN ? await reader.readAll(Deno.stdin) : await Deno.readFile(filename);
   },
   fsWriteString: async (filename: string, data: string) => {
-    try {
-      const d = new TextEncoder().encode(data);
-      filename === Cli.STDOUT ? await writer.writeAll(Deno.stdout, d) : await Deno.writeFile(filename, d);
-      return;
-    } catch (err) {
-      return err;
-    }
+    const d = new TextEncoder().encode(data);
+    filename === Cli.STDOUT ? await writer.writeAll(Deno.stdout, d) : await Deno.writeFile(filename, d);
   },
   fsWriteBytes: async (filename: string, data: Uint8Array) => {
-    try {
-      filename === Cli.STDOUT ? await writer.writeAll(Deno.stdout, data) : await Deno.writeFile(filename, data)
-      return;
-    } catch (err) {
-      return err;
-    }
+    filename === Cli.STDOUT ? await writer.writeAll(Deno.stdout, data) : await Deno.writeFile(filename, data);
   },
   fsWalk: async (path: string, action: (filename: string) => Promise<boolean>) => {
     for await (const dir of fs.walk(path)) {
@@ -55,4 +37,21 @@ export async function main(args: string[]) {
   await cli.run(args);
 }
 
-await main(Deno.args);
+// await main(Deno.args);
+
+Deno.bench("building z2disassembly", async() => {
+  await cli.run([
+    "-o", "build/test.nes",
+    "-IC:\\dev\\z2disassembly\\inc\\",
+    "-IC:\\dev\\z2disassembly\\src\\",
+    "C:\\dev\\z2disassembly\\src\\cfg.s",
+    "C:\\dev\\z2disassembly\\src\\prg0.s",
+    "C:\\dev\\z2disassembly\\src\\prg1.s",
+    "C:\\dev\\z2disassembly\\src\\prg2.s",
+    "C:\\dev\\z2disassembly\\src\\prg3.s",
+    "C:\\dev\\z2disassembly\\src\\prg4.s",
+    "C:\\dev\\z2disassembly\\src\\prg5.s",
+    "C:\\dev\\z2disassembly\\src\\prg6.s",
+    "C:\\dev\\z2disassembly\\src\\prg7.s"
+  ]);
+});

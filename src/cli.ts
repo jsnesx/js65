@@ -21,10 +21,10 @@ export interface HydrateOptions {
 
 export interface Callbacks {
   fsResolve: (path: string, filename: string) => Promise<string>,
-  fsReadString: (filename: string) => Promise<[string?, Error?]>,
-  fsReadBytes: (filename: string) => Promise<[Uint8Array?, Error?]>,
-  fsWriteString: (filename: string, data: string) => Promise<Error|undefined>,
-  fsWriteBytes: (filename: string, data: Uint8Array) => Promise<Error|undefined>,
+  fsReadString: (filename: string) => Promise<string>,
+  fsReadBytes: (filename: string) => Promise<Uint8Array>,
+  fsWriteString: (filename: string, data: string) => Promise<void>,
+  fsWriteBytes: (filename: string, data: Uint8Array) => Promise<void>,
   fsWalk: (path: string, action: (filename: string) => Promise<boolean>) => Promise<void>,
   cryptoSha1: (data: Uint8Array) => ArrayBuffer,
   exit: (code: number) => void,
@@ -160,31 +160,32 @@ export class Cli {
       };
       const readfile = async (path: string, filename: string) => {
         const fullpath = await this.callbacks.fsResolve(path, filename);
-        // console.log(`resolved ${fullpath}`);
-        if (err) throw err;
-        return await this.callbacks.fsReadString(fullpath)
-          .then((result) => {
-            const [str, err] = result;
-            if (err) throw err;
-            return str!;
-          });
+        console.log(`resolved ${fullpath}`);
+        // if (err) throw err;
+        return await this.callbacks.fsReadString(fullpath);
+          // .then((result) => {
+          //   const [str, err] = result;
+          //   if (err) throw err;
+          //   return str!;
+          // });
       }
       const readfilebin = async (path: string, filename: string) => {
         const fullpath = await this.callbacks.fsResolve(path, filename);
-        // console.log(`resolved ${fullpath}`);
-        if (err) throw err;
-        return await this.callbacks.fsReadBytes(fullpath)
-          .then((result) => {
-            const [str, err] = result;
-            if (err) throw err;
-            return str!;
-          });
+        console.log(`resolved ${fullpath}`);
+        // if (err) throw err;
+        return await this.callbacks.fsReadBytes(fullpath);
+          // .then((result) => {
+            // return result;
+            // const [str, err] = result;
+            // if (err) throw err;
+            // return str!;
+          // });
       }
       const toks = new TokenStream(readfile, readfilebin, opts);
 
       console.log("about to read asm file input");
-      const [str, err] = await this.callbacks.fsReadString(file);
-      if (err) throw err;
+      const str = await this.callbacks.fsReadString(file);
+      // if (err) throw err;
       
       console.log("attempting to parse module");
       // try to parse the input as a Module first to see if its already compiled
@@ -244,14 +245,14 @@ export class Cli {
     console.log(`op ${args.op}`);
     if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
     console.log("test8");
-    let [src, err] = await this.callbacks.fsReadString(args.files[0]);
-    if (err) this.usage(3, [err]);
+    const src = await this.callbacks.fsReadString(args.files[0]);
+    // if (err) this.usage(3, [err]);
     console.log("test9");
     let fullRom: Uint8Array|undefined;
     if (args.rom) {
       console.log("test10");
-      [fullRom, err] = await this.callbacks.fsReadBytes(args.rom);
-      if (err) this.usage(4, [err]);
+      fullRom = await this.callbacks.fsReadBytes(args.rom);
+      // if (err) this.usage(4, [err]);
     } else {
       console.log("test11");
       const match = /smudge sha1 ([0-9a-f]{40})/.exec(src!);
@@ -263,8 +264,8 @@ export class Cli {
       this.callbacks.fsWalk('.', async(filename) => {
         console.log("test callback");
         if (/\.nes$/.test(filename)) {
-          const [data, err] = await this.callbacks.fsReadBytes(filename);
-          if (err) this.usage(5, [err]);
+          const data = await this.callbacks.fsReadBytes(filename);
+          // if (err) this.usage(5, [err]);
           const sha = Array.from(
               new Uint8Array(this.callbacks.cryptoSha1(data!)),
               x => x.toString(16).padStart(2, '0')).join('');
@@ -283,8 +284,8 @@ export class Cli {
     console.log("test16");
     // TODO - read the header properly
     const prg = fullRom!.subarray(0x10, 0x40010);
-    err = await this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));
-    if (err) this.printerrors(err);
+    await this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));
+    // if (err) this.printerrors(err);
   }
 
   printerrors(...err: Error[]) {
