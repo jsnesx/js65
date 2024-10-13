@@ -1,3 +1,10 @@
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 // Smudger.  Supports transforming files by adding/removing actual ROM data.
 // The basic idea is that a source file has a cleaned form and a smudged form.
 // Cleaning removes actual ROM data and replaces it with address references.

@@ -1,3 +1,10 @@
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 // Returns element where fn returns 0, or ~insertion point
 // First parameter is the size to search: [0..n-1] inclusive.
 // Function returns + if we need to increase, - if we need to decrease.

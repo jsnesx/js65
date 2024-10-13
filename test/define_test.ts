@@ -1,20 +1,26 @@
-import {describe, it} from 'std/testing/bdd.ts';
-import chai from 'chai';
-import {Define} from '/src/define.ts';
-import {Token} from '/src/token.ts';
-import * as Tokens from '/src/token.ts';
-import {Tokenizer} from '/src/tokenizer.ts';
-import * as util from '/src/util.ts';
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+import {describe, it, expect} from 'bun:test';
+import {Define} from '../src/define.ts';
+import {Token} from '../src/token.ts';
+import * as Tokens from '../src/token.ts';
+import {Tokenizer} from '../src/tokenizer.ts';
+import * as util from '../src/util.ts';
 
 const [_] = [util];
-const expect = chai.expect;
 
 describe('Define', function() {
 
   async function testExpand(define: string, input: string, output: string,
                       extra?: string) {
     const defTok = await tok(define);
-    const defName = defTok[1] || expect.fail('no name');
+    const defName = defTok[1];
+    expect(defName).toBeTruthy(); // no name
     const def = Define.from(defTok);
     const tokens = await tok(input);
     // TODO - handle this better...
@@ -25,11 +31,11 @@ describe('Define', function() {
         break;
       }
     }
-    expect(found).to.not.equal(-1);
+    expect(found).not.toBe(-1);
     const overflow = def.expand(tokens, found);
-    expect(overflow).to.be.ok;
-    expect(tokens.map(strip)).to.eql(await tok(output));
-    expect(overflow!.map(ts => ts.map(strip))).to.eql(extra ? await toks(extra) : []);
+    expect(overflow).toBeTruthy();
+    expect(tokens.map(strip)).toEqual(await tok(output));
+    expect(overflow!.map(ts => ts.map(strip))).toEqual(extra ? await toks(extra) : []);
   }
 
   describe('with no parameters', function() {
@@ -147,7 +153,7 @@ describe('Define', function() {
 
     it('should fail on parenthesized calls with too many args', async function() {
       const define = Define.from(await tok('.define foo(a, b) [a:b]'));
-      expect(define.expand(await tok('foo(1, 2, 3)'), 0)).to.not.be.ok;
+      expect(define.expand(await tok('foo(1, 2, 3)'), 0)).toBeFalsy();
     });
 
     // TODO - is it possible to make an invalid call???
@@ -168,12 +174,12 @@ describe('Define', function() {
 
     it('should fail on empty undelimited argument', async function() {
       const define = Define.from(await tok('.define foo {a b} [a:b]'));
-      expect(define.expand(await tok('foo bar'), 0)).to.not.be.ok;      
+      expect(define.expand(await tok('foo bar'), 0)).toBeFalsy();      
     });
 
     it('should fail on missing delimiter', async function() {
       const define = Define.from(await tok('.define foo {a,b} [a:b]'));
-      expect(define.expand(await tok('foo bar baz qux'), 0)).to.not.be.ok;      
+      expect(define.expand(await tok('foo bar baz qux'), 0)).toBeFalsy();      
     });
 
     it('should capture entire group for undelimited arg', function() {
@@ -227,7 +233,7 @@ describe('Define', function() {
 
     it('should not expand .eol if not at end of line', async function() {
       const define = Define.from(await tok('.define foo {a b c} [a:b:c] .eol a:c'));
-      expect(define.expand(await tok('foo bar baz qux not_eol'), 0)).to.not.be.ok;      
+      expect(define.expand(await tok('foo bar baz qux not_eol'), 0)).toBeFalsy();      
     });
   });
 

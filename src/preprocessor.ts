@@ -1,8 +1,15 @@
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import {Define} from './define.ts';
-import {Expr} from './expr.ts';
+import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import {Macro} from './macro.ts';
-import {Token} from './token.ts'
+import type { Token } from './token.ts';
 import * as Tokens from './token.ts';
 import {TokenStream} from './tokenstream.ts';
 

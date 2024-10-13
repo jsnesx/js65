@@ -1,16 +1,18 @@
-import {describe, it} from 'std/testing/bdd.ts';
-import chai from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import {Preprocessor} from '/src/preprocessor.ts';
-import * as Tokens from '/src/token.ts';
-import {TokenStream} from '/src/tokenstream.ts';
-import {Tokenizer} from '/src/tokenizer.ts';
-import * as util from '/src/util.ts';
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+import {describe, it, expect} from 'bun:test';
+import {Preprocessor} from '../src/preprocessor.ts';
+import * as Tokens from '../src/token.ts';
+import {TokenStream} from '../src/tokenstream.ts';
+import {Tokenizer} from '../src/tokenizer.ts';
+import * as util from '../src/util.ts';
 
 const [_] = [util];
-
-const expect = chai.expect;
-chai.use(chaiAsPromised);
 
 describe('Preprocessor', function() {
 
@@ -25,7 +27,7 @@ describe('Preprocessor', function() {
     for (let line = await preprocessor.next(); line; line = await preprocessor.next()) {
       out.push(line.map(Tokens.name).join(' '));
     }
-    expect(out).to.eql(want);
+    expect(out).toEqual(want);
   }
 
   function testError(lines: string[], msg: RegExp) {
@@ -35,7 +37,7 @@ describe('Preprocessor', function() {
     // deno-lint-ignore no-explicit-any
     const preprocessor = new Preprocessor(toks, {} as any);
     expect((async () => { while (await preprocessor.next()); })())
-        .to.be.rejectedWith(Error, msg);
+        .rejects.toThrow(msg);
   }
 
   describe('pass-through', function() {

@@ -1,8 +1,15 @@
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
-import { Expr } from './expr.ts';
+import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
-import { Chunk, Module, OverwriteMode, Segment, Substitution, Symbol } from './module.ts';
+import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';

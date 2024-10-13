@@ -1,9 +1,15 @@
-import base64 from 'base64';
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+
 import { Cpu } from './cpu.ts';
-import { Expr } from './expr.ts';
+import { type Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import * as mod from './module.ts';
-import {Token} from './token.ts'
+import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { IntervalSet, assertNever } from './util.ts';
@@ -1198,7 +1204,7 @@ export class Assembler {
   parseByteStr(tokens: Token[]): Array<number> {
     const bytestr = Tokens.expectString(tokens[1]);
     Tokens.expectEol(tokens[2]);
-    const buf = base64.toArrayBuffer(bytestr);
+    const buf = Buffer.from(bytestr);
     return Array.from(new Uint8Array(buf));
   }
 

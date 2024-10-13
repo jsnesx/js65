@@ -1,3 +1,10 @@
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
@@ -6,8 +13,7 @@ import { Preprocessor } from './preprocessor.ts';
 import { clean, smudge } from './smudge.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream } from './tokenstream.ts';
-import { Module, ModuleZ } from "./module.ts";
-import base64 from 'base64';
+import { type Module, ModuleZ } from "./module.ts";
 
 export interface CompileOptions {
   files: string[],
@@ -128,7 +134,7 @@ export class Cli {
         const module = JSON.stringify(modules[0], (k, v) => {
           if (k === "data" && typeof v === "object") {
             // v == Uint8Array
-            return base64.fromArrayBuffer(v);
+            return v.toString('base64');
           }
           return v;
         }, "  ");

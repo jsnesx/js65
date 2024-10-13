@@ -1,7 +1,12 @@
 
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import { z } from 'zod';
 import { ExprZ } from './expr.ts';
-import { base64 } from 'base64';
 
 
 // export interface Substitution {
@@ -65,7 +70,7 @@ const ChunkNumZ = BaseChunk.extend({
 });
 
 const ChunkZ = BaseChunk.extend({
-  data: z.string().transform((s) => new Uint8Array(base64.toArrayBuffer(s)))
+  data: z.string().transform((s: string) => new Uint8Array(Buffer.from(s, 'base64')))
 });
 
 

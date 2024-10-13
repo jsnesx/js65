@@ -1,11 +1,13 @@
-import {describe, it} from 'std/testing/bdd.ts';
-import { crypto } from 'std/crypto/crypto.ts';
 
-import chai from 'chai';
-import {Cli} from '/src/cli.ts'
-import { toHexString } from "/src/util.ts";
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
 
-const expect = chai.expect;
+import {describe, it, expect} from 'bun:test';
+import {Cli} from '../src/cli.ts'
+import { toHexString } from "../src/util.ts";
 
 describe('CLI', function() {
   describe('STDIN', function() {
@@ -24,10 +26,10 @@ function make(input: string, output: string) : Cli {
       return await Promise.resolve(path + filename);
     },
     fsReadString: async (_filename: string) => {
-      return await Promise.resolve([input, undefined]);
+      return await Promise.resolve(input);
     },
     fsReadBytes: async (_filename: string) => {
-      return await Promise.resolve([new TextEncoder().encode(input), undefined]);
+      return await Promise.resolve(new TextEncoder().encode(input));
     },
     fsWriteString: async (_filename: string, data: string) => {
       output.concat(data);
@@ -42,7 +44,11 @@ function make(input: string, output: string) : Cli {
       // unused for now
       return await Promise.resolve(undefined);
     },
-    cryptoSha1: (data: Uint8Array) => crypto.subtle.digestSync('SHA-1', data),
-    exit: (code: number) => Deno.exit(code),
+    cryptoSha1: (data: Uint8Array) => {
+      const hasher = new Bun.CryptoHasher("sha1");
+      hasher.update(data);
+      return hasher.digest().buffer as ArrayBuffer;
+    },
+    exit: (code: number) => process.exit(code),
   });
 }

@@ -1,17 +1,19 @@
-import {describe, it} from 'std/testing/bdd.ts';
-import chai from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import {Macro} from '/src/macro.ts';
-import {Token} from '/src/token.ts';
-import {Tokenizer} from '/src/tokenizer.ts';
-import * as util from '/src/util.ts';
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+import {describe, it, expect} from 'bun:test';
+import {Macro} from '../src/macro.ts';
+import {Token} from '../src/token.ts';
+import {Tokenizer} from '../src/tokenizer.ts';
+import * as util from '../src/util.ts';
 
 const [_] = [util];
 
 const nullId = {next() { return 1; }};
-
-const expect = chai.expect;
-chai.use(chaiAsPromised);
 
 describe('Macro', function() {
 
@@ -20,7 +22,7 @@ describe('Macro', function() {
     const mac = await Macro.from(...source(toks));
     const code = (await tok(input))[0];
     expect(mac.expand(code, nullId).map(ts => ts.map(strip)))
-        .to.eql(await tok(output));
+        .toEqual(await tok(output));
   }
 
   describe('with no parameters', function() {
@@ -32,7 +34,7 @@ describe('Macro', function() {
     it('should fail if parameters given', function() {
       expect(testExpand('.macro foo\n  .bar baz\n.endmacro',
                               'foo bar', ''))
-          .to.be.rejectedWith(Error, /Too many macro parameters: bar/);
+          .rejects.toThrowError(/Too many macro parameters: bar/);
     });
   });
   describe('with one parameter', function() {
@@ -49,7 +51,7 @@ describe('Macro', function() {
     it('should fail if two parameters given', function() {
       expect(testExpand('.macro foo a\n  .bar a\n.endmacro',
                               'foo bar, baz', ''))
-          .to.be.rejectedWith(Error, /Too many macro parameters: baz/);
+          .rejects.toThrowError(/Too many macro parameters: baz/);
     });
   });
 });
@@ -62,7 +64,7 @@ function strip(t: Token): Token {
 
 async function tok(str: string): Promise<Token[][]> {
   const t = new Tokenizer(str);
-  const out = [];
+  const out : Token[][] = [];
   for (let line = await t.next(); line; line = await t.next()) {
     out.push(line.map(strip));
   }

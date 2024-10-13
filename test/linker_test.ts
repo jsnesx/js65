@@ -1,11 +1,16 @@
-import {describe, it} from 'std/testing/bdd.ts';
-import chai from 'chai';
-import {Expr} from '/src/expr.ts';
-import {Linker} from '/src/linker.ts';
-import * as util from '/src/util.ts';
+
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+import {describe, it, expect} from 'bun:test';
+import {Expr} from '../src/expr.ts';
+import {Linker} from '../src/linker.ts';
+import * as util from '../src/util.ts';
 
 const [_] = [util];
-const expect = chai.expect;
 
 const link = Linker.link;
 
@@ -29,7 +34,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).to.eql([[50, [2, 4, 6, 8]]]);
+    expect([...link(m).chunks()]).toEqual([[50, [2, 4, 6, 8]]]);
   });
 
   it('should link two simple .org chunks', function() {
@@ -46,7 +51,7 @@ describe('Linker', function() {
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
     expect([...link(m).chunks()])
-        .to.eql([[50, [2, 4, 6, 8]], [150, [3, 5, 7, 9]]]);
+        .toEqual([[50, [2, 4, 6, 8]], [150, [3, 5, 7, 9]]]);
   });
 
   it('should link .org chunks into the right segment', function() {
@@ -66,7 +71,7 @@ describe('Linker', function() {
       ],
     };
     expect([...link(m).chunks()])
-        .to.eql([[50, [2, 4, 6, 8]], [1050, [1, 2, 3, 4]]]);
+        .toEqual([[50, [2, 4, 6, 8]], [1050, [1, 2, 3, 4]]]);
   });
 
   it('should fill in a same-chunk offset expression', function() {
@@ -79,7 +84,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).to.eql([[50, [2, 4, 103, 8]]]);
+    expect([...link(m).chunks()]).toEqual([[50, [2, 4, 103, 8]]]);
   });
 
   it('should fill in an offset from a symbol', function() {
@@ -103,7 +108,7 @@ describe('Linker', function() {
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
     expect([...link(m).chunks()])
-        .to.eql([[50, [2, 4, 201, 8]], [150, [1, 3, 102, 7]]]);
+        .toEqual([[50, [2, 4, 201, 8]], [150, [1, 3, 102, 7]]]);
   });
 
   it('should handle arithmetic expressions', function() {
@@ -117,7 +122,7 @@ describe('Linker', function() {
       symbols: [{expr: op('+', num(80), off(0, 1))}],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).to.eql([[50, [2, 4, 181, 8]]]);
+    expect([...link(m).chunks()]).toEqual([[50, [2, 4, 181, 8]]]);
   });
 
   it('should support multiple segments', function() {
@@ -139,7 +144,7 @@ describe('Linker', function() {
                  {name: 'data', size: 0x400, offset: 0x0410, memory: 0x8000}],
     };
     expect([...link(m).chunks()])
-        .to.eql([[0x0110, [2, 4, 0x26, 0x81]], [0x0533, [1, 1, 2, 3, 5]]]);
+        .toEqual([[0x0110, [2, 4, 0x26, 0x81]], [0x0533, [1, 1, 2, 3, 5]]]);
   });
 
   it('should relocate chunks', function() {
@@ -160,7 +165,7 @@ describe('Linker', function() {
       }],
     };
     expect([...link(m).chunks()])
-        .to.eql([[0x0210, [2, 4, 0x00, 0xc2, 1, 3, 0x02, 0xc2]]]);
+        .toEqual([[0x0210, [2, 4, 0x00, 0xc2, 1, 3, 0x02, 0xc2]]]);
   });
 
   it('should fail to relocate chunks with no free allocations', function() {
@@ -179,7 +184,7 @@ describe('Linker', function() {
         size: 0x400, offset: 0x0010, memory: 0xc000,
       }],
     };
-    expect(() => link(m)).to.throw(Error, /Could not find space/);
+    expect(() => link(m)).toThrow(/Could not find space/);
   });
 
   it('should choose an eligible segment for .reloc chunks', function() {
@@ -202,7 +207,7 @@ describe('Linker', function() {
       }],
     };
     expect([...link(m).chunks()])
-        .to.eql([[0, [2, 4, 0x02, 0x01]], [100, [1, 3, 5, 7]]]);
+        .toEqual([[0, [2, 4, 0x02, 0x01]], [100, [1, 3, 5, 7]]]);
   });
 
   it('should overlap segments with common bytes', function() {
@@ -227,7 +232,7 @@ describe('Linker', function() {
       }],
     };
     expect([...link(m).chunks()])
-        .to.eql([[0, [101, 0]], [100, [1, 3, 5, 7, 9]]]);
+        .toEqual([[0, [101, 0]], [100, [1, 3, 5, 7, 9]]]);
   });
 
   it('should share with existing data', function() {
@@ -252,7 +257,7 @@ describe('Linker', function() {
       }],
     };
     const patch = new Linker().base(base, 10).read(m).link();      
-    expect([...patch.chunks()]).to.eql([[5, [21, 0x80]]]);
+    expect([...patch.chunks()]).toEqual([[5, [21, 0x80]]]);
   });
 
   it('should .move existing data', function() {
@@ -277,7 +282,7 @@ describe('Linker', function() {
       }, {name: 'b', size: 40, offset: 0, memory: 0}],
     };
     const patch = new Linker().base(base, 10).read(m).link();
-    expect([...patch.chunks()]).to.eql([[150, [5, 7, 9, 1, 1, 3, 3]]]);
+    expect([...patch.chunks()]).toEqual([[150, [5, 7, 9, 1, 1, 3, 3]]]);
   });
 
   it('should .move existing data from an absolute offset', function() {
@@ -304,7 +309,7 @@ describe('Linker', function() {
       }, {name: 'b', size: 40, offset: 0, memory: 0}],
     };
     const patch = new Linker().base(base, 10).read(m).link();
-    expect([...patch.chunks()]).to.eql([[150, [5, 7, 9, 1, 1, 3, 3]]]);
+    expect([...patch.chunks()]).toEqual([[150, [5, 7, 9, 1, 1, 3, 3]]]);
   });
 
   it('should resolve bank bytes', function() {
@@ -333,7 +338,7 @@ describe('Linker', function() {
         free: [[0x8000, 0x8064]],
       }],
     };
-    expect([...link(m).chunks()]).to.eql([
+    expect([...link(m).chunks()]).toEqual([
       [0, [2, 4, 9, 0, 0x80, 8, 0, 0x80]],
       [100, [1, 3, 5, 7, 9]],
     ]);
@@ -363,7 +368,7 @@ describe('Linker', function() {
       }],
     };
     expect([...link(m1, m2).chunks()])
-        .to.eql([[0, [3, 5, 101]], [100, [1, 2, 3]]]);
+        .toEqual([[0, [3, 5, 101]], [100, [1, 2, 3]]]);
   });
 
   it('should check a passing assert', function() {
@@ -376,7 +381,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'a', size: 100, offset: 100, memory: 100}],
     };
-    expect([...link(m).chunks()]).to.eql([[100, [2, 4, 6, 8]]]);
+    expect([...link(m).chunks()]).toEqual([[100, [2, 4, 6, 8]]]);
   });
 
   it('should check a failing assert', function() {
@@ -389,7 +394,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'a', size: 100, offset: 100, memory: 100}],
     };
-    expect(() => link(m)).to.throw(Error, /Assertion failed/);
+    expect(() => link(m)).toThrow(/Assertion failed/);
   });
 
   it('should support circular references', function() {
@@ -409,6 +414,6 @@ describe('Linker', function() {
       }],
     };
     expect([...link(m).chunks()])
-        .to.eql([[0, [2, 0x04, 0x80, 4, 3, 5, 0x00, 0x80, 7, 9]]]);
+        .toEqual([[0, [2, 0x04, 0x80, 4, 3, 5, 0x00, 0x80, 7, 9]]]);
   });
 });

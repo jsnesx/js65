@@ -1,14 +1,19 @@
 
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 import * as Exprs from './expr.ts';
-import {Token} from './token.ts'
-import {Tokenizer, Options} from './tokenizer.ts'
+import {type Token} from './token.ts'
+import {Tokenizer, type Options} from './tokenizer.ts'
 import * as Tokens from './token.ts';
 // TODO: import raw text files seems painful right now.
 import * as Common from './macpack/common.ts'
 import * as Generic from './macpack/generic.ts'
 import * as Longbranch from './macpack/longbranch.ts'
 import * as Nes2header from './macpack/nes2header.ts'
-import base64 from 'base64';
 
 type Frame = [Tokens.Source|undefined, Token[][]];
 
@@ -28,7 +33,7 @@ export class TokenStream implements Tokens.Source {
   
   constructor(
     readonly readFile?: (path: string, filename: string) => Promise<string>,
-    readonly readFileBinary?: (path: string, filename: string) => Promise<ArrayBuffer>,
+    readonly readFileBinary?: (path: string, filename: string) => Promise<Uint8Array>,
     readonly opts?: Options) {}
 
   async loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>) {
@@ -89,9 +94,9 @@ export class TokenStream implements Tokens.Source {
             }
             // TODO this is a little jank, but we base64 encode the binary file for now
             // so it can be loaded faster without parsing later.
-            const binary = await this.loadFile<ArrayBuffer>(path, this.readFileBinary);
+            const binary = await this.loadFile<Uint8Array>(path, this.readFileBinary);
             const end = length !== undefined ? offset + length : undefined;
-            const bin = base64.fromArrayBuffer(binary.slice(offset, end));
+            const bin = Buffer.from(binary.slice(offset, end)).toString('base64');
             const out : Token[] = [
               Tokens.BYTESTR,
               {token: 'str', str: bin}

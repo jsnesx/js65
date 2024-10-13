@@ -1,0 +1,41 @@
+{
+  "name": "js65",
+  "version": "0.0.0",
+  "main": "target/debug/js/patch.js",
+  "scripts": {
+    "tsc-watch": "tsc --watch",
+    "flycheck": "elisp/flycheck-tsc-watch",
+    "watch": "nodemon -e '*' --watch src/ --exec 'make web-debug'",
+    "unit": "npm run mocha test/**/*.ts test/*.ts",
+    "mocha": "TS_NODE_PROJECT=./tsconfig.test.json mocha -r ts-node/register",
+    "test": "npm run unit && make all && test/test_cli.sh",
+    "clean": "rm -rf target src/js/**/flycheck_*",
+    "checkout": "sh scripts/update.sh out",
+    "checkin": "sh scripts/update.sh in",
+    "merge": "sh scripts/update.sh merge"
+  },
+  "bin": {
+    "analyze": "dist/js/analyze.js",
+    "js65": "target/release/bin/js65",
+    "cryr": "target/release/bin/cryr"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shicks/js65.git"
+  },
+  "author": "Stephen Hicks",
+  "license": "MPL-2.0",
+  "bugs": {
+    "url": "https://github.com/shicks/js65/issues"
+  },
+  "homepage": "https://github.com/shicks/js65#readme",
+  "devDependencies": {
+    "@types/bun": "^1.1.6",
+    "typescript": "^5.2.2",
+    "typescript-language-server": "^2.1.0"
+  },
+  "description": "",
+  "dependencies": {
+    "zod": "^3.23.8"
+  }
+}
