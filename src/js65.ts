@@ -47,6 +47,10 @@ export async function main(args: string[]) {
   await cli.run(args);
 }
 
+(async () => {
+  await main(Bun.argv.slice(2));
+})();
+
 // await main(Deno.args);
 
 // Deno.bench("building z2disassembly", async() => {

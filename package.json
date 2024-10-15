@@ -4,15 +4,8 @@
   "main": "target/debug/js/patch.js",
   "scripts": {
     "tsc-watch": "tsc --watch",
-    "flycheck": "elisp/flycheck-tsc-watch",
-    "watch": "nodemon -e '*' --watch src/ --exec 'make web-debug'",
-    "unit": "npm run mocha test/**/*.ts test/*.ts",
-    "mocha": "TS_NODE_PROJECT=./tsconfig.test.json mocha -r ts-node/register",
-    "test": "npm run unit && make all && test/test_cli.sh",
-    "clean": "rm -rf target src/js/**/flycheck_*",
-    "checkout": "sh scripts/update.sh out",
-    "checkin": "sh scripts/update.sh in",
-    "merge": "sh scripts/update.sh merge"
+    "exe": "bun build --compile --minify --sourcemap --bytecode ./src/js65.ts --outfile ./build/js65",
+    "lib": "bun build --entrypoints ./src/cli.ts --minify --sourcemap --outdir ./build"
   },
   "bin": {
     "analyze": "dist/js/analyze.js",
