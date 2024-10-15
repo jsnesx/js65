@@ -29,10 +29,12 @@ jobs:
       - name: Run Test Cases
         run: |
           bun test
-      - name: Build releases
+      - name: Build Bun release
         run: |
           bun run exe
-          bun run cli
+      - name: Build CJS cli library
+        run: |
+          bun run lib
       - name: Upload bun artifact
         uses: actions/upload-artifact@v3
         with:
