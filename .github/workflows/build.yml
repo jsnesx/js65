@@ -23,6 +23,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
+      - name: Setup repo and install deps
+        run: |
+          bun install
       - name: Run Test Cases
         run: |
           bun test
