@@ -4,7 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-
+import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { type Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
@@ -1204,7 +1204,7 @@ export class Assembler {
   parseByteStr(tokens: Token[]): Array<number> {
     const bytestr = Tokens.expectString(tokens[1]);
     Tokens.expectEol(tokens[2]);
-    const buf = Buffer.from(bytestr);
+    const buf = new Base64().decode(bytestr);
     return Array.from(new Uint8Array(buf));
   }
 

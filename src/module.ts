@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { Base64 } from './base64.ts';
 import { ExprZ } from './expr.ts';
 
 
@@ -70,7 +71,7 @@ const ChunkNumZ = BaseChunk.extend({
 });
 
 const ChunkZ = BaseChunk.extend({
-  data: z.string().transform((s: string) => new Uint8Array(Buffer.from(s, 'base64')))
+  data: z.string().transform((s: string) => new Base64().decode(s))
 });
 
 

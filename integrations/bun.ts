@@ -4,9 +4,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-// Standard 
 
-import { Cli } from './cli.ts';
+// Compiler frontend for using the bun single file exe
+
+import { Cli } from '../src/cli.ts';
 
 const { resolve } = require('path');
 const { readdir } = require('fs').promises;
@@ -35,11 +36,6 @@ const cli = new Cli({
       }
     }
   },
-  cryptoSha1: (data: Uint8Array) => {
-    const hasher = new Bun.CryptoHasher("sha1");
-    hasher.update(data);
-    return hasher.digest().buffer as ArrayBuffer;
-  },
   exit: (code: number) => process.exit(code),
 });
 
@@ -50,22 +46,3 @@ export async function main(args: string[]) {
 (async () => {
   await main(Bun.argv.slice(2));
 })();
-
-// await main(Deno.args);
-
-// Deno.bench("building z2disassembly", async() => {
-//   await cli.run([
-//     "-o", "build/test.nes",
-//     "-IC:\\dev\\z2disassembly\\inc\\",
-//     "-IC:\\dev\\z2disassembly\\src\\",
-//     "C:\\dev\\z2disassembly\\src\\cfg.s",
-//     "C:\\dev\\z2disassembly\\src\\prg0.s",
-//     "C:\\dev\\z2disassembly\\src\\prg1.s",
-//     "C:\\dev\\z2disassembly\\src\\prg2.s",
-//     "C:\\dev\\z2disassembly\\src\\prg3.s",
-//     "C:\\dev\\z2disassembly\\src\\prg4.s",
-//     "C:\\dev\\z2disassembly\\src\\prg5.s",
-//     "C:\\dev\\z2disassembly\\src\\prg6.s",
-//     "C:\\dev\\z2disassembly\\src\\prg7.s"
-//   ]);
-// });

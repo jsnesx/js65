@@ -6,6 +6,7 @@
  */
 
 import * as Exprs from './expr.ts';
+import { Base64 } from './base64.ts'
 import {type Token} from './token.ts'
 import {Tokenizer, type Options} from './tokenizer.ts'
 import * as Tokens from './token.ts';
@@ -96,7 +97,7 @@ export class TokenStream implements Tokens.Source {
             // so it can be loaded faster without parsing later.
             const binary = await this.loadFile<Uint8Array>(path, this.readFileBinary);
             const end = length !== undefined ? offset + length : undefined;
-            const bin = Buffer.from(binary.slice(offset, end)).toString('base64');
+            const bin = new Base64().encode(binary.slice(offset, end));
             const out : Token[] = [
               Tokens.BYTESTR,
               {token: 'str', str: bin}

@@ -14,6 +14,7 @@ import { clean, smudge } from './smudge.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream } from './tokenstream.ts';
 import { type Module, ModuleZ } from "./module.ts";
+import { sha1 } from "./sha1"
 
 export interface CompileOptions {
   files: string[],
@@ -32,7 +33,6 @@ export interface Callbacks {
   fsWriteString: (filename: string, data: string) => Promise<void>,
   fsWriteBytes: (filename: string, data: Uint8Array) => Promise<void>,
   fsWalk: (path: string, action: (filename: string) => Promise<boolean>) => Promise<void>,
-  cryptoSha1: (data: Uint8Array) => ArrayBuffer,
   exit: (code: number) => void,
 }
 
@@ -273,7 +273,7 @@ export class Cli {
           const data = await this.callbacks.fsReadBytes(filename);
           // if (err) this.usage(5, [err]);
           const sha = Array.from(
-              new Uint8Array(this.callbacks.cryptoSha1(data!)),
+              new Uint8Array(sha1(data!)),
               x => x.toString(16).padStart(2, '0')).join('');
           if (sha === shaTag) {
             fullRom = Uint8Array.from(data!);

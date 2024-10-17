@@ -1,6 +1,6 @@
 {
     "compilerOptions": {
-        "allowJs": false,
+        "allowJs": true,
         "target": "es2022",
         "inlineSourceMap": true,
         "inlineSources": true,

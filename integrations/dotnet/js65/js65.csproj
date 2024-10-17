@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net8.0-browser</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+
+    <PackageId>js65.interop</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Steve Hicks</Authors>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <EmbeddedResource Include="$(SolutionDir)/../../build/libassembler.js" />
+    <PackageReference Include="Microsoft.ClearScript.V8" Version="7.4.5" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-browser'">
+    <Compile Remove="ClearScriptEngine.cs" />
+    <PackageReference Include="Microsoft.JSInterop" Version="8.0.4" />
+    <WasmExtraFilesToDeploy Include="$(SolutionDir)/../../build/libassembler.js" TargetPath="js65/libassembler.js" />
+  </ItemGroup>
+</Project>

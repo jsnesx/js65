@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "main": "target/debug/js/patch.js",
   "scripts": {
-    "tsc-watch": "tsc --watch",
-    "exe": "bun build --compile --minify --sourcemap --bytecode ./src/js65.ts --outfile ./build/js65",
-    "lib": "bun build --entrypoints ./src/cli.ts --minify --sourcemap --outdir ./build"
+    "cli-watch": "bun --watch ./src/cli.ts",
+    "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/bun-js65",
+    "lib": "bun build --entrypoints ./src/libassembler.ts --minify --sourcemap=linked --outdir ./build"
   },
   "bin": {
     "analyze": "dist/js/analyze.js",
