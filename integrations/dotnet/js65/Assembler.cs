@@ -4,8 +4,27 @@ using System.Dynamic;
 
 namespace js65;
 
-public class Assembler
+public record Js65Callbacks
 {
+    public const string STDIN = "//stdin";
+    public const string STDOUT = "//stdout";
+    public Func<string, string, Task<string>> FileResolve;
+    public Func<string, Task<string>> FileReadText;
+    public Func<string, Task<byte[]>> FileReadBinary;
+}
+
+public record Js65Options
+{
+    public IEnumerable<string> includePaths = new List<string>();
+    public bool lineContinuations = false;
+    public bool numberSeperators = false;
+    public bool skipSourceAnnotations = false;
+}
+
+public abstract class Assembler(Js65Options? options = null, Js65Callbacks? callbacks = null)
+{
+    public Js65Options Options = options ?? new Js65Options();
+    public Js65Callbacks? Callbacks = callbacks;
     public List<AsmModule> Modules { get; } = new();
 
     public void Add(AsmModule asmModule)
@@ -19,14 +38,13 @@ public class Assembler
         Add(mod);
         return mod;
     }
-}
 
-public static class AssemblerExtensions
-{
-    public static List<List<ExpandoObject>> AsExpando(this Assembler a)
+    public abstract Task<byte[]?> Apply(byte[] rom);
+
+    protected List<List<ExpandoObject>> IntoExpandoObject()
     {
         var modules = new List<List<ExpandoObject>>();
-        foreach (var module in a.Modules)
+        foreach (var module in Modules)
         {
             var outmodule = new List<ExpandoObject>();
             foreach (var dict in module.Actions)

@@ -8,8 +8,13 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\js65.csproj" />
       <ProjectReference Include="..\js65\js65.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="example.s">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
     </ItemGroup>
 
 </Project>

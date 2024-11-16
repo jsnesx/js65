@@ -30,7 +30,12 @@ vanillaRom[0x10 + 0x1e000 + 5] = 0x60; // rts
 
 // The assembler is a C# container for the command list that will be passed to the assembler.
 // You can have as many of these as you want, and apply them to the rom in whatever order you want.
-var asm = new Assembler();
+var asm = new ClearScriptEngine {
+  Options = {
+    includePaths = ["./"],
+    lineContinuations = true,
+  },
+};
 
 
 // Lets pretend the game is using the MMC5 mapper with 16kb banking
@@ -150,18 +155,25 @@ ApplyDamage:
 
 """, "custom_patches.s");
 
+asm.Module().Code("""
+; Include a file as an example. This file just has a single constant in it
+.include "example.s"
+
+.segment "PRG0"
+.org $8089
+.byte CONSTANT_DATA
+
+""", "test_include.s");
 
 // And thats all for this demo for now! lets patch the rom and see that our custom code appears where we expect it.
 
 // The engine is what provides our javascript implementation used to run the assembler.
 // ClearScript provides a cross platform desktop JS engine powered by V8, so its pretty fast and cross platform.
-var engine = new ClearScriptEngine();
 // Apply all the modules in this assembler to the ROM. This will compile and link all of the modules together and
 // overwrite the data in the rom provided
 
-var romBytes = await engine.Apply(vanillaRom.ToArray(), asm);
+var romBytes = await asm.Apply(vanillaRom.ToArray());
 
 Console.WriteLine("Test patch to call the new armor subtract function");
 Console.WriteLine($"sbc,x instruction should be patched to jsr ($20): ${romBytes[0x10 + 0x0005]:x2}");
-  
-
+Console.WriteLine($"included file should write constant ($89) at address $8089: ${romBytes[0x10 + 0x0089]:x2}");

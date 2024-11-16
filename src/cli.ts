@@ -46,6 +46,14 @@ class Arguments {
   includePaths : string[] = [];
 }
 
+const DEBUG_PRINT = false;
+
+const DEBUG = (...args : any) => {
+  if (DEBUG_PRINT) {
+    console.log(args);
+  }
+}
+
 export class Cli {
   public static readonly STDIN : string = "//stdin";
   public static readonly STDOUT : string = "//stdout";
@@ -58,7 +66,7 @@ export class Cli {
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (arg === '-h' || arg === '--help') {
-        console.log("test help");
+        DEBUG("test help");
         this.usage(0);
       } else if (arg === '-o' || arg === '--outfile') {
         if (out.outfile) this.usage();
@@ -96,11 +104,11 @@ export class Cli {
   }
 
   public async run(argv: string[]) {
-    console.log(`run: argv ${argv}`);
+    DEBUG(`run: argv ${argv}`);
 
     const args = this.parseArgs(argv);
 
-    console.log(`parsed args: ${JSON.stringify(args)}`);
+    DEBUG(`parsed args: ${JSON.stringify(args)}`);
     if (args.files.length === 0) {
       return this.usage(1, [new Error("No input files provided")]);
     }
@@ -115,7 +123,7 @@ export class Cli {
       args.outfile = `${filename}${(args.compileonly) ? ".o" : ".nes"}`;
     }
     if (args.outfile == "--stdout") args.outfile = Cli.STDOUT;
-    console.log(`outfile: ${args.outfile}`);
+    DEBUG(`outfile: ${args.outfile}`);
 
     try {
       if (args.op !== undefined) {
@@ -128,7 +136,7 @@ export class Cli {
       const modules = await this.assemble(args);
       
       if (args.compileonly) {
-        console.log("stopping before linking cause --compileonly");
+        DEBUG("stopping before linking cause --compileonly");
         // there should only be one module at this point
 
         const module = JSON.stringify(modules[0], (k, v) => {
@@ -142,7 +150,9 @@ export class Cli {
         return;
       }
 
-      this.link(args, modules);
+      const linked = await this.link(args, modules);
+      
+      await this.callbacks.fsWriteBytes(args.outfile, linked);
     } catch (e) {
       this.printerrors(e);
       throw e;
@@ -151,11 +161,11 @@ export class Cli {
 
 
   async assemble(args: Arguments) {
-    console.log("calling assemble");
+    DEBUG("calling assemble");
 
     const modules : Module[] = [];
     for (const file of args.files) {
-      console.log(`building asm file ${file}`);
+      DEBUG(`building asm file ${file}`);
       const asm = new Assembler(Cpu.P02);
       const opts = {
         includePaths: [
@@ -166,63 +176,50 @@ export class Cli {
       };
       const readfile = async (path: string, filename: string) => {
         const fullpath = await this.callbacks.fsResolve(path, filename);
-        console.log(`resolved ${fullpath}`);
-        // if (err) throw err;
+        DEBUG(`resolved ${fullpath}`);
         return await this.callbacks.fsReadString(fullpath);
-          // .then((result) => {
-          //   const [str, err] = result;
-          //   if (err) throw err;
-          //   return str!;
-          // });
       }
       const readfilebin = async (path: string, filename: string) => {
         const fullpath = await this.callbacks.fsResolve(path, filename);
-        console.log(`resolved ${fullpath}`);
-        // if (err) throw err;
+        DEBUG(`resolved ${fullpath}`);
         return await this.callbacks.fsReadBytes(fullpath);
-          // .then((result) => {
-            // return result;
-            // const [str, err] = result;
-            // if (err) throw err;
-            // return str!;
-          // });
       }
       const toks = new TokenStream(readfile, readfilebin, opts);
 
-      console.log("about to read asm file input");
+      DEBUG("about to read asm file input");
       const str = await this.callbacks.fsReadString(file);
       // if (err) throw err;
       
-      console.log("attempting to parse module");
+      DEBUG("attempting to parse module");
       // try to parse the input as a Module first to see if its already compiled
       try {
         const obj = JSON.parse(str!);
-        console.log(`parsed json: ${JSON.stringify(obj)}`);
+        DEBUG(`parsed json: ${JSON.stringify(obj)}`);
         const parsedModule = await ModuleZ.safeParseAsync(obj);
         if (parsedModule.success) {
-          console.log("successfully parsed as a module");
+          DEBUG("successfully parsed as a module");
           // if it parsed as a module, just add it to the module list
           modules.push(parsedModule.data);
           continue;
         } else {
           // if it doesn't parse as a module, treat it as source code
-          console.log(`not a module because zod parse failed ${parsedModule.error}`);
+          DEBUG(`not a module because zod parse failed ${parsedModule.error}`);
         }
       } catch (err) {
         // if it doesn't parse as a module, treat it as source code
-        console.log(`not a module because json parse failed ${err}`);
+        DEBUG(`not a module because json parse failed ${err}`);
       }
       const tokenizer = new Tokenizer(str!, file, opts);
-      console.log("tokenization complete");
+      DEBUG("tokenization complete");
       // toks.enter(Tokens.concat(tokenizer));
       toks.enter(tokenizer);
-      console.log("running preprocessor");
+      DEBUG("running preprocessor");
       const pre = new Preprocessor(toks, asm);
       // const appliedPreprocessor = await pre.tokens();
-      console.log("applying tokens to assembly");
+      DEBUG("applying tokens to assembly");
       // const pre2 = new Preprocessor(toks, asm);
       await asm.tokens(pre);
-      console.log("assembly complete, writing module");
+      DEBUG("assembly complete, writing module");
       const module = asm.module();
       module.name = file;
       modules.push(module);
@@ -232,43 +229,44 @@ export class Cli {
 
   async link(args: Arguments, modules: Module[]) {
     const linker = new Linker({ target: args.target });
-    console.log("starting linking");
+    DEBUG("starting linking");
     //linker.base(this.prg, 0);
     for (const module of modules) {
-      console.log(`reading module: ${module.name}`);
+      DEBUG(`reading module: ${module.name}`);
       linker.read(module);
     }
-    console.log("about to run linking");
+    DEBUG("about to run linking");
     const out = linker.link();
-    console.log("linking complete, writing data to the output array");
+    DEBUG("linking complete, writing data to the output array");
     const data = new Uint8Array(out.length);
     out.apply(data);
-    console.log("writing data to disk");
-    await this.callbacks.fsWriteBytes(args.outfile, data);
+    return data;
+    // console.log("writing data to disk");
+    // await this.callbacks.fsWriteBytes(args.outfile, data);
   }
 
   async smudge(args: Arguments) {
-    console.log(`op ${args.op}`);
+    DEBUG(`op ${args.op}`);
     if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
-    console.log("test8");
+    DEBUG("test8");
     const src = await this.callbacks.fsReadString(args.files[0]);
     // if (err) this.usage(3, [err]);
-    console.log("test9");
+    DEBUG("test9");
     let fullRom: Uint8Array|undefined;
     if (args.rom) {
-      console.log("test10");
+      DEBUG("test10");
       fullRom = await this.callbacks.fsReadBytes(args.rom);
       // if (err) this.usage(4, [err]);
     } else {
-      console.log("test11");
+      DEBUG("test11");
       const match = /smudge sha1 ([0-9a-f]{40})/.exec(src!);
-      console.log("test12");
+      DEBUG("test12");
       if (match === undefined) this.usage(1, [new Error('no sha1 tag, must specify rom')]);
-      console.log("test13");
+      DEBUG("test13");
       const shaTag = match![1];
-      console.log("test14");
+      DEBUG("test14");
       this.callbacks.fsWalk('.', async(filename) => {
-        console.log("test callback");
+        DEBUG("test callback");
         if (/\.nes$/.test(filename)) {
           const data = await this.callbacks.fsReadBytes(filename);
           // if (err) this.usage(5, [err]);
@@ -283,11 +281,11 @@ export class Cli {
         return false;
       }
       );
-      console.log("test15");
+      DEBUG("test15");
       if (!fullRom) this.usage(1, [new Error(`could not find rom with sha ${shaTag}`)]);
     }
 
-    console.log("test16");
+    DEBUG("test16");
     // TODO - read the header properly
     const prg = fullRom!.subarray(0x10, 0x40010);
     await this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));

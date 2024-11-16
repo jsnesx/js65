@@ -29,6 +29,9 @@ const MACPACK: Map<string, string> = new Map(
   ]
 );
 
+export interface ReadFileCallback { (path: string, filename: string) : Promise<string> }
+export interface ReadFileBinaryCallback { (path: string, filename: string) : Promise<Uint8Array> }
+
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
   

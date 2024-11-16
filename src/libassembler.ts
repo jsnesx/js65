@@ -6,19 +6,22 @@
  */
 
 import { Base64 } from './base64.ts'
-import { Assembler } from "./assembler.js"
-import { Cpu } from "./cpu.js"
-import { Linker } from "./linker.js"
-import { Preprocessor } from "./preprocessor.js"
-import { Tokenizer } from "./tokenizer.js"
-import { TokenStream } from "./tokenstream.js"
+import { Assembler } from "./assembler.ts"
+import type { Callbacks } from "./cli.ts"
+import { Cpu } from "./cpu.ts"
+import { Linker } from "./linker.ts"
+import { Preprocessor } from "./preprocessor.ts"
+import type { Options } from "./tokenizer.ts"
+import { Tokenizer } from "./tokenizer.ts"
+import type { ReadFileCallback, ReadFileBinaryCallback } from "./tokenstream.ts"
+import { TokenStream } from "./tokenstream.ts"
+
 
 interface AnyMap { [key: string]: any; }
-async function processAction(a: Assembler, action: AnyMap) {
+async function processAction(a: Assembler, action: AnyMap, opts: Options, rf: ReadFileCallback, rfb: ReadFileBinaryCallback) {
     switch (action["action"]) {
         case "code": {
-            const opts = {lineContinuations: true};
-            const toks = new TokenStream(undefined, undefined, opts);
+            const toks = new TokenStream(rf, rfb, opts);
             const tokenizer = new Tokenizer(action["code"], action["name"], opts);
             toks.enter(tokenizer);
             const pre = new Preprocessor(toks, a);
@@ -67,20 +70,31 @@ async function processAction(a: Assembler, action: AnyMap) {
         }
     }
 }
-export async function compile(modules: AnyMap[][]|string, romdata: Uint8Array|string) : Promise<Uint8Array|string> {
-    // debugger;
+
+export async function compile(modules: AnyMap[][]|string, romdata: Uint8Array|string, opts: Options, callbacks: Callbacks) : Promise<Uint8Array|string> {
+    debugger;
     let mods : AnyMap[][];
     if (typeof modules === 'string') {
         mods = JSON.parse(modules);
     } else {
         mods = modules;
     }
+    
+    const readfile = async (path: string, filename: string) => {
+        const fullpath = await callbacks.fsResolve(path, filename);
+        return await callbacks.fsReadString(fullpath);
+    }
+    const readfilebin = async (path: string, filename: string) => {
+        const fullpath = await callbacks.fsResolve(path, filename);
+        return await callbacks.fsReadBytes(fullpath);
+    }
+
     // Assemble all of the modules
     const assembled = [];
     for (const module of mods) {
         let a = new Assembler(Cpu.P02);
         for (const action of module) {
-            await processAction(a, action);
+            await processAction(a, action, opts, readfile, readfilebin);
         }
         assembled.push(a);
     }

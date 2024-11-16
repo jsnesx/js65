@@ -19,9 +19,9 @@ namespace js65;
 internal partial class AssmeblerContext : JsonSerializerContext;
 
 [SupportedOSPlatform("browser")]
-public partial class BrowserJsEngine : IAsmEngine
+public partial class BrowserJsEngine : Assembler
 {
-    [JSImport("compile", "libassembler.js")]
+    [JSImport("compile", "js65.libassembler.js")]
     [return: JSMarshalAs<JSType.Promise<JSType.String>>]
     private static partial Task<string> Compile(string asm, string rom);
 
@@ -32,10 +32,10 @@ public partial class BrowserJsEngine : IAsmEngine
         module = JSHost.ImportAsync("js65.libassembler.js", "js65/libassembler.js");
     }
     
-    public async Task<byte[]?> Apply(byte[] rom, Assembler asmModule)
+    public override async Task<byte[]?> Apply(byte[] rom)
     {
         _ = await module;
-        var expando = asmModule.AsExpando();
+        var expando = IntoExpandoObject();
         var json = JsonSerializer.Serialize(expando, AssmeblerContext.Default.ListListExpandoObject);
         var b64Bytes = Convert.ToBase64String(rom);
         var output = await Compile(json, b64Bytes);
