@@ -1,4 +1,0 @@
-﻿<Solution>
-  <Project Path="example\example.csproj" Type="Classic C#" />
-  <Project Path="js65\js65.csproj" />
-</Solution>

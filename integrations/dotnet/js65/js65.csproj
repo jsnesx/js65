@@ -6,22 +6,33 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-
+    <OutputType>Library</OutputType>
     <PackageId>js65.interop</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.0-alpha</Version>
     <Authors>Steve Hicks</Authors>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <EmbeddedResource Include="$(SolutionDir)/../../build/libassembler.js" />
+    <Compile Remove="BrowserEngine.cs" />
+    <EmbeddedResource Include="$(SolutionDir)/build/libassembler.js" />
     <PackageReference Include="Microsoft.ClearScript.V8" Version="7.4.5" />
-    <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
-    <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
-    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Pack="true" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Pack="true" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.4.5" Pack="true" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-browser'">
     <Compile Remove="ClearScriptEngine.cs" />
-    <PackageReference Include="Microsoft.JSInterop" Version="8.0.4" />
-    <WasmExtraFilesToDeploy Include="$(SolutionDir)/../../build/libassembler.js" TargetPath="js65/libassembler.js" />
+    <PackageReference Include="Microsoft.JSInterop" Version="8.0.11" />
+    <WasmExtraFilesToDeploy Include="$(SolutionDir)/build/libassembler.js" TargetPath="js65/libassembler.js" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath=""/>
+    <None Include="LICENSE" Pack="true" PackagePath=""/>
+    <PackageReference Include="NuGetizer" Version="1.2.3">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 </Project>
