@@ -7,7 +7,6 @@
 
 import { Base64 } from './base64.ts'
 import { Assembler } from "./assembler.ts"
-import type { Callbacks } from "./cli.ts"
 import { Cpu } from "./cpu.ts"
 import { Linker } from "./linker.ts"
 import { Preprocessor } from "./preprocessor.ts"
@@ -71,22 +70,22 @@ async function processAction(a: Assembler, action: AnyMap, opts: Options, rf: Re
     }
 }
 
-export async function compile(modules: AnyMap[][]|string, romdata: Uint8Array|string, opts: Options, callbacks: Callbacks) : Promise<Uint8Array|string> {
-    debugger;
-    let mods : AnyMap[][];
-    if (typeof modules === 'string') {
-        mods = JSON.parse(modules);
-    } else {
-        mods = modules;
+export async function compile(
+        modules: AnyMap[][]|string,
+        romdata: Uint8Array|string,
+        options: Options|string,
+        readTextFileCb: (path: string, filename: string) => string,
+        readBinFileCb: (path: string, filename: string) => Uint8Array|string
+    ) : Promise<Uint8Array|string> {
+
+    const mods : AnyMap[][] = (typeof modules === 'string') ? JSON.parse(modules) : modules;
+    const opts : Options = (typeof options === 'string') ? JSON.parse(options) : options;
+
+    async function readTextWrapper(path: string, filename: string) {
+        return Promise.resolve(readTextFileCb(path, filename));
     }
-    
-    const readfile = async (path: string, filename: string) => {
-        const fullpath = await callbacks.fsResolve(path, filename);
-        return await callbacks.fsReadString(fullpath);
-    }
-    const readfilebin = async (path: string, filename: string) => {
-        const fullpath = await callbacks.fsResolve(path, filename);
-        return await callbacks.fsReadBytes(fullpath);
+    async function readBinaryWrapper(path: string, filename: string) {
+        return Promise.resolve(readBinFileCb(path, filename));
     }
 
     // Assemble all of the modules
@@ -94,17 +93,13 @@ export async function compile(modules: AnyMap[][]|string, romdata: Uint8Array|st
     for (const module of mods) {
         let a = new Assembler(Cpu.P02);
         for (const action of module) {
-            await processAction(a, action, opts, readfile, readfilebin);
+            await processAction(a, action, opts, readTextWrapper, readBinaryWrapper);
         }
         assembled.push(a);
     }
     
-    let rombytes : Uint8Array;
-    if (typeof romdata === 'string') {
-        rombytes = new Base64().decode(romdata);
-    } else {
-        rombytes = romdata;
-    }
+    const rombytes : Uint8Array = (typeof romdata === 'string') ? new Base64().decode(romdata) : romdata;
+    
     // And now link them together
     const linker = new Linker();
     linker.base(rombytes, 0);

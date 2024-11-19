@@ -13,21 +13,22 @@ const { resolve } = require('path');
 const { readdir } = require('fs').promises;
 
 const cli = new Cli({
-  fsResolve: async (path: string, filename: string) => {
-    return await Promise.resolve(resolve(path, (filename === Cli.STDIN) ? '.' : filename));
+  fsReadString: async (path: string, filename: string) => {
+    const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
+    return new TextDecoder().decode((filename === Cli.STDIN) ? await Bun.stdin.bytes() : await Bun.file(fullpath).bytes());
   },
-  fsReadString: async (filename: string) => {
-    return new TextDecoder().decode((filename === Cli.STDIN) ? await Bun.stdin.bytes() : await Bun.file(filename).bytes());
+  fsReadBytes: async (path: string, filename: string) => {
+    const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
+    return (filename === Cli.STDIN) ? await Bun.stdin.bytes() : await Bun.file(fullpath).bytes();
   },
-  fsReadBytes: async (filename: string) => {
-    return (filename === Cli.STDIN) ? await Bun.stdin.bytes() : await Bun.file(filename).bytes();
-  },
-  fsWriteString: async (filename: string, data: string) => {
+  fsWriteString: async (path: string, filename: string, data: string) => {
+    const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
     const d = new TextEncoder().encode(data);
-    filename === Cli.STDOUT ? await Bun.write(Bun.stdout, d) : await Bun.write(filename, d);
+    filename === Cli.STDOUT ? await Bun.write(Bun.stdout, d) : await Bun.write(fullpath, d);
   },
-  fsWriteBytes: async (filename: string, data: Uint8Array) => {
-    filename === Cli.STDOUT ? await Bun.write(Bun.stdout, data) : await Bun.write(filename, data);
+  fsWriteBytes: async (path: string, filename: string, data: Uint8Array) => {
+    const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
+    filename === Cli.STDOUT ? await Bun.write(Bun.stdout, data) : await Bun.write(fullpath, data);
   },
   fsWalk: async (path: string, action: (filename: string) => Promise<boolean>) => {
     for await (const dir of readdir(path, {recursive: true})) {

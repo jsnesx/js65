@@ -14,37 +14,32 @@ namespace js65;
 public class ClearScriptEngine : Assembler
 {
     private readonly V8ScriptEngine _engine;
-    private bool _initializedLibAsm;
 
-    public ClearScriptEngine(Js65Options? options = null, bool useFileSystemCallbacks = true) : base(options)
+    public ClearScriptEngine(Js65Options? options = null, bool useFileSystemCallbacks = true, bool debugJavascript = false) : base(options)
     {
-        _initializedLibAsm = false;
-        _engine = new V8ScriptEngine();
         // If you need to debug the javascript, add these flags and connect to the debugger through vscode.
         // follow this tutorial for how https://microsoft.github.io/ClearScript/Details/Build.html#_Debugging_with_ClearScript_2
-        // _engine = new V8ScriptEngine(V8ScriptEngineFlags.EnableDebugging | V8ScriptEngineFlags.EnableRemoteDebugging | V8ScriptEngineFlags.AwaitDebuggerAndPauseOnStart);
+        var debugFlags = debugJavascript
+            ? V8ScriptEngineFlags.EnableDebugging | V8ScriptEngineFlags.EnableRemoteDebugging |
+              V8ScriptEngineFlags.AwaitDebuggerAndPauseOnStart
+            : 0;
+        _engine = new V8ScriptEngine(debugFlags);
 
         _engine.DocumentSettings.AccessFlags = DocumentAccessFlags.EnableAllLoading;
+        
+        // Load the js65 code from the embedded resources
+        var libassembler = ReadResource(Assembly.Load("js65"), "js65.libassembler.js");
+        _engine.DocumentSettings.AddSystemDocument("@system/libassembler", ModuleCategory.Standard,libassembler);
 
         // Setup the filesystem callbacks
         if (!useFileSystemCallbacks) return;
         Callbacks = new();
-        Callbacks.FileResolve = (basePath, relPath) =>
-            Task.FromResult(Path.GetFullPath(Path.Combine(basePath, relPath)));
-        Callbacks.FileReadText = LoadTextFileCallback;
-        Callbacks.FileReadBinary = LoadBinaryFileCallback;
+        Callbacks.OnFileReadText = LoadTextFileCallback;
+        Callbacks.OnFileReadBinary = LoadBinaryFileCallback;
     }
     
     public override async Task<byte[]?> Apply(byte[] rom)
     {
-        // This initialization code needs to happen Async so it can't happen in the constructor
-        if (!_initializedLibAsm)
-        {
-            var libassembler = await ReadResourceAsync(Assembly.Load("js65"), "js65.libassembler.js");
-            _engine.DocumentSettings.AddSystemDocument("@system/libassembler", ModuleCategory.Standard,libassembler);
-            _initializedLibAsm = true;
-        }
-        
         var data = (ITypedArray<byte>) _engine.Evaluate($"new Uint8Array({rom.Length});");
         data.WriteBytes(rom, 0, data.Length, 0);
         _engine.AddHostTypes(typeof(Task), typeof(Console), typeof(JavaScriptExtensions), typeof(Js65Callbacks), typeof(Js65Options));
@@ -52,11 +47,10 @@ public class ClearScriptEngine : Assembler
         _engine.AddHostObject("FileCallbacks", Callbacks);
         _engine.Script.romdata = data;
         _engine.Script.modules = IntoExpandoObject();
-
-        _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
+        await Task.Run(() => {
+            _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
 import { compile } from '@system/libassembler'
 
-debugger;
 let opts = {
     includePaths: [...Options.includePaths],
     lineContinuations: !!Options.lineContinuations,
@@ -64,63 +58,36 @@ let opts = {
     skipSourceAnnotations: !!Options.skipSourceAnnotations
 };
 
-async function ReadString(filename) {
-    if (FileCallbacks !== null && FileCallbacks.FileReadText !== null) {
-        let cb = FileCallbacks.FileReadText(filename);
-        return await cb.ToPromise();
-    }
-    return Promise.reject();
-}
-
-async function ReadBytes(filename) {
-    if (FileCallbacks !== null && FileCallbacks.FileReadText !== null) {
-        let cb = FileCallbacks.FileReadText(filename);
-        return await cb.ToPromise();
-    }
-    return Promise.reject();
-}
-
-async function Resolve(path, filename) {
-    if (FileCallbacks !== null && FileCallbacks.FileResolve !== null) {
-        let cb = FileCallbacks.FileResolve(path, filename);
-        return await cb.ToPromise();
-    }
-    return Promise.reject();
-}
-
-let callbacks = {
-    fsReadString: ReadString,
-    fsReadBytes: ReadBytes,
-    fsResolve: Resolve
-};
-
-compile(modules, romdata, opts, callbacks);
+compile(modules, romdata, opts, FileCallbacks.OnFileReadText, FileCallbacks.OnFileReadBinary);
 """);
+        });
         var outdata = new byte[rom.Length];
         data.ReadBytes(0, (ulong)outdata.Length, outdata, 0);
         return outdata;
     }
 
-    private static async Task<string> ReadResourceAsync(Assembly assembly, string name)
+    private static string ReadResource(Assembly assembly, string name)
     {
         // Format: "{Namespace}.{Folder}.{filename}.{Extension}"
-        await using var stream = assembly.GetManifestResourceStream(name)!;
+        using var stream = assembly.GetManifestResourceStream(name)!;
         using StreamReader reader = new(stream);
-        return await reader.ReadToEndAsync();
+        return reader.ReadToEnd();
     }
 
-    private static async Task<string> LoadTextFileCallback(string fullPath)
+    private static string LoadTextFileCallback(string basePath, string relPath)
     {
+        var fullPath = Path.GetFullPath(Path.Combine(basePath, relPath));
         if (!File.Exists(fullPath))
             throw new FileNotFoundException($"Could not find file {fullPath}");
-        var data = await File.ReadAllTextAsync(fullPath);
+        var data = File.ReadAllText(fullPath);
         return data;
     }
-    private static async Task<byte[]> LoadBinaryFileCallback(string fullPath)
+    private static byte[] LoadBinaryFileCallback(string basePath, string relPath)
     {
+        var fullPath = Path.GetFullPath(Path.Combine(basePath, relPath));
         if (!File.Exists(fullPath))
             throw new FileNotFoundException($"Could not find file {fullPath}");
-        var data = await File.ReadAllBytesAsync(fullPath);
+        var data = File.ReadAllBytes(fullPath);
         return data;
     }
 }

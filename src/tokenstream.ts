@@ -30,22 +30,22 @@ const MACPACK: Map<string, string> = new Map(
 );
 
 export interface ReadFileCallback { (path: string, filename: string) : Promise<string> }
-export interface ReadFileBinaryCallback { (path: string, filename: string) : Promise<Uint8Array> }
+export interface ReadFileBinaryCallback { (path: string, filename: string) : Promise<Uint8Array|string> }
 
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
   
   constructor(
-    readonly readFile?: (path: string, filename: string) => Promise<string>,
-    readonly readFileBinary?: (path: string, filename: string) => Promise<Uint8Array>,
+    readonly readFile?: ReadFileCallback,
+    readonly readFileBinary?: ReadFileBinaryCallback,
     readonly opts?: Options) {}
 
-  async loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>) {
+  loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>) {
     const paths = this.opts?.includePaths ?? ['./'];
     for (const base of paths) {
       try {
         console.log(`gonna try including base: ${base} path: ${path}`);
-        return await action(base, path);
+        return action(base, path);
       } catch (_e) {
         // unable to load the files at that path.
       }
@@ -98,9 +98,14 @@ export class TokenStream implements Tokens.Source {
             }
             // TODO this is a little jank, but we base64 encode the binary file for now
             // so it can be loaded faster without parsing later.
-            const binary = await this.loadFile<Uint8Array>(path, this.readFileBinary);
+            // The data passed in from the call back can either be base64 encoded or a u8 array
+            // but because the user can slice the input, its easier to decode to bytes, then slice
+            // then reencode for now.
+            let inbytes = await this.loadFile<Uint8Array|string>(path, this.readFileBinary);
+            inbytes = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
+  
             const end = length !== undefined ? offset + length : undefined;
-            const bin = new Base64().encode(binary.slice(offset, end));
+            const bin = new Base64().encode(inbytes.slice(offset, end));
             const out : Token[] = [
               Tokens.BYTESTR,
               {token: 'str', str: bin}

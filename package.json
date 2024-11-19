@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "main": "target/debug/js/patch.js",
   "scripts": {
-    "cli-watch": "bun --watch ./src/cli.ts",
+    "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/bun-js65",
     "lib": "bun build --entrypoints ./src/libassembler.ts --minify --sourcemap=linked --outdir ./build"
   },

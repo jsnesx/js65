@@ -8,9 +8,10 @@ public record Js65Callbacks
 {
     public const string STDIN = "//stdin";
     public const string STDOUT = "//stdout";
-    public Func<string, string, Task<string>> FileResolve;
-    public Func<string, Task<string>> FileReadText;
-    public Func<string, Task<byte[]>> FileReadBinary;
+    public delegate string FileReadText(string basePath, string file);
+    public delegate byte[] FileReadBinary(string basePath, string file);
+    public FileReadText? OnFileReadText { get; set; }
+    public FileReadBinary? OnFileReadBinary { get; set; }
 }
 
 public record Js65Options

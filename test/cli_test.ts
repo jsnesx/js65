@@ -22,20 +22,17 @@ describe('CLI', function() {
 
 function make(input: string, output: string) : Cli {
   return new Cli({
-    fsResolve: async (path: string, filename: string) => {
-      return await Promise.resolve(path + filename);
-    },
-    fsReadString: async (_filename: string) => {
+    fsReadString: async (_path: string, _filename: string) => {
       return await Promise.resolve(input);
     },
-    fsReadBytes: async (_filename: string) => {
+    fsReadBytes: async (_path: string, _filename: string) => {
       return await Promise.resolve(new TextEncoder().encode(input));
     },
-    fsWriteString: async (_filename: string, data: string) => {
+    fsWriteString: async (_path: string, _filename: string, data: string) => {
       output.concat(data);
       return await Promise.resolve(undefined);
     },
-    fsWriteBytes: async (_filename: string, data: Uint8Array) => {
+    fsWriteBytes: async (_path: string, _filename: string, data: Uint8Array) => {
       console.log(`decoded: ${toHexString(data)}`);
       output.concat(new TextDecoder().decode(data));
       return await Promise.resolve(undefined);
@@ -43,11 +40,6 @@ function make(input: string, output: string) : Cli {
     fsWalk: async (_path: string, _action: (filename: string) => Promise<boolean>) => {
       // unused for now
       return await Promise.resolve(undefined);
-    },
-    cryptoSha1: (data: Uint8Array) => {
-      const hasher = new Bun.CryptoHasher("sha1");
-      hasher.update(data);
-      return hasher.digest().buffer as ArrayBuffer;
     },
     exit: (code: number) => process.exit(code),
   });

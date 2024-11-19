@@ -15,6 +15,7 @@ import { Tokenizer } from './tokenizer.ts';
 import { TokenStream } from './tokenstream.ts';
 import { type Module, ModuleZ } from "./module.ts";
 import { sha1 } from "./sha1"
+import { Base64 } from './base64.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -27,11 +28,10 @@ export interface HydrateOptions {
 }
 
 export interface Callbacks {
-  fsResolve: (path: string, filename: string) => Promise<string>,
-  fsReadString: (filename: string) => Promise<string>,
-  fsReadBytes: (filename: string) => Promise<Uint8Array>,
-  fsWriteString: (filename: string, data: string) => Promise<void>,
-  fsWriteBytes: (filename: string, data: Uint8Array) => Promise<void>,
+  fsReadString: (path: string, filename: string) => Promise<string>,
+  fsReadBytes: (path: string, filename: string) => Promise<Uint8Array|string>,
+  fsWriteString: (path: string, filename: string, data: string) => Promise<void>,
+  fsWriteBytes: (path: string, filename: string, data: Uint8Array) => Promise<void>,
   fsWalk: (path: string, action: (filename: string) => Promise<boolean>) => Promise<void>,
   exit: (code: number) => void,
 }
@@ -146,13 +146,13 @@ export class Cli {
           }
           return v;
         }, "  ");
-        await this.callbacks.fsWriteString(args.outfile, module);
+        await this.callbacks.fsWriteString("", args.outfile, module);
         return;
       }
 
       const linked = await this.link(args, modules);
       
-      await this.callbacks.fsWriteBytes(args.outfile, linked);
+      await this.callbacks.fsWriteBytes("", args.outfile, linked);
     } catch (e) {
       this.printerrors(e);
       throw e;
@@ -174,20 +174,20 @@ export class Cli {
         ],
         lineContinuations: true
       };
-      const readfile = async (path: string, filename: string) => {
-        const fullpath = await this.callbacks.fsResolve(path, filename);
-        DEBUG(`resolved ${fullpath}`);
-        return await this.callbacks.fsReadString(fullpath);
-      }
-      const readfilebin = async (path: string, filename: string) => {
-        const fullpath = await this.callbacks.fsResolve(path, filename);
-        DEBUG(`resolved ${fullpath}`);
-        return await this.callbacks.fsReadBytes(fullpath);
-      }
-      const toks = new TokenStream(readfile, readfilebin, opts);
+      // const readfile = async (path: string, filename: string) => {
+      //   const fullpath = await this.callbacks.fsResolve(path, filename);
+      //   DEBUG(`resolved ${fullpath}`);
+      //   return await this.callbacks.fsReadString(fullpath);
+      // }
+      // const readfilebin = async (path: string, filename: string) => {
+      //   const fullpath = await this.callbacks.fsResolve(path, filename);
+      //   DEBUG(`resolved ${fullpath}`);
+      //   return await this.callbacks.fsReadBytes(fullpath);
+      // }
+      const toks = new TokenStream(this.callbacks.fsReadString, this.callbacks.fsReadBytes, opts);
 
       DEBUG("about to read asm file input");
-      const str = await this.callbacks.fsReadString(file);
+      const str = await this.callbacks.fsReadString("", file);
       // if (err) throw err;
       
       DEBUG("attempting to parse module");
@@ -249,13 +249,14 @@ export class Cli {
     DEBUG(`op ${args.op}`);
     if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
     DEBUG("test8");
-    const src = await this.callbacks.fsReadString(args.files[0]);
+    const src = await this.callbacks.fsReadString("",args.files[0]);
     // if (err) this.usage(3, [err]);
     DEBUG("test9");
-    let fullRom: Uint8Array|undefined;
+    let fullRom: Uint8Array|undefined = undefined;
     if (args.rom) {
       DEBUG("test10");
-      fullRom = await this.callbacks.fsReadBytes(args.rom);
+      let inbytes = await this.callbacks.fsReadBytes("",args.rom);
+      fullRom = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
       // if (err) this.usage(4, [err]);
     } else {
       DEBUG("test11");
@@ -265,16 +266,18 @@ export class Cli {
       DEBUG("test13");
       const shaTag = match![1];
       DEBUG("test14");
-      this.callbacks.fsWalk('.', async(filename) => {
+      await this.callbacks.fsWalk('.', async(filename) => {
         DEBUG("test callback");
         if (/\.nes$/.test(filename)) {
-          const data = await this.callbacks.fsReadBytes(filename);
+          let inbytes = await this.callbacks.fsReadBytes("",filename);
+          inbytes = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
+
           // if (err) this.usage(5, [err]);
           const sha = Array.from(
-              new Uint8Array(sha1(data!)),
+              new Uint8Array(sha1(inbytes!)),
               x => x.toString(16).padStart(2, '0')).join('');
           if (sha === shaTag) {
-            fullRom = Uint8Array.from(data!);
+            fullRom = Uint8Array.from(inbytes!);
             return true;
           }
         }
@@ -288,7 +291,7 @@ export class Cli {
     DEBUG("test16");
     // TODO - read the header properly
     const prg = fullRom!.subarray(0x10, 0x40010);
-    await this.callbacks.fsWriteString(args.outfile, args.op!(src!, Cpu.P02, prg));
+    await this.callbacks.fsWriteString("", args.outfile, args.op!(src!, Cpu.P02, prg));
     // if (err) this.printerrors(err);
   }
 
