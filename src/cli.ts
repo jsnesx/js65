@@ -44,6 +44,7 @@ class Arguments {
   target = '';
   compileonly = false;
   includePaths : string[] = [];
+  patch : "ips" | "" = "";
 }
 
 const DEBUG_PRINT = false;
@@ -88,6 +89,8 @@ export class Cli {
         out.rom = arg.substring('--rom='.length);
       } else if (arg === '-I' || arg === '--include-dir') {
         out.includePaths.push(args[++i]);
+      } else if (arg === '--ips') {
+        out.patch = "ips";
       } else if (arg.startsWith('-I')) {
         out.includePaths.push(arg.substring('-I'.length));
       } else if (arg.startsWith('--include-dir')) {
@@ -113,16 +116,28 @@ export class Cli {
       return this.usage(1, [new Error("No input files provided")]);
     }
     
-    if (args.compileonly && args.files.length != 1) {
-      return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
+    if (args.compileonly) {
+      if (args.files.length != 1)
+        return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
+      else if (args.patch)
+        return this.usage(8, [new Error(`Cannot use --compileonly flag combined with --${args.patch}`)]);
     }
 
-    if (args.outfile.length === 0) {
+    if (args.outfile == "--stdout") {
+      args.outfile = Cli.STDOUT;
+    } else if (args.outfile.length === 0) {
       const name = (args.files[0] == Cli.STDIN) ? "stdin" : args.files[0];
       const filename = name.replace(/\.[^/.]+$/, "");
-      args.outfile = `${filename}${(args.compileonly) ? ".o" : ".nes"}`;
+      let ext = "";
+      if (args.compileonly)
+        ext = ".o";
+      else if (args.patch === "ips")
+        ext = ".ips";
+      else
+        ext = ".nes";
+
+        args.outfile = `${filename}${ext}`;
     }
-    if (args.outfile == "--stdout") args.outfile = Cli.STDOUT;
     DEBUG(`outfile: ${args.outfile}`);
 
     try {
@@ -230,7 +245,7 @@ export class Cli {
 
     DEBUG("starting linking");
     let data: string|Uint8Array|null = null;
-    if (args.rom) {
+    if (!args.patch && args.rom) {
       DEBUG(`reading ROM: ${args.rom}`);
       data = await this.callbacks.fsReadBytes("", args.rom);
       if (typeof data === "string") data = new Base64().decode(data);
@@ -246,8 +261,13 @@ export class Cli {
     const out = linker.link();
 
     DEBUG("linking complete, writing data to the output array");
-    if (!data) data = new Uint8Array(out.length);
-    out.apply(data);
+    if (args.patch == "ips") {
+      data = out.toIpsPatch();
+    } else {
+      if (!data) data = new Uint8Array(out.length);
+      out.apply(data);
+    }
+
     return data;
     // console.log("writing data to disk");
     // await this.callbacks.fsWriteBytes(args.outfile, data);
@@ -331,6 +351,7 @@ optional arguments:
   -o FILE/--output=FILE   Name of the file to write or --stdout. If not provided, writes to \`<filename>.nes\`
   -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
   -r FILE/--rom=FILE      Name of the file to use as a base onto which patches will be assembled.
+  --ips                   Produce an IPS patch rather than a complete binary. Cannot be used with --compileonly.
   -h/--help               Print this help text and exit.
 
 ===
