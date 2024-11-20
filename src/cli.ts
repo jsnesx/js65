@@ -68,21 +68,21 @@ export class Cli {
       if (arg === '-h' || arg === '--help') {
         DEBUG("test help");
         this.usage(0);
-      } else if (arg === '-o' || arg === '--outfile') {
+      } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
         if (out.outfile) this.usage();
         out.outfile = args[++i];
       } else if (arg === '-c' || arg === '--compileonly') {
         out.compileonly = true;
-      } else if (arg === '--output=') {
+      } else if (arg.startsWith('--output=')) {
         if (out.outfile) this.usage();
-        out.outfile = arg.substring('--rom='.length);
+        out.outfile = arg.substring('--output='.length);
       } else if (arg === 'rehydrate') {
         out.op = smudge;
       } else if (arg === 'dehydrate') {
         out.op = clean;
       } else if (arg === '--stdin') {
         out.files.push(Cli.STDIN);
-      } else if (arg === '--rom') {
+      } else if (arg === '-r' || arg === '--rom') {
         out.rom = args[++i];
       } else if (arg.startsWith('--rom=')) {
         out.rom = arg.substring('--rom='.length);
