@@ -12,29 +12,30 @@ import { toHexString } from "../src/util.ts";
 describe('CLI', function() {
   describe('STDIN', function() {
     it('should handle `lda #$03`', async function() {
-      const out = "";
-      await make(`lda #3`, out).run(["--target", "sim", "--stdin"]);
-      expect(out.length > 0, "output should not be empty");
-      console.log(`output ${out.length} data: ${out}`)
+      const [out, data] = await make(["--target", "sim", "--stdin"], `lda #3`);
+      expect(data.length, "output should not be empty").toBeGreaterThan(0);
+      console.log(`output ${out} data: ${toHexString(data)}`)
     });
   });
 });
 
-function make(input: string, output: string) : Cli {
-  return new Cli({
+async function make(args: string[], input: string, bytes: Uint8Array|null = null) : Promise<[string, Uint8Array]> {
+  const outParts: string[] = [];
+  const dataParts: Uint8Array[] = [];
+  const cli = new Cli({
     fsReadString: async (_path: string, _filename: string) => {
       return await Promise.resolve(input);
     },
     fsReadBytes: async (_path: string, _filename: string) => {
-      return await Promise.resolve(new TextEncoder().encode(input));
+      return await Promise.resolve(bytes ?? new Uint8Array(0));
     },
     fsWriteString: async (_path: string, _filename: string, data: string) => {
-      output.concat(data);
+      outParts.push(data);
       return await Promise.resolve(undefined);
     },
     fsWriteBytes: async (_path: string, _filename: string, data: Uint8Array) => {
       console.log(`decoded: ${toHexString(data)}`);
-      output.concat(new TextDecoder().decode(data));
+      dataParts.push(data)
       return await Promise.resolve(undefined);
     },
     fsWalk: async (_path: string, _action: (filename: string) => Promise<boolean>) => {
@@ -43,4 +44,9 @@ function make(input: string, output: string) : Cli {
     },
     exit: (code: number) => process.exit(code),
   });
+
+  await cli.run(args);
+  
+  const data = new Uint8Array(dataParts.map((p) => Array.from(p)).reduce((a, p) => a.concat(p), []));
+  return [outParts.join(), data];
 }
