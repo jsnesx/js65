@@ -662,7 +662,7 @@ describe('toHexString', function() {
   });
 });
 
-  describe('fromByteString' , function() {
+describe('fromByteString' , function() {
   it('should work', function() {
     expect(fromByteString('ABC123\0\'\"\\\n\r\t\xa9\xff'))
       .toEqual(fromHexString('41 42 43 31 32 33 00 27 22 5C 0A 0D 09 A9 FF'))
