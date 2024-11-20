@@ -21,6 +21,11 @@ describe('CLI', function() {
       expect(data, "output should be `A9 03 02 03`").toEqual(new Uint8Array([0xa9, 3, 2, 3]));
       console.log(`output ${out.length} data: ${out}`)
     });
+    it('test IPS patch generation', async function() {
+      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy", "--ips"], `lda #3`, new Uint8Array([0, 1, 2, 3]));
+      expect(data, "output should be `50 41 54 43 48 00 00 00 00 02 A9 03 45 4F 46`").toEqual(new Uint8Array([0x50, 0x41, 0x54, 0x43, 0x48, 0x00, 0x00, 0x00, 0x00, 0x02, 0xA9, 0x03, 0x45, 0x4F, 0x46]));
+      console.log(`output ${out.length} data: ${out}`)
+    });
   });
 });
 
