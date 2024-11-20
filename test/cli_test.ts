@@ -16,6 +16,11 @@ describe('CLI', function() {
       expect(data.length, "output should not be empty").toBeGreaterThan(0);
       console.log(`output ${out} data: ${toHexString(data)}`)
     });
+    it('should handle `lda #$03` on top of binary `00 01 02 03`', async function() {
+      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy"], `lda #3`, new Uint8Array([0, 1, 2, 3]));
+      expect(data, "output should be `A9 03 02 03`").toEqual(new Uint8Array([0xa9, 3, 2, 3]));
+      console.log(`output ${out.length} data: ${out}`)
+    });
   });
 });
 

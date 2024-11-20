@@ -131,8 +131,6 @@ export class Cli {
       }
 
       // assemble
-      if (args.rom) this.usage(1, [new Error('--rom only allowed with rehydrate or dehydrate')]);
-
       const modules = await this.assemble(args);
       
       if (args.compileonly) {
@@ -229,16 +227,26 @@ export class Cli {
 
   async link(args: Arguments, modules: Module[]) {
     const linker = new Linker({ target: args.target });
+
     DEBUG("starting linking");
-    //linker.base(this.prg, 0);
+    let data: string|Uint8Array|null = null;
+    if (args.rom) {
+      DEBUG(`reading ROM: ${args.rom}`);
+      data = await this.callbacks.fsReadBytes("", args.rom);
+      if (typeof data === "string") data = new Base64().decode(data);
+
+      linker.base(data, 0);
+    }
+
     for (const module of modules) {
       DEBUG(`reading module: ${module.name}`);
       linker.read(module);
     }
     DEBUG("about to run linking");
     const out = linker.link();
+
     DEBUG("linking complete, writing data to the output array");
-    const data = new Uint8Array(out.length);
+    if (!data) data = new Uint8Array(out.length);
     out.apply(data);
     return data;
     // console.log("writing data to disk");
@@ -322,6 +330,7 @@ positional arguments:
 optional arguments:
   -o FILE/--output=FILE   Name of the file to write or --stdout. If not provided, writes to \`<filename>.nes\`
   -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
+  -rom FILE/--rom=FILE    Name of the file to use as a base onto which patches will be assembled.
   -h/--help               Print this help text and exit.
 
 ===
