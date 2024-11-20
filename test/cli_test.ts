@@ -7,23 +7,27 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Cli} from '../src/cli.ts'
-import { toHexString } from "../src/util.ts";
+import { toHexViewString, toHexString, fromHexString, fromByteString } from "../src/util.ts";
 
 describe('CLI', function() {
   describe('STDIN', function() {
     it('should handle `lda #$03`', async function() {
       const [out, data] = await make(["--target", "sim", "--stdin"], `lda #3`);
       expect(data.length, "output should not be empty").toBeGreaterThan(0);
-      console.log(`output ${out} data: ${toHexString(data)}`)
+      console.log(`output ${out} data: ${toHexViewString(data)}`)
     });
-    it('should handle `lda #$03` on top of binary `00 01 02 03`', async function() {
-      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy"], `lda #3`, new Uint8Array([0, 1, 2, 3]));
-      expect(data, "output should be `A9 03 02 03`").toEqual(new Uint8Array([0xa9, 3, 2, 3]));
+
+    const bgHexStr = '00 01 02 03';
+    const bg = fromHexString(bgHexStr);
+    it('should handle `lda #$03` on top of binary `${bgHexStr}`', async function() {
+      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy"], `lda #3`, bg);
+      expect(data).toEqual(fromHexString('A9 03 02 03'));
       console.log(`output ${out.length} data: ${out}`)
     });
+
     it('test IPS patch generation', async function() {
-      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy", "--ips"], `lda #3`, new Uint8Array([0, 1, 2, 3]));
-      expect(data, "output should be `50 41 54 43 48 00 00 00 00 02 A9 03 45 4F 46`").toEqual(new Uint8Array([0x50, 0x41, 0x54, 0x43, 0x48, 0x00, 0x00, 0x00, 0x00, 0x02, 0xA9, 0x03, 0x45, 0x4F, 0x46]));
+      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy", "--ips"], `lda #3`, bg);
+      expect(data).toEqual(fromByteString('PATCH\0\0\0\0\x02\xa9\x03EOF'));
       console.log(`output ${out.length} data: ${out}`)
     });
   });
@@ -44,7 +48,7 @@ async function make(args: string[], input: string, bytes: Uint8Array|null = null
       return await Promise.resolve(undefined);
     },
     fsWriteBytes: async (_path: string, _filename: string, data: Uint8Array) => {
-      console.log(`decoded: ${toHexString(data)}`);
+      console.log(`decoded: ${toHexViewString(data)}`);
       dataParts.push(data)
       return await Promise.resolve(undefined);
     },

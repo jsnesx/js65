@@ -7,7 +7,7 @@
 
 import {describe, it, expect} from 'bun:test';
 import {BitSet, IntervalSet, SparseArray, SparseByteArray,
-        binaryInsert, binarySearch} from '../src/util.ts';
+        binaryInsert, binarySearch, toHexString, fromHexString, fromByteString} from '../src/util.ts';
 import * as util from '../src/util.ts';
 
 const [_] = [util];
@@ -637,5 +637,34 @@ describe('SparseArray', function() {
     it('should return -1 if the bounds are left of the match', function() {
       expect(a.search([2, 3, 4], 0, 3)).toBe(-1);
     });
+  });
+});
+
+describe('fromHexString', function() {
+  const res = [0, 0x40, 0x80, 0xc0, 0xff];
+  it('should work without spaces', function() {
+    expect([...fromHexString('004080c0FF')]).toEqual(res);
+  });
+  it('should work with spaces', function() {
+    expect([...fromHexString(' 0 0408 0c0 FF ')]).toEqual(res);
+  });
+});
+
+describe('toHexString', function() {
+  const spaceHexStr = '00 40 80 c0 ff';
+  const a = fromHexString(spaceHexStr);
+  it('should work without spacing', function() {
+    expect(toHexString(a)).toBe(spaceHexStr.replaceAll(' ', ''));
+  });
+
+  it('should work with spacing', function() {
+    expect(toHexString(a, true)).toBe(spaceHexStr);
+  });
+});
+
+  describe('fromByteString' , function() {
+  it('should work', function() {
+    expect(fromByteString('ABC123\0\'\"\\\n\r\t\xa9\xff'))
+      .toEqual(fromHexString('41 42 43 31 32 33 00 27 22 5C 0A 0D 09 A9 FF'))
   });
 });
