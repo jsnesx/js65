@@ -330,7 +330,7 @@ positional arguments:
 optional arguments:
   -o FILE/--output=FILE   Name of the file to write or --stdout. If not provided, writes to \`<filename>.nes\`
   -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
-  -rom FILE/--rom=FILE    Name of the file to use as a base onto which patches will be assembled.
+  -r FILE/--rom=FILE      Name of the file to use as a base onto which patches will be assembled.
   -h/--help               Print this help text and exit.
 
 ===
