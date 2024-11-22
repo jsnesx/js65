@@ -527,7 +527,6 @@ export class Assembler {
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
         case '.assert': return this.assert(...this.parseAssert(tokens));
         case '.segment': return this.segment(...this.parseSegmentList(tokens, 1, false));
-        case '.byt':
         case '.byte': return this.byte(...this.parseDataList(tokens, true));
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
         case '.res': return this.res(...this.parseResArgs(tokens));
