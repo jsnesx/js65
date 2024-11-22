@@ -31,7 +31,6 @@ export class Macro {
     let next: Token[]|undefined;
     while ((next = await source.next())) {
       if (Tokens.eq(next[0], Tokens.ENDMACRO)) return new Macro(params, lines);
-      if (Tokens.eq(next[0], Tokens.ENDMAC)) return new Macro(params, lines);
       lines.push(next);
     }
     throw new Error(`EOF looking for .endmacro: ${Tokens.nameAt(line[1])}`);

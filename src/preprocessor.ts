@@ -210,7 +210,6 @@ export class Preprocessor implements Tokens.Source {
       case '.concat': return this.parseArgs(line, i, 0, this.concat);
       case '.sprintf': return this.parseArgs(line, i, 0, this.sprintf);
       case '.cond': return this.parseArgs(line, i, 0, this.cond);
-      case '.def':
       case '.defined':
         return this.parseArgs(line, i, 1, this.defined);
       case '.definedsymbol':
@@ -378,9 +377,7 @@ export class Preprocessor implements Tokens.Source {
     '.else': ([cs]) => badClose('.if', cs),
     '.elseif': ([cs]) => badClose('.if', cs),
     '.endif': ([cs]) => badClose('.if', cs),
-    '.endmac': ([cs]) => badClose('.macro', cs),
     '.endmacro': ([cs]) => badClose('.macro', cs),
-    '.endrep': (line) => this.parseEndRepeat(line),
     '.endrepeat': (line) => this.parseEndRepeat(line),
     '.exitmacro': async ([, a]) => { noGarbage(a); this.stream.exit(); 
       return await Promise.resolve(); },
@@ -461,7 +458,6 @@ export class Preprocessor implements Tokens.Source {
       line = await this.stream.next() ?? fail(`.repeat with no .endrep`);
       if (Tokens.eq(line[0], Tokens.REPEAT)) depth++;
       if (Tokens.eq(line[0], Tokens.ENDREPEAT)) depth--;
-      if (Tokens.eq(line[0], Tokens.ENDREP)) depth--;
       lines.push(line);
     }
     this.repeats.push([lines, times, -1, ident]);

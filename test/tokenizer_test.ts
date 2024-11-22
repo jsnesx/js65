@@ -71,19 +71,19 @@ describe('Tokenizer.line', function() {
       [{token: 'ident', str: 'label'}, Tokens.COLON],
       [{token: 'ident', str: 'lda'},
        {token: 'op', str: '#'}, {token: 'num', num: 0x1f, width: 1}],
-      [{token: 'cs', str: '.org'}, {token: 'num', num: 0x1c, width: 1},
+      [{token: 'cs', str: '.org', rawStr: '.org'}, {token: 'num', num: 0x1c, width: 1},
        {token: 'op', str: ':'}, {token: 'num', num: 0x1234, width: 2}],
-      [{token: 'cs', str: '.ifdef'}, {token: 'ident', str: 'XX'}],
-      [{token: 'cs', str: '.define'}, {token: 'ident', str: 'YY'}],
-      [{token: 'cs', str: '.define'}, {token: 'ident', str: 'YYZ'},
+      [{token: 'cs', str: '.ifdef', rawStr: '.ifdef'}, {token: 'ident', str: 'XX'}],
+      [{token: 'cs', str: '.define', rawStr: '.define'}, {token: 'ident', str: 'YY'}],
+      [{token: 'cs', str: '.define', rawStr: '.define'}, {token: 'ident', str: 'YYZ'},
        {token: 'num', num: 0b10101100, width: 1}],
       [{token: 'ident', str: 'pla'}],
       [{token: 'ident', str: 'sta'},
        {token: 'lp'}, {token: 'num', num: 0x11, width: 1}, {token: 'rp'},
        {token: 'op', str: ','}, {token: 'ident', str: 'y'}],
-      [{token: 'cs', str: '.elseif'}, {token: 'ident', str: 'YY'}],
+      [{token: 'cs', str: '.elseif', rawStr: '.elseif'}, {token: 'ident', str: 'YY'}],
       [{token: 'ident', str: 'pha'}],
-      [{token: 'cs', str: '.endif'}],
+      [{token: 'cs', str: '.endif', rawStr: '.endif'}],
     ]);
   });
 
@@ -118,7 +118,7 @@ describe('Tokenizer.line', function() {
 
   it('should tokenize an .assert', async function() {
     expect(await tokenize('.assert * = $0c:$8000')).toEqual([
-      [{token: 'cs', str: '.assert'}, {token: 'op', str: '*'},
+      [{token: 'cs', str: '.assert', rawStr: '.assert'}, {token: 'op', str: '*'},
        {token: 'op', str: '='}, {token: 'num', num: 0x0c, width: 1},
        {token: 'op', str: ':'}, {token: 'num', num: 0x8000, width: 2}],
     ]);
@@ -199,6 +199,14 @@ describe('Tokenizer.line', function() {
       [{token: 'ident', str: 'bpl'},
        {token: 'ident', str: ':<<rts'}],
     ]);
+  });
+
+  it('should properly translate aliases', async function() {
+    for (const [rawStr, str] of Tokens.CS_TOKEN_ALIAS_MAP) {
+      expect(await tokenize(rawStr), rawStr).toEqual([
+        [{token: 'cs', str, rawStr}]
+      ]);
+    }
   });
 
   it('should fail to parse a bad hex number', function() {
