@@ -120,7 +120,7 @@ export const IMMEDIATE: Token = {token: 'op', str: '#'};
 export const ASSIGN: Token = {token: 'op', str: '='};
 
 // CS -> CS token alias map
-export const CS_TOKEN_ALIAS_MAP = new Map<string, string>([
+export const CS_TOKEN_ALIAS_MAP = new Map([
   // NOTE: Only synonymous so long as 16-bit is not supported
   ['.addr', '.word'],
   // NOTE: Only synonymous so long as js65's .bankbyte differs from ca65's
@@ -129,6 +129,7 @@ export const CS_TOKEN_ALIAS_MAP = new Map<string, string>([
   ['.def', '.defined'],
   ['.endmac', '.endmacro'],
   ['.endrep', '.endrepeat'],
+  ['.exitmac', '.exitmacro'],
   ['.mac', '.macro'],
   ['.undef', '.undefine'],
 ]);
