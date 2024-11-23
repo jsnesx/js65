@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-other:
+  integration:
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
@@ -54,10 +54,10 @@ jobs:
         with:
           name: ${{ matrix.os }}-bun
           path: |
-            build/js65
+            build/js65*
       - name: Upload nuget artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}-nuget
           path: |
-            build/*.nuget
+            build/*.nupkg
