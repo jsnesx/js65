@@ -47,11 +47,17 @@ jobs:
           ./integrations/dotnet/example/bin/Release/net8.0/example
       - name: Pack nuget
         run: |
-          dotnet pack -c Release --no-build --output .
+          dotnet pack -c Release --no-build --output build/
 
-      # - name: Upload bun artifact
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: ${{ matrix.os }}-bun
-      #     path: |
-      #       build/js65
+      - name: Upload bun artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-bun
+          path: |
+            build/js65
+      - name: Upload nuget artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-nuget
+          path: |
+            build/*.nuget
