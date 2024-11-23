@@ -86,7 +86,7 @@ export class Tokenizer implements Tokens.Source {
         this.buffer.token(/^((::)?[a-z_][a-z0-9_]*)+/i)) {
       return this.strTok('ident');
     }
-    if (this.buffer.token(/^\.[a-z]+/i)) return this.csStrTok();
+    if (this.buffer.token(/^\.[a-z]+/i)) return this.csTok();
     if (this.buffer.token(/^:([+-]\d+|[-+]+|<+rts|>*rts)/)) return this.strTok('ident');
     if (this.buffer.token(/^(:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/)) {
       return this.strTok('op');
@@ -128,7 +128,7 @@ export class Tokenizer implements Tokens.Source {
     return {token, str: this.buffer.group()!};
   }
 
-  private csStrTok(): Token {
+  private csTok(): Token {
     let grp = this.buffer.group()!;
     return {
       token: 'cs', 
