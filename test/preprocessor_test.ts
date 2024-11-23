@@ -354,6 +354,32 @@ describe('Preprocessor', function() {
            await instruction('z'));
     });
   });
+
+  it("should handle .ifp02", async function() {
+    await test([
+        '.ifp02',
+        'a',
+        '.else',
+        'b',
+        '.endif'
+      ],
+      await instruction('a')
+    );
+  });
+
+  it("should handle unsupported .ifps", async function() {
+    for (const code of '4510 816 c02 dtv sc02'.split(' ')) {
+      await test([
+          `.ifp${code}`,
+          'a',
+          '.else',
+          'b',
+          '.endif'
+        ],
+        await instruction('b')
+      );
+    }
+  });
   // TODO - test .local, both for symbols AND for defines.
 
   // TODO - tests for .if, make sure it evaluates numbers, etc...

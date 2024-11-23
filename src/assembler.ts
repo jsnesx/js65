@@ -546,6 +546,12 @@ export class Assembler {
         case '.out': return this.log('info', tokens);
         case '.warning': return this.log('warn', tokens);
         case '.error': return this.log('error', tokens);
+
+        case '.a8': 
+        case '.i8':
+        case '.p02':
+          // NOTE: Will need to be actually implemented if 16-bit CPU support is added.
+          return;
       }
       this.fail(`Unknown directive: ${Tokens.nameAt(tokens[0])}`);
     } finally {

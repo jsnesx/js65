@@ -86,7 +86,7 @@ export class Tokenizer implements Tokens.Source {
         this.buffer.token(/^((::)?[a-z_][a-z0-9_]*)+/i)) {
       return this.strTok('ident');
     }
-    if (this.buffer.token(/^\.[a-z]+/i)) return this.strTok('cs');
+    if (this.buffer.token(/^\.[a-z][a-z0-9]*/i)) return this.strTok('cs');
     if (this.buffer.token(/^:([+-]\d+|[-+]+|<+rts|>*rts)/)) return this.strTok('ident');
     if (this.buffer.token(/^(:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/)) {
       return this.strTok('op');
