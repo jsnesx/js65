@@ -19,7 +19,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
@@ -32,12 +36,22 @@ jobs:
       - name: Build Bun release
         run: |
           bun run exe
-      - name: Build CJS cli library
+      - name: Build integration library
         run: |
           bun run lib
-      - name: Upload bun artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: ${{ matrix.os }}-bun
-          path: |
-            build/js65
+      - name: Build example integrations
+        run: |
+          dotnet build -c Release
+      - name: Run example project
+        run: |
+          ./integrations/dotnet/example/bin/Release/net8.0/example
+      - name: Pack nuget
+        run: |
+          dotnet pack -c Release --no-build --output .
+
+      # - name: Upload bun artifact
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: ${{ matrix.os }}-bun
+      #     path: |
+      #       build/js65
