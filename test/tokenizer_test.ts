@@ -7,6 +7,7 @@
 
 import {describe, it, expect} from 'bun:test';
 
+import { Base64 } from '../src/base64.ts';
 import { Token } from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import {Tokenizer, Options} from '../src/tokenizer.ts';
@@ -102,6 +103,27 @@ describe('Tokenizer.line', function() {
       [{token: 'ident', str: 'sta'},
         {token: 'num', num: 0x04, width: 1}],
     ])
+  });
+
+  describe('.incbin', function() {
+    const dataStr = '0123456789';
+    const data = util.fromByteString(dataStr);
+
+    async function testIncBin(startOffs?: number, length?: number) {
+      let source = ['.incbin "something.bin"', startOffs, length].filter(x => x !== undefined).join(", ");
+      if (startOffs === undefined) startOffs = 0;
+      if (length === undefined) length = dataStr.length - startOffs;
+      
+      expect(await tokenstream(source, dataStr), source).toEqual([
+        [{token: 'cs', str: '.bytestr'}, {token: 'str', str: new Base64().encode(data.subarray(startOffs, startOffs! + length!))}],
+      ]);
+    };
+
+    it('should work with path only', async () => {return await testIncBin()});
+
+    it('should work with path and offset', async () => {return await testIncBin(3)});
+
+    it('should work with path, offset, and length', async () => {return await testIncBin(3, 4)});
   });
 
   it('should tokenize a label', async function() { 
