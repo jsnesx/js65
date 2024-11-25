@@ -5,12 +5,15 @@
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
     </PropertyGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\js65\js65.csproj" />
+      <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
+      <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
+      <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
     </ItemGroup>
-
     <ItemGroup>
       <Content Include="example.s">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

@@ -74,9 +74,11 @@ compile(modules, romdata, opts, FileCallbacks.OnFileReadText, FileCallbacks.OnFi
         return reader.ReadToEnd();
     }
 
+    private static string? ExeBasePath => Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location);
+
     private static string LoadTextFileCallback(string basePath, string relPath)
     {
-        var fullPath = Path.GetFullPath(Path.Combine(basePath, relPath));
+        var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, relPath));
         if (!File.Exists(fullPath))
             throw new FileNotFoundException($"Could not find file {fullPath}");
         var data = File.ReadAllText(fullPath);
@@ -84,7 +86,7 @@ compile(modules, romdata, opts, FileCallbacks.OnFileReadText, FileCallbacks.OnFi
     }
     private static byte[] LoadBinaryFileCallback(string basePath, string relPath)
     {
-        var fullPath = Path.GetFullPath(Path.Combine(basePath, relPath));
+        var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, relPath));
         if (!File.Exists(fullPath))
             throw new FileNotFoundException($"Could not find file {fullPath}");
         var data = File.ReadAllBytes(fullPath);

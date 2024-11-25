@@ -285,11 +285,16 @@ export class SparseByteArray extends SparseArray<number> {
   }
 
   toIpsHexString(): string {
-    return toHexString(this.toIpsPatch());
+    return toHexViewString(this.toIpsPatch());
   }
 }
 
-export function toHexString(data: Uint8Array) : string {
+export function toHexString(data: Uint8Array, spacing: boolean = false): string {
+  const spacer = spacing ? " " : "";
+  return [...data].map(x => x.toString(16).padStart(2, "0")).join(spacer);
+}
+
+export function toHexViewString(data: Uint8Array) : string {
   //return Array.from(this.toIpsPatch(), x => x.toString(16).padStart(2, '0'))
   // NOTE: this format is compatible with `xxd -r foo.ips.hex > foo.ips`
   const bytes = [...data];
@@ -300,6 +305,22 @@ export function toHexString(data: Uint8Array) : string {
                     .map(x => x.toString(16).padStart(2, '0'))].join(' '));
   }
   return lines.join('\n');
+}
+
+export function fromHexString(str: string): Uint8Array {
+  str = str.replaceAll(' ', '');
+  if (str.length % 2)
+    str = '0' + str;
+
+  const bytes: number[] = [];
+  for (let offs = 0; offs < str.length; offs += 2)
+    bytes.push(parseInt(str.substring(offs, offs + 2), 16));
+
+  return new Uint8Array(bytes);
+}
+
+export function fromByteString(str: string): Uint8Array {
+  return new Uint8Array([...str].map(x => x.charCodeAt(0)))
 }
 
 // deno-lint-ignore no-namespace

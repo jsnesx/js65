@@ -44,6 +44,7 @@ class Arguments {
   target = '';
   compileonly = false;
   includePaths : string[] = [];
+  patch : "ips" | "" = "";
 }
 
 const DEBUG_PRINT = false;
@@ -68,26 +69,28 @@ export class Cli {
       if (arg === '-h' || arg === '--help') {
         DEBUG("test help");
         this.usage(0);
-      } else if (arg === '-o' || arg === '--outfile') {
+      } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
         if (out.outfile) this.usage();
         out.outfile = args[++i];
       } else if (arg === '-c' || arg === '--compileonly') {
         out.compileonly = true;
-      } else if (arg === '--output=') {
+      } else if (arg.startsWith('--output=')) {
         if (out.outfile) this.usage();
-        out.outfile = arg.substring('--rom='.length);
+        out.outfile = arg.substring('--output='.length);
       } else if (arg === 'rehydrate') {
         out.op = smudge;
       } else if (arg === 'dehydrate') {
         out.op = clean;
       } else if (arg === '--stdin') {
         out.files.push(Cli.STDIN);
-      } else if (arg === '--rom') {
+      } else if (arg === '-r' || arg === '--rom') {
         out.rom = args[++i];
       } else if (arg.startsWith('--rom=')) {
         out.rom = arg.substring('--rom='.length);
       } else if (arg === '-I' || arg === '--include-dir') {
         out.includePaths.push(args[++i]);
+      } else if (arg === '--ips') {
+        out.patch = "ips";
       } else if (arg.startsWith('-I')) {
         out.includePaths.push(arg.substring('-I'.length));
       } else if (arg.startsWith('--include-dir')) {
@@ -113,16 +116,28 @@ export class Cli {
       return this.usage(1, [new Error("No input files provided")]);
     }
     
-    if (args.compileonly && args.files.length != 1) {
-      return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
+    if (args.compileonly) {
+      if (args.files.length != 1)
+        return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
+      else if (args.patch)
+        return this.usage(8, [new Error(`Cannot use --compileonly flag combined with --${args.patch}`)]);
     }
 
-    if (args.outfile.length === 0) {
+    if (args.outfile == "--stdout") {
+      args.outfile = Cli.STDOUT;
+    } else if (args.outfile.length === 0) {
       const name = (args.files[0] == Cli.STDIN) ? "stdin" : args.files[0];
       const filename = name.replace(/\.[^/.]+$/, "");
-      args.outfile = `${filename}${(args.compileonly) ? ".o" : ".nes"}`;
+      let ext = "";
+      if (args.compileonly)
+        ext = ".o";
+      else if (args.patch === "ips")
+        ext = ".ips";
+      else
+        ext = ".nes";
+
+        args.outfile = `${filename}${ext}`;
     }
-    if (args.outfile == "--stdout") args.outfile = Cli.STDOUT;
     DEBUG(`outfile: ${args.outfile}`);
 
     try {
@@ -131,8 +146,6 @@ export class Cli {
       }
 
       // assemble
-      if (args.rom) this.usage(1, [new Error('--rom only allowed with rehydrate or dehydrate')]);
-
       const modules = await this.assemble(args);
       
       if (args.compileonly) {
@@ -229,17 +242,32 @@ export class Cli {
 
   async link(args: Arguments, modules: Module[]) {
     const linker = new Linker({ target: args.target });
+
     DEBUG("starting linking");
-    //linker.base(this.prg, 0);
+    let data: string|Uint8Array|null = null;
+    if (!args.patch && args.rom) {
+      DEBUG(`reading ROM: ${args.rom}`);
+      data = await this.callbacks.fsReadBytes("", args.rom);
+      if (typeof data === "string") data = new Base64().decode(data);
+
+      linker.base(data, 0);
+    }
+
     for (const module of modules) {
       DEBUG(`reading module: ${module.name}`);
       linker.read(module);
     }
     DEBUG("about to run linking");
     const out = linker.link();
+
     DEBUG("linking complete, writing data to the output array");
-    const data = new Uint8Array(out.length);
-    out.apply(data);
+    if (args.patch == "ips") {
+      data = out.toIpsPatch();
+    } else {
+      if (!data) data = new Uint8Array(out.length);
+      out.apply(data);
+    }
+
     return data;
     // console.log("writing data to disk");
     // await this.callbacks.fsWriteBytes(args.outfile, data);
@@ -322,6 +350,8 @@ positional arguments:
 optional arguments:
   -o FILE/--output=FILE   Name of the file to write or --stdout. If not provided, writes to \`<filename>.nes\`
   -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
+  -r FILE/--rom=FILE      Name of the file to use as a base onto which patches will be assembled.
+  --ips                   Produce an IPS patch rather than a complete binary. Cannot be used with --compileonly.
   -h/--help               Print this help text and exit.
 
 ===

@@ -64,7 +64,8 @@ export interface GroupToken {
 }
 export interface StringToken {
   token: StringTok;
-  str: string;
+  str: string; // Canonical form for CS tokens
+  rawStr?: string; // Original possibly aliased form for CS tokens
   source?: SourceInfo;
 }
 export interface NumberToken {
@@ -95,9 +96,7 @@ export const DOT_EOL: Token = {token: 'cs', str: '.eol'};
 export const ELSE: Token = {token: 'cs', str: '.else'};
 export const ELSEIF: Token = {token: 'cs', str: '.elseif'};
 export const ENDIF: Token = {token: 'cs', str: '.endif'};
-export const ENDMAC: Token = {token: 'cs', str: '.endmac'};
 export const ENDMACRO: Token = {token: 'cs', str: '.endmacro'};
-export const ENDREP: Token = {token: 'cs', str: '.endrep'};
 export const ENDREPEAT: Token = {token: 'cs', str: '.endrepeat'};
 export const ENDPROC: Token = {token: 'cs', str: '.endproc'};
 export const ENDSCOPE: Token = {token: 'cs', str: '.endscope'};
@@ -119,6 +118,21 @@ export const COMMA: Token = {token: 'op', str: ','};
 export const STAR: Token = {token: 'op', str: '*'};
 export const IMMEDIATE: Token = {token: 'op', str: '#'};
 export const ASSIGN: Token = {token: 'op', str: '='};
+
+// CS -> CS token alias map
+export const CS_TOKEN_ALIAS_MAP = new Map([
+  // NOTE: Only synonymous so long as 16-bit is not supported
+  ['.addr', '.word'],
+  // NOTE: Only synonymous so long as js65's .bankbyte differs from ca65's
+  ['.bank', '.bankbyte'],
+  ['.byt', '.byte'],
+  ['.def', '.defined'],
+  ['.endmac', '.endmacro'],
+  ['.endrep', '.endrepeat'],
+  ['.exitmac', '.exitmacro'],
+  ['.mac', '.macro'],
+  ['.undef', '.undefine'],
+]);
 
 export function match(left: Token, right: Token): boolean {
   if (left.token !== right.token) return false;
@@ -154,7 +168,7 @@ export function name(arg: Token): string {
       return arg.str;
     case 'cs':
     case 'op':
-      return `${arg.str.toUpperCase()}`;
+      return `${(arg.rawStr ?? arg.str).toUpperCase()}`;
     default:
       assertNever(arg);
   }
@@ -418,7 +432,7 @@ function checkExhaustive(arg: never): never {
 export const TOKENFUNCS = new Set([
   '.blank',
   '.const',
-  '.defined', // .def ?
+  '.defined',
   '.left',
   '.match',
   '.mid',

@@ -1,11 +1,11 @@
 
-
 bin/
 obj/
 
 quickjs*/
 build/
 .idea/
+.vs/
 .vscode/
 .DS_Store
 
