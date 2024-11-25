@@ -254,4 +254,8 @@ describe('Tokenizer.line', function() {
   it('should fail to parse a bad string', function() {
     expect(tokenize('  "abc')).rejects.toThrow(/EOF while looking for "/);
   });
+
+  it('should not parse .2 as a directive', function() {
+    expect(tokenize(' .2')).rejects.toThrow(/Syntax error.*at input.s:1:1/s);
+  });
 });

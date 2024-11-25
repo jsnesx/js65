@@ -401,6 +401,13 @@ export class Preprocessor implements Tokens.Source {
         this.parseIf(this.env.constantSymbol(parseOneIdent(args, cs))),
     '.ifnconst': ([cs, ...args]) =>
         this.parseIf(!this.env.constantSymbol(parseOneIdent(args, cs))),
+    // NOTE: If support for any other CPUs is added, these will need to be un-stubbed.
+    '.ifp02': ([CSS, ...args]) => this.parseIf(true),
+    '.ifp4510': ([CSS, ...args]) => this.parseIf(false),
+    '.ifp816': ([CSS, ...args]) => this.parseIf(false),
+    '.ifpc02': ([CSS, ...args]) => this.parseIf(false),
+    '.ifpdtv': ([CSS, ...args]) => this.parseIf(false),
+    '.ifpsc02': ([CSS, ...args]) => this.parseIf(false),
     '.macro': (line) => this.parseMacro(line),
     '.repeat': (line) => this.parseRepeat(line),
   };
