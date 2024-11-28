@@ -44,6 +44,8 @@ interface Env {
   constantSymbol(sym: string): boolean;
   referencedSymbol(sym: string): boolean;
   evaluate(expr: Expr): number|undefined;
+  assignSym(line: Token[]): void;
+  setSym(line: Token[]): void;
   // also want methods to apply shunting yard to token list?
   //  - turn it into a json tree...?
 }
@@ -105,6 +107,11 @@ export class Preprocessor implements Tokens.Source {
           if (Tokens.eq(line[1], Tokens.COLON)) {
             yield line.splice(0, 2);
             break;
+          }
+          if (Tokens.eq(line[1], Tokens.ASSIGN)) {
+            this.env.assignSym(line);
+          } else if (Tokens.eq(line[1], Tokens.SET)) {
+            this.env.setSym(line);
           }
           if (!this.tryExpandMacro(line)) yield line;
           return;

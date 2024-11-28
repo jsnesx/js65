@@ -11,6 +11,7 @@ import * as Tokens from '../src/token.ts';
 import {TokenStream} from '../src/tokenstream.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
+import { Assembler } from '../src/assembler.ts';
 
 const [_] = [util];
 
@@ -21,9 +22,8 @@ describe('Preprocessor', function() {
     const toks = new TokenStream();
     toks.enter(new Tokenizer(code, 'input.s'));
     const out: string[] = [];
-    // TODO - figure out what's up with env
-    // deno-lint-ignore no-explicit-any
-    const preprocessor = new Preprocessor(toks, {} as any);
+    const env = new Assembler();
+    const preprocessor = new Preprocessor(toks, env);
     for (let line = await preprocessor.next(); line; line = await preprocessor.next()) {
       out.push(line.map(Tokens.name).join(' '));
     }
@@ -425,6 +425,43 @@ describe('Preprocessor', function() {
         await instruction('.byte "5"')
       );
     });
+    it('should work with an expression and `=` defined constant', async function() {
+      await test(
+        [
+          'ConstValue = 2',
+          'ExprValue = ConstValue + 2',
+          '.byte .sprintf("%d", ExprValue * 2 + 1)',
+        ],
+        await assign('ConstValue = 2'), await assign('ExprValue = ConstValue + 2'), await instruction('.byte "9"')
+      );
+    });
+    it('should work with an expression and `.set` defined constant', async function() {
+      await test(
+        [
+          'ExprValue .set 2',
+          'ExprValue .set ExprValue + 1',
+          '.byte .sprintf("%d", ExprValue * 2 + 1)',
+        ],
+        await assign('ExprValue .set 2'), await assign('ExprValue .set ExprValue + 1'), await instruction('.byte "7"')
+      );
+    });
+    // This test doesn't work at this point
+    // it('should work with difference between labels', async function() {
+    //   await test(
+    //     [
+    //       'Label1:',
+    //       '.byte 3',
+    //       'Label2:',
+    //       '.byte 4',
+    //       '.byte .sprintf("%d", Label2 - Label1)',
+    //     ],
+    //     await label('Label1'),
+    //     await instruction('.byte 3'),
+    //     await label('Label2'),
+    //     await instruction('.byte 4'),
+    //     await instruction('.byte "1"'),
+    //   );
+    // });
   });
 
   // TODO - test .local, both for symbols AND for defines.
