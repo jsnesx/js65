@@ -5,6 +5,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import {vsprintf} from 'sprintf-js';
 import {Define} from './define.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
@@ -292,12 +293,52 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private sprintf(cs: Token, fmtToks: Token[], ..._args: Token[][]) : Token[] {
+    // NOTE: ca65 supports /^%(%|[-+ #0]*\d*(\.\d*)?[diouXxsc])/ but sprintf-js does not support '+ #' and there really isn't any reason to support floating point precision.
+    // Also note: ca65 should work with a value assigned to a variable with = but js65 does not.
+    const fmtRe = /^%(%|-?0?\d*[diouXxsc])/;
+
     const fmt = Tokens.expectString(fmtToks[0], cs);
-    Tokens.expectEol(fmtToks[1], 'a single format string');
-    // figure out what placeholders...
-    // TODO - evaluate numeric args as exprs, strings left as is
-    const [_] = [fmt];
-    throw new Error('unimplemented');
+    let sprintfFmt = '';
+    const sprintfArgs: (string | number)[] = [];
+    let prevTok: Token = fmtToks.slice(-1)[0];
+    let offs = 0, argIdx = 0;
+    while (offs < fmt.length) {
+      // Break up the format string by literal text and format spec segments
+      let pctOffs = fmt.indexOf('%', offs);
+      if (pctOffs < 0)
+        pctOffs = fmt.length;
+
+      if (pctOffs != offs) {
+        // Text segment
+        sprintfFmt += fmt.slice(offs, pctOffs);
+        offs = pctOffs;
+      }
+      else {
+        // Format spec
+        const match = fmtRe.exec(fmt.substring(offs));
+        if (!match)
+          throw new Error("invalid format string");
+        
+        const specType = match[0].slice(-1);
+        if (specType != '%') {
+          const argToks = _args[argIdx];
+          let arg: string | number = 0;
+          if (specType == 's')
+            arg = Tokens.expectString(argToks[0], prevTok);
+          else
+            arg = this.evaluateConst(parseOneExpr(argToks, prevTok));
+
+          sprintfArgs.push(arg);
+          argIdx++;
+          prevTok = argToks.slice(-1)[0];
+        }
+
+        sprintfFmt += match[0];
+        offs += match[0].length;
+      }
+    }
+
+    return [{token: 'str', str: vsprintf(sprintfFmt, sprintfArgs), source: cs.source}];
   }
 
   private cond(_cs: Token, ..._args: Token[][]) : Token[] {

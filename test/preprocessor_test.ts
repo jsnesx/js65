@@ -380,6 +380,51 @@ describe('Preprocessor', function() {
       );
     }
   });
+
+  describe('.sprintf', function() {
+    async function testSprintf(fmt: string, arg: string | number | null, want: string) {
+      let argStr = '';
+      if (arg !== null)
+        argStr = (typeof arg == 'string') 
+          ? `, "${arg}"` : `, ${arg}`;
+
+      test(
+        [`.byte .sprintf("${fmt}"${argStr})`],
+        await instruction(`.byte "${want}"`)
+      )
+      
+    }
+    it('should work with no arguments', async function() {
+      await testSprintf("test", null, "test");
+    });
+    it('should work with various arguments', async function() {
+      await testSprintf("%%", null, "%");
+      await testSprintf("%s", "test", "test");
+      await testSprintf("%d", -2, "-2");
+      await testSprintf("%-3i", -3, "-3 ");
+      await testSprintf("%o", 40, "50");
+      await testSprintf("%3u", 5, "  5");
+      await testSprintf("%X", 60, "3C");
+      await testSprintf("%06x", 0x7c, "00007c");
+      await testSprintf("%-6c", 0x41, "A     ");
+    });
+    it('should work with all the arguments', async function() {
+      await test(
+        ['.byte .sprintf("a %% b %s c %d d %-3i e %o f %3u g %X h %06x i %-6c", "test", -2, -3, 4, 5, 60, $70, $41)'],
+        await instruction('.byte "a % b test c -2 d -3  e 4 f   5 g 3C h 000070 i A     "')
+      );
+    });
+    it('should work with an expression and constant', async function() {
+      await test(
+        [
+          '.define x 2',
+          '.byte .sprintf("%d", x * 2 + 1)',
+        ],
+        await instruction('.byte "5"')
+      );
+    });
+  });
+
   // TODO - test .local, both for symbols AND for defines.
 
   // TODO - tests for .if, make sure it evaluates numbers, etc...
