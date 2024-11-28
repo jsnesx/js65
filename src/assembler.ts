@@ -483,6 +483,11 @@ export class Assembler {
 
   // Assemble from a list of tokens
   async line(tokens: Token[]) {
+    if (Tokens.eq(tokens[1], Tokens.ASSIGN) || Tokens.eq(tokens[1], Tokens.SET)) {
+      // Skip over any assignments as these were handled in the preprocessor?
+      // TODO: Should the preprocessor remove the tokens?
+      return;
+    }
     this._source = tokens[0].source;
     if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
       this.label(tokens[0]);
