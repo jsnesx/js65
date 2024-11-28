@@ -293,9 +293,9 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private sprintf(cs: Token, fmtToks: Token[], ..._args: Token[][]) : Token[] {
-    // NOTE: ca65 supports /^%(%|[-+ #0]*\d*(\.\d*)?[diouXxsc])/ but sprintf-js does not support '+ #' and there really isn't any reason to support floating point precision.
+    // NOTE: ca65 supports /^%(%|[-+ #0]*\d*(\.\d*)?[diouXxsc])/ but sprintf-js does not support '+ #'.
     // Also note: ca65 should work with a value assigned to a variable with = but js65 does not.
-    const fmtRe = /^%(%|-?0?\d*[diouXxsc])/;
+    const fmtRe = /^%(%|-?0?\d*(\.\d+)?[diouXxsc])/;
 
     const fmt = Tokens.expectString(fmtToks[0], cs);
     let sprintfFmt = '';

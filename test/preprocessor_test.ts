@@ -395,18 +395,20 @@ describe('Preprocessor', function() {
       
     }
     it('should work with no arguments', async function() {
-      await testSprintf("test", null, "test");
+      await testSprintf('test', null, 'test');
     });
     it('should work with various arguments', async function() {
-      await testSprintf("%%", null, "%");
-      await testSprintf("%s", "test", "test");
-      await testSprintf("%d", -2, "-2");
-      await testSprintf("%-3i", -3, "-3 ");
-      await testSprintf("%o", 40, "50");
-      await testSprintf("%3u", 5, "  5");
-      await testSprintf("%X", 60, "3C");
-      await testSprintf("%06x", 0x7c, "00007c");
-      await testSprintf("%-6c", 0x41, "A     ");
+      await testSprintf('%%', null, '%');
+      await testSprintf('%s', 'test', 'test');
+      await testSprintf('%5s', 'test', ' test');
+      await testSprintf('%1.3s', 'test', 'tes');
+      await testSprintf('%d', -2, '-2');
+      await testSprintf('%-3i', -3, '-3 ');
+      await testSprintf('%o', 40, '50');
+      await testSprintf('%3u', 5, '  5');
+      await testSprintf('%X', 60, '3C');
+      await testSprintf('%06x', 0x7c, '00007c');
+      await testSprintf('%-6c', 0x41, 'A     ');
     });
     it('should work with all the arguments', async function() {
       await test(
