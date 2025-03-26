@@ -155,6 +155,14 @@ export function evaluate(expr: Expr): Expr {
   }
 
   switch (mapped) {
+    case 'str': return expr;
+    // match checks that the TYPE of the left and right side are the same
+    case '.match': return func(expr, (a, b) => a.num && b.num || a.str && b.str || a.sym && b.sym ? 1 : 0);
+    // xmatch checks that the CONTENTS of the left and right side are the same
+    case '.xmatch': return func(expr, (a, b) =>
+      (a.num !== undefined && b.num !== undefined && a.num === b.num) ||
+      (a.str !== undefined && b.str !== undefined && a.str === b.str) ||
+      (a.sym !== undefined && b.sym !== undefined && a.sym === b.sym) ? 1 : 0);
     case '+': return plus(expr);
     case '-': return minus(expr);
     case '*': return binary(expr, (a, b) => a * b);
@@ -174,7 +182,7 @@ export function evaluate(expr: Expr): Expr {
     case '&&': return binary(expr, (a, b) => a && b);
     case '||': return binary(expr, (a, b) => a || b);
     case '.xor': return binary(expr, (a, b) => !a && b || !b && a || 0);
-    default: throw new Error(`Unknown operator: ${mapped}`);
+    default: throw new Error(`Unknown operator: ${mapped} Expr: ${JSON.stringify(expr)}`);
   }
 }
 
@@ -469,6 +477,12 @@ function binary(expr: Expr, f: (x: number, y: number) => number): Expr {
   return {op: 'num', num, meta: size(num)};
 }
 
+function func(expr: Expr, f: (x: Expr, y: Expr) => number): Expr {
+  const [a, b] = expr.args!;
+  const num = f(a, b);
+  return {op: 'num', num, meta: size(num)};
+}
+
 function plus(expr: Expr): Expr {
   // allow some relative, but only if adding a non-address?
   const [a, b] = expr.args!;
@@ -586,6 +600,7 @@ const PREFIXOPS = new Map<string, OperatorMeta>([
 const FUNCTIONS = new Set<string>([
   '.byteat',
   '.wordat',
+  '.match', '.xmatch',
   '.max', '.min',
 ]);
 

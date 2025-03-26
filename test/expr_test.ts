@@ -162,6 +162,52 @@ describe('Expr', function() {
       const arg = {op: 'num', num: 1, meta: {bank: 2}};
       expect(Exprs.evaluate(op('^', arg))).toEqual(num(2));
     });
+  
+    it('should evaluate match', function() {
+      // Str type matches
+      let expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.match'), LP, tstr("str1"), COMMA, tstr("str2"), RP
+      ]));
+      expect(expr).toEqual(num(1));
+      // Num type matches
+      expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.match'), LP, tnum(1), COMMA, tnum(2), RP
+      ]));
+      expect(expr).toEqual(num(1));
+      // Type doesn't match
+      expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.match'), LP, tnum(1), COMMA, tstr("test"), RP
+      ]));
+      expect(expr).toEqual(num(0));
+    });
+  
+    it('should evaluate xmatch', function() {
+      // Str contents match
+      let expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.xmatch'), LP, tstr("str1"), COMMA, tstr("str1"), RP
+      ]));
+      expect(expr).toEqual(num(1));
+      // Num contents match
+      expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.xmatch'), LP, tnum(1), COMMA, tnum(1), RP
+      ]));
+      expect(expr).toEqual(num(1));
+      // str contents doesn't match
+      expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.xmatch'), LP, tstr("test1"), COMMA, tstr("test2"), RP
+      ]));
+      expect(expr).toEqual(num(0));
+      // Num contents doesn't match
+      expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.xmatch'), LP, tnum(1), COMMA, tnum(2), RP
+      ]));
+      expect(expr).toEqual(num(0));
+      // Different types doesn't match
+      expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.xmatch'), LP, tnum(1), COMMA, tstr("1"), RP
+      ]));
+      expect(expr).toEqual(num(0));
+    });
   });
 
   // describe('Exprs.resolve', function() {

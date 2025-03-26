@@ -416,7 +416,7 @@ export class Preprocessor implements Tokens.Source {
     expr = Exprs.traversePost(expr, evalWrapper);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
     const at = Tokens.at(expr);
-    throw new Error(`Expected a constant${at}`);
+    throw new Error(`Expected a constant: ${at} : ${expr}`);
   }
 
   private readonly runDirectives: Record<string, (ts: Token[]) => Promise<void>> = {
