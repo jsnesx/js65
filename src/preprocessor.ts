@@ -218,8 +218,10 @@ export class Preprocessor implements Tokens.Source {
       case '.concat': return this.parseArgs(line, i, 0, this.concat);
       case '.sprintf': return this.parseArgs(line, i, 0, this.sprintf);
       case '.cond': return this.parseArgs(line, i, 0, this.cond);
+      case '.blank':
+        return this.parseArgs(line, i, 1, this.blank);
       case '.defined':
-        return this.parseArgs(line, i, 1, this.defined);
+        return this.parseArgs(line, i, 1, this.definedSymbol);
       case '.definedsymbol':
         return this.parseArgs(line, i, 1, this.definedSymbol);
       case '.constantsymbol':
@@ -352,10 +354,8 @@ export class Preprocessor implements Tokens.Source {
     throw new Error('unimplemented');
   }
 
-  private defined(cs: Token, arg: Token[]) : Token[] {
-    const ident = Tokens.expectIdentifier(arg[0], cs);
-    Tokens.expectEol(arg[1], 'a single identifier');
-    return [{token: 'num', num: this.env.definedSymbol(ident) ? 1 : 0}];
+  private blank(cs: Token, arg: Token[]) : Token[] {
+    return [{token: 'num', num: arg.length === 0 ? 1 : 0}];
   }
 
   private definedSymbol(cs: Token, arg: Token[]) : Token[] {

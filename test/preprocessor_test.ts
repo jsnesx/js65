@@ -147,6 +147,15 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.blank', function() {
+    it('should produce produce a 1 if empty', async function() {
+      await test(['a .blank()'], await instruction('a 1'));
+    });
+    it('should produce produce a 0 if not empty', async function() {
+      await test(['a .blank(a)'], await instruction('a 0'));
+    });
+  });
+
   describe('.concat', function() {
     it('should join strings', async function() {
       await test(['a .concat("b", "c", "d")'], await instruction('a "bcd"'));
