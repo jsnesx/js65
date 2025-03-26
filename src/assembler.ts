@@ -414,7 +414,7 @@ export class Assembler {
             // just alias it directly in the parent scope
             scope.parent.symbols.set(name, sym);
           } else if (parentSym.id != null) {
-            sym.expr = {op: 'sym', num: parentSym.id};
+            sym.expr = {op: 'sym', num: parentSym.expr?.num};
           } else if (parentSym.expr) {
             sym.expr = parentSym.expr;
           } else {
