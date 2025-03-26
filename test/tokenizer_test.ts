@@ -231,6 +231,15 @@ describe('Tokenizer.line', function() {
     }
   });
 
+  it('should properly recognize capitalized directives', async function() {
+    expect(await tokenize(".IncBin")).toEqual([
+      [{token: 'cs', str: ".incbin", rawStr: ".IncBin"}]
+    ]);
+    expect(await tokenize(".lOCAl")).toEqual([
+      [{token: 'cs', str: ".local", rawStr: ".lOCAl"}]
+    ]);
+  });
+
   it('should fail to parse a bad hex number', function() {
     expect(tokenize('  adc $1g')).rejects.toThrow(/Bad hex number.*at input.s:1:6 near '\$1g'/s);
   });

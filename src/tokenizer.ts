@@ -132,7 +132,7 @@ export class Tokenizer implements Tokens.Source {
     let grp = this.buffer.group()!;
     return {
       token: 'cs', 
-      str: Tokens.CS_TOKEN_ALIAS_MAP.get(grp) ?? grp,
+      str: Tokens.CS_TOKEN_ALIAS_MAP.get(grp.toLowerCase()) ?? grp.toLowerCase(),
       rawStr: grp,
     };
   }
