@@ -633,6 +633,17 @@ describe('Assembler', function() {
         }],
         symbols: [], segments: []});
     });
+    it('should support larger numbers truncated', function() {
+      const a = new Assembler(Cpu.P02);
+      a.byte(0x102, 0x20304, 0x3040506);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(2, 4, 6),
+        }],
+        symbols: [], segments: []});
+    });
 
     it('should support strings', function() {
       const a = new Assembler(Cpu.P02);

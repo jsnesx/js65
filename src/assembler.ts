@@ -1249,11 +1249,13 @@ export class Assembler {
     // TODO - if val is a signed/unsigned 32-bit number, it's not clear
     // whether we need to treat it one way or the other...?  but maybe
     // it doesn't matter since we're only looking at 32 bits anyway.
-    const s = (size) << 3;
-    if (val != null && (val < (-1 << s) || val >= (1 << s))) {
-      const name = ['byte', 'word', 'farword', 'dword'][size - 1];
-      this.fail(`Not a ${name}: $${val.toString(16)}`);
-    }
+
+    // If the size doesn't match the incoming value, we silently truncate to the size
+    // const s = (size) << 3;
+    // if (val != null && (val < (-1 << s) || val >= (1 << s))) {
+    //   const name = ['byte', 'word', 'farword', 'dword'][size - 1];
+    //   this.fail(`Not a ${name}: $${val.toString(16)}`);
+    // }
     for (let i = 0; i < size; i++) {
       data.push(val != null ? val & 0xff : 0xff);
       if (val != null) val >>= 8;

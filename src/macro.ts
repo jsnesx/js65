@@ -68,7 +68,7 @@ export class Macro {
           locals.set(local, `${local}@${idGen.next()}`);
         }
       }
-      // TODO - check for .local here and rename?  move into assemlber
+      // TODO - check for .local here and rename? move into assembler
       // or preprocessing...?  probably want to keep track elsewhere.
       const map = (toks: Token[]): Token[] => {
         const mapped: Token[] = [];
