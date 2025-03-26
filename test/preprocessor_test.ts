@@ -244,6 +244,23 @@ describe('Preprocessor', function() {
            await instruction('x 2'));
     });
 
+    it('should allow .defined inside .elseif conditionals', async function() {
+      // This test is not checking to see if the .defined works itself, just that further preprocessing steps
+      // work inside of the .elseif
+      await test(['.macro q a,b',
+                 '.if .defined(.ident(.string(a)))',
+                 'nope',
+                 '.elseif .defined(.ident(.string(b)))',
+                 'alsonope',
+                 '.else',
+                 'yep',
+                 '.endif',
+                 '.endmacro',
+                 'q a,b'
+                ],
+                 await instruction('yep'));
+    });
+
     it('should terminate instead of recursing infinitely', function() {
       testError(['.macro q',
                  'q',

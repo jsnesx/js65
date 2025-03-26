@@ -355,6 +355,7 @@ export class Preprocessor implements Tokens.Source {
   private defined(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
+    console.log(`test defined on ${ident}: ${this.macros.has(ident) ? 1 : 0}`);
     return [{token: 'num', num: this.macros.has(ident) ? 1 : 0}];
   }
 
@@ -556,7 +557,7 @@ export class Preprocessor implements Tokens.Source {
           continue;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
-          cond = !!this.evaluateConst(parseOneExpr(line.slice(1), front));
+          cond = !!this.evaluateConst(parseOneExpr(this.expandLine(line.slice(1)), front));
           continue;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....

@@ -44,7 +44,7 @@ export class TokenStream implements Tokens.Source {
     const paths = this.opts?.includePaths ?? ['./'];
     for (const base of paths) {
       try {
-        console.log(`gonna try including base: ${base} path: ${path}`);
+        // console.log(`gonna try including base: ${base} path: ${path}`);
         return action(base, path);
       } catch (_e) {
         // unable to load the files at that path.
