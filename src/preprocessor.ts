@@ -355,8 +355,7 @@ export class Preprocessor implements Tokens.Source {
   private defined(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    console.log(`test defined on ${ident}: ${this.macros.has(ident) ? 1 : 0}`);
-    return [{token: 'num', num: this.macros.has(ident) ? 1 : 0}];
+    return [{token: 'num', num: this.env.definedSymbol(ident) ? 1 : 0}];
   }
 
   private definedSymbol(cs: Token, arg: Token[]) : Token[] {
