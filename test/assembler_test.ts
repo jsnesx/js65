@@ -230,6 +230,21 @@ describe('Assembler', function() {
       });
     });
 
+    it('should fill in an immediately-available multi-byte value', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('val', 0x2345);
+      await a.instruction([ident('lda'), ident('val')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xad, 0x45, 0x23),
+        }],
+        symbols: [],
+        segments: [],
+      });
+    });
+
     it('should fill in an immediately-available label', async function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x9135);
@@ -302,6 +317,22 @@ describe('Assembler', function() {
           subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
         }],
         symbols: [{expr: {op: 'num', num: 0x23}}],
+        segments: [],
+      });
+    });
+
+    it('should substitute a forward referenced multi-byte value', async function() {
+      const a = new Assembler(Cpu.P02);
+      await a.instruction([ident('lda'), ident('val')]);
+      a.assign('val', 0x2345);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xad, 0xff, 0xff),
+          subs: [{offset: 1, size: 2, expr: {op: 'sym', num: 0}}],
+        }],
+        symbols: [{expr: {op: 'num', num: 0x2345}}],
         segments: [],
       });
     });

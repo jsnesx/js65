@@ -413,8 +413,10 @@ export class Assembler {
           if (!parentSym) {
             // just alias it directly in the parent scope
             scope.parent.symbols.set(name, sym);
-          } else if (parentSym.id != null) {
-            sym.expr = {op: 'sym', num: parentSym.expr?.num};
+          } else if (parentSym.id != null && parentSym.id >= 0) {
+            // If this is resolving a macro from a parent symbol, try to use that value, otherwise
+            // fall back to parent sym id
+            sym.expr = {op: 'sym', num: parentSym.id};
           } else if (parentSym.expr) {
             sym.expr = parentSym.expr;
           } else {
