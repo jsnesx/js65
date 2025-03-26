@@ -25,6 +25,9 @@ function top(str: string): Token { return {token: 'op', str}; }
 function num(num: number) {
   return {op: 'num', num, meta: {size: 1 + +(num > 255)}};
 }
+function str(s: string) {
+  return {op: 'str', str: s, meta: {size: s.length}};
+}
 function op(op: string, ...args: Expr[]) { return {op, args}; }
 function op1(op: string, ...args: Expr[]) {
   return {op, args, meta: {size: 1}};
@@ -108,6 +111,11 @@ describe('Expr', function() {
       const expr = Exprs.parseOnly([tcs('.max'), LP, tnum(4), COMMA, tnum(6),
                                    COMMA, tnum(8), RP, top('+'), tnum(3)]);
       expect(expr).toEqual(op('+', op1('.max', num(4), num(6), num(8)), num(3)));
+    });
+
+    it('should parse quoted strings', function() {
+      const expr = Exprs.parseOnly([tstr("string_test")]);
+      expect(expr).toEqual(str("string_test"));
     });
   });
 

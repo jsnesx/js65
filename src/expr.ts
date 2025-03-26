@@ -58,10 +58,13 @@ const BaseExpr = z.object({
    * - sym: an offset into the symbols array (or the name in 'sym')
    *  - num: a number literal, or an offset into the symbols array.
    *  - im: an import from another object file (uses 'sym').
+   *  - str: a byte array literal
    */
   op: z.string(),
   /** only used when op === 'num' */
   num: z.number().optional(),
+  /** only used when op === 'str' */
+  str: z.string().optional(),
   meta: MetaZ.optional(),
   /** only used when op === 'sym' */
   sym: z.string().optional(),
@@ -389,11 +392,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
       } else if (front.token === 'str') { 
         // TODO: use the charmap to look up literal value
         const s = front.str
-        if (s.length > 1) {
-          throw new Error(`Literal string value larger than a single byte: ${Tokens.nameAt(front)}`);
-        }
-        const num = s.charCodeAt(0)
-        exprs.push({op: 'num', num, meta: size(num, front)});
+        exprs.push({op: 'str', str: s, meta: {size: s.length}});
         val = false;
       } else {
         // bad token??
