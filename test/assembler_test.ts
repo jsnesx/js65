@@ -230,6 +230,21 @@ describe('Assembler', function() {
       });
     });
 
+    it('should substitute a immediately-available single-byte value with a zp instruction', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('val', 0x23);
+      await a.instruction([ident('lda'), ident('val')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa5, 0x23),
+        }],
+        symbols: [],
+        segments: [],
+      });
+    });
+
     it('should fill in an immediately-available multi-byte value', async function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', 0x2345);
@@ -316,10 +331,27 @@ describe('Assembler', function() {
           data: Uint8Array.of(0xa9, 0xff),
           subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
         }],
-        symbols: [{expr: {op: 'num', num: 0x23}}],
+        symbols: [{expr: {op: 'num', num: 0x23, meta: {size: 1}}}],
         segments: [],
       });
     });
+
+    // While this would be nice to have CA65 simply emits a warning and uses ABS addressing instead
+    // it('should substitute a forward referenced single-byte value with a zp instruction', async function() {
+    //   const a = new Assembler(Cpu.P02);
+    //   await a.instruction([ident('lda'), ident('val')]);
+    //   a.assign('val', 0x23);
+    //   expect(strip(a.module())).toEqual({
+    //     chunks: [{
+    //       overwrite: 'allow',
+    //       segments: [],
+    //       data: Uint8Array.of(0xa5, 0xff),
+    //       subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
+    //     }],
+    //     symbols: [{expr: {op: 'num', num: 0x23, meta: {size: 1}}}],
+    //     segments: [],
+    //   });
+    // });
 
     it('should substitute a forward referenced multi-byte value', async function() {
       const a = new Assembler(Cpu.P02);
@@ -332,7 +364,7 @@ describe('Assembler', function() {
           data: Uint8Array.of(0xad, 0xff, 0xff),
           subs: [{offset: 1, size: 2, expr: {op: 'sym', num: 0}}],
         }],
-        symbols: [{expr: {op: 'num', num: 0x2345}}],
+        symbols: [{expr: {op: 'num', num: 0x2345, meta: {size: 2}}}],
         segments: [],
       });
     });
@@ -406,7 +438,7 @@ describe('Assembler', function() {
                   expr: {op: '+', args: [{op: 'num', num: 1},
                                          {op: 'sym', num: 0}]}}],
         }],
-        symbols: [{expr: {op: 'num', num: 2}}],
+        symbols: [{expr: {op: 'num', num: 2, meta: {size: 1}}}],
         segments: [],
       });
     });
@@ -1070,7 +1102,7 @@ describe('Assembler', function() {
           ],
         }],
         symbols: [
-          {expr: {op: 'num', num: 14}},
+          {expr: {op: 'num', num: 14, meta: {size: 1}}},
           {expr: {op: 'sym', num: 0}},
         ],
         segments: [],
@@ -1091,7 +1123,7 @@ describe('Assembler', function() {
           subs: [{offset: 0, size: 1, expr: {op: 'sym', num: 0}}],
         }],
         symbols: [
-          {expr: {op: 'num', num: 13}},
+          {expr: {op: 'num', num: 13, meta: {size: 1}}},
         ],
         segments: [],
       });
@@ -1186,7 +1218,7 @@ describe('Assembler', function() {
       a.export('qux');
       a.assign('qux', 12);
       expect(strip(a.module())).toEqual({
-        symbols: [{export: 'qux', expr: {op: 'num', num: 12}}],
+        symbols: [{export: 'qux', expr: {op: 'num', num: 12, meta: {size: 1}}}],
         chunks: [], segments: [],
       });
     });
@@ -1196,7 +1228,7 @@ describe('Assembler', function() {
       a.assign('qux', 12);
       a.export('qux');
       expect(strip(a.module())).toEqual({
-        symbols: [{export: 'qux', expr: {op: 'num', num: 12}}],
+        symbols: [{export: 'qux', expr: {op: 'num', num: 12, meta: {size: 1}}}],
         chunks: [], segments: [],
       });
     });

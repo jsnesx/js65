@@ -640,7 +640,7 @@ export class Assembler {
 
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token) {
     // NOTE: * _will_ get current chunk!
-    if (typeof expr === 'number') expr = {op: 'num', num: expr};
+    if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: {size: (expr < (-1 << 8) || expr >= (1 << 8)) ? 2 : 1}};
     const scope = ident.startsWith('@') ? this.cheapLocals : this.currentScope;
     // NOTE: This is incorrect - it will look up the scope chain when it
     // shouldn't.  Mutables may or may not want this, immutables must not.
