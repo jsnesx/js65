@@ -377,13 +377,18 @@ export class Assembler {
     }
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
     const sym = scope.resolve(name, {allowForwardRef: true, ref: symbol});
-    if (sym.expr) return sym.expr;
+    if (sym.expr) {
+      // console.log(`sometging: ${JSON.stringify(sym)}`);
+      return sym.expr;
+    }
     // if the expression is not yet known then refer to the symbol table,
     // adding it if necessary.
     if (sym.id == null) {
       sym.id = this.symbols.length;
       this.symbols.push(sym);
     }
+
+    // console.log(`resolve 1: ${JSON.stringify(sym)}`);
     return {op: 'sym', num: sym.id};
   }
 
@@ -640,7 +645,8 @@ export class Assembler {
 
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token) {
     // NOTE: * _will_ get current chunk!
-    if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: {size: (expr < (-1 << 8) || expr >= (1 << 8)) ? 2 : 1}};
+
+    if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
     const scope = ident.startsWith('@') ? this.cheapLocals : this.currentScope;
     // NOTE: This is incorrect - it will look up the scope chain when it
     // shouldn't.  Mutables may or may not want this, immutables must not.
@@ -664,6 +670,7 @@ export class Assembler {
       throw new Error(`Redefining symbol ${name}${orig}`);
     }
     sym.expr = expr;
+    // console.log(`setting sym = ${JSON.stringify(sym)}`);
   }
 
   async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;
@@ -700,8 +707,15 @@ export class Assembler {
     const m = arg[0];
     if (m === 'add' || m === 'a,x' || m === 'a,y') {
       // Special case for address mnemonics
-      const expr = arg[1]!;
+      let expr = arg[1]!;
+      // Attempt to resolve the expression first. If we are able to, then
+      // we can appropriately size the expression
+
+      // console.log(`before resolving: ${JSON.stringify(expr)}`);
+      // expr = this.resolve(expr);
+      
       const s = expr.meta?.size || 2;
+      // console.log(`sizing up 'add' expr: ${JSON.stringify(expr)}`);
       if (m === 'add' && s === 1 && 'zpg' in ops) {
         return this.opcode(ops.zpg!, 1, expr);
       } else if (m === 'add' && 'abs' in ops) {

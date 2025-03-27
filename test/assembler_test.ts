@@ -1129,6 +1129,23 @@ describe('Assembler', function() {
       });
     });
 
+    it('should allow symbols outside of scope to keep size', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('bar', 5);
+      a.scope('foo');
+      await a.instruction([ident('sta'), ident('bar')]);
+      a.endScope();
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa5, 0x05),
+          subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
+        }],
+        symbols: [{expr: {meta: {size: 1}, num: 5, op: "num"}}], segments: [],
+      });
+    });
+  
     it('should allow reading out of a scope', function() {
       const a = new Assembler(Cpu.P02);
       a.scope('foo');
