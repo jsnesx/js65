@@ -405,12 +405,16 @@ export class Preprocessor implements Tokens.Source {
   evaluateConst(expr: Expr): number {
     // Attempt to look up a symbol and see if its a constant value
     const evalWrapper = (ex: Expr) => {
+      console.log(`evaluating const outer expr: ${JSON.stringify(ex)} `); // jroweboy
       if (ex.op === 'sym' && this.env.definedSymbol(ex.sym!)) {
+        console.log(`is a defined symbol `); // jroweboy
         // HACK? If its defined but not set, default it to zero?
         const num = this.env.evaluate(ex);
+        console.log(`evaluating const num: ${num} expr: ${JSON.stringify(ex)} `); // jroweboy
         if (num === undefined) throw new Error(`Symbol ${ex.sym} is undefined`);
         return Exprs.evaluate({op: 'num', num, meta: Exprs.size(num, undefined)});
       }
+      console.log(` not defined symbol `); // jroweboy
       return Exprs.evaluate(ex);
     }
     expr = Exprs.traversePost(expr, evalWrapper);
