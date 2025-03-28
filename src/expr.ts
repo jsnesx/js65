@@ -7,8 +7,8 @@
 
 import { z } from 'zod';
 import {type Token} from './token.ts'
-import { Symbol } from './assembler.ts'
 import * as Tokens from './token.ts'
+import type { BaseScope, Symbol } from './scope.ts';
 
 // export interface Expr {
 //   op: string;
@@ -125,6 +125,8 @@ export function evaluate(expr: Expr): Expr {
     case 'sym':
       // check if the current symbol is a constant number
       // symbolMap?.get(expr.args)
+      console.log(`returning symbol in evaluation: ${JSON.stringify(expr)}`); // jroweboy
+      
       return expr;
     case 'num':
       if (expr.meta?.rel && expr.meta.org != null) {
@@ -154,36 +156,39 @@ export function evaluate(expr: Expr): Expr {
     }
   }
 
+  let exp;
   switch (mapped) {
-    case 'str': return expr;
+    case 'str': exp = expr; break;
     // match checks that the TYPE of the left and right side are the same
-    case '.match': return func(expr, (a, b) => a.num && b.num || a.str && b.str || a.sym && b.sym ? 1 : 0);
+    case '.match': exp = func(expr, (a, b) => a.num && b.num || a.str && b.str || a.sym && b.sym ? 1 : 0); break;
     // xmatch checks that the CONTENTS of the left and right side are the same
-    case '.xmatch': return func(expr, (a, b) =>
+    case '.xmatch': exp = func(expr, (a, b) =>
       (a.num !== undefined && b.num !== undefined && a.num === b.num) ||
       (a.str !== undefined && b.str !== undefined && a.str === b.str) ||
-      (a.sym !== undefined && b.sym !== undefined && a.sym === b.sym) ? 1 : 0);
-    case '+': return plus(expr);
-    case '-': return minus(expr);
-    case '*': return binary(expr, (a, b) => a * b);
-    case '/': return binary(expr, (a, b) => Math.floor(a / b));
-    case '.mod': return binary(expr, (a, b) => a % b);
-    case '&': return binary(expr, (a, b) => a & b);
-    case '|': return binary(expr, (a, b) => a | b);
-    case '^': return binary(expr, (a, b) => a ^ b);
-    case '<<': return binary(expr, (a, b) => a << b);
-    case '>>': return binary(expr, (a, b) => a >>> b);
-    case '<': return binary(expr, (a, b) => +(a < b));
-    case '<=': return binary(expr, (a, b) => +(a <= b));
-    case '>': return binary(expr, (a, b) => +(a > b));
-    case '>=': return binary(expr, (a, b) => +(a >= b));
-    case '=': return binary(expr, (a, b) => +(a == b));
-    case '<>': return binary(expr, (a, b) => +(a != b));
-    case '&&': return binary(expr, (a, b) => a && b);
-    case '||': return binary(expr, (a, b) => a || b);
-    case '.xor': return binary(expr, (a, b) => !a && b || !b && a || 0);
+      (a.sym !== undefined && b.sym !== undefined && a.sym === b.sym) ? 1 : 0); break;
+    case '+': exp = plus(expr); break;
+    case '-': exp = minus(expr); break;
+    case '*': exp = binary(expr, (a, b) => a * b); break;
+    case '/': exp = binary(expr, (a, b) => Math.floor(a / b)); break;
+    case '.mod': exp = binary(expr, (a, b) => a % b); break;
+    case '&': exp = binary(expr, (a, b) => a & b); break;
+    case '|': exp = binary(expr, (a, b) => a | b); break;
+    case '^': exp = binary(expr, (a, b) => a ^ b); break;
+    case '<<': exp = binary(expr, (a, b) => a << b); break;
+    case '>>': exp = binary(expr, (a, b) => a >>> b); break;
+    case '<': exp = binary(expr, (a, b) => +(a < b)); break;
+    case '<=': exp = binary(expr, (a, b) => +(a <= b)); break;
+    case '>': exp = binary(expr, (a, b) => +(a > b)); break;
+    case '>=': exp = binary(expr, (a, b) => +(a >= b)); break;
+    case '=': exp = binary(expr, (a, b) => +(a == b)); break;
+    case '<>': exp = binary(expr, (a, b) => +(a != b)); break;
+    case '&&': exp = binary(expr, (a, b) => a && b); break;
+    case '||': exp = binary(expr, (a, b) => a || b); break;
+    case '.xor': exp = binary(expr, (a, b) => !a && b || !b && a || 0); break;
     default: throw new Error(`Unknown operator: ${mapped} Expr: ${JSON.stringify(expr)}`);
   }
+  console.log(`evaluating type: ${mapped} value: ${JSON.stringify(exp)} orig: ${JSON.stringify(expr)}`); // jroweboy
+  return exp;
 }
 
 /** Strip source info from the expression. */
@@ -310,10 +315,10 @@ export function identifier(expr: Expr): string {
 // }
 
 /** Parse a single expression, must occupy the rest of the line. */
-export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symbol>): Expr {
-  const [expr, i] = parse(tokens, index, symbols);
+export function parseOnly(tokens: Token[], index = 0, scope?: BaseScope): Expr {
+  const [expr, i] = parse(tokens, index, scope);
   if (i < tokens.length) {
-    parse(tokens, index, symbols);
+    parse(tokens, index, scope);
     throw new Error(`Garbage after expression: ${Tokens.nameAt(tokens[i])}`);
   } else if (!expr) {
     throw new Error(`No expression?`);
@@ -324,7 +329,7 @@ export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symb
 // Returns [undefined, -1] if a bad parse.
 // Give up on normal parsing, just use a shunting yard again...
 //  - but handle parens recursively.
-export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>): [Expr|undefined, number] {
+export function parse(tokens: Token[], index = 0, scope?: BaseScope): [Expr|undefined, number] {
 //console.log('PARSE: tokens=', tokens, 'index=', index);
 //try { throw new Error(); } catch (e) { console.log(e.stack); }
   const ops: [string, OperatorMeta][] = [];
@@ -365,7 +370,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
           }
           const args: Expr[] = [];
           for (const arg of Tokens.parseArgList(tokens, i + 2, close)) {
-            args.push(parseOnly(arg, 0, symbols));
+            args.push(parseOnly(arg, 0, scope));
           }
           i = close;
           exprs.push(fixSize({op, args}));
@@ -382,15 +387,34 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
         if (close < 0) {
           throw new Error(`No close paren: ${Tokens.nameAt(front)}`);
         } // return [undefined, -1];
-        const e = parseOnly(tokens.slice(i + 1, close), 0, symbols);
+        const e = parseOnly(tokens.slice(i + 1, close), 0, scope);
         exprs.push(e);
         i = close;
         val = false;
       } else if (front.token === 'ident') {
+        // General rules for determining if ZP or ABS
+        //  - If there is a symbol in the current scope (not parent), substitute it right now
+        //  - If the symbol is in a parent scope, use its size, but leave it as a reference
+        //  - If its not available yet, treat it as ABS and wait
+        let expr = scope?.resolve(front.str)?.expr;
+        if (!expr) {
+          let sym = scope?.getSym(front.str);
+          // let symExpr = (sym?.ref) ? sym.ref as Expr : sym?.expr;
+          // If this is a referenced symbol, return the inner symbol instead
+          console.log(`   sym found? ${JSON.stringify(sym)}`); //jroweboy
+          const size = sym?.expr?.meta?.size ?? (sym?.ref as Expr)?.meta?.size ?? 2;
+          expr = {op: 'sym', sym: front.str, meta: {size}};
+          // Copy the source over as well
+          // if (sym?.expr?.source) {
+          //   expr.source = sym.expr.source;
+          // }
+        }
         // add symbol
-        // use scope information to determine size
-        const expr = symbols?.get(front.str)?.expr;
-        exprs.push((expr) ? expr : {op: 'sym', sym: front.str});
+        console.log(` check scope: ${JSON.stringify(expr)} frontstr: ${front.str}`); //jroweboy
+        // const expr = scope?.resolve(front.str)?.expr;
+        // const size = sym?.expr?.meta?.size ?? 2;
+        // exprs.push(expr ? expr : {op: 'sym', sym: front.str});
+        exprs.push(expr);
         val = false;
       } else if (front.token === 'num') {
         // add number

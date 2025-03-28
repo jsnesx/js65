@@ -9,6 +9,7 @@ import { Cpu } from './cpu.ts';
 import { type Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import * as mod from './module.ts';
+import { Symbol, Scope, CheapScope } from './scope.ts';
 import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
@@ -16,139 +17,6 @@ import { IntervalSet, assertNever } from './util.ts';
 
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
-
-export class Symbol {
-  /**
-   * Index into the global symbol array.  Only applies to immutable
-   * symbols that need to be accessible at link time.  Mutable symbols
-   * and symbols with known values at use time are not added to the
-   * global list and are therefore have no id.  Mutability is tracked
-   * by storing a -1 here.
-   */
-  id?: number;
-  /** Whether the symbol has been explicitly scoped. */
-  scoped?: boolean;
-  /**
-   * The expression for the symbol.  Must be a statically-evaluatable constant
-   * for mutable symbols.  Undefined for forward-referenced symbols.
-   */
-  expr?: Expr;
-  /** Name this symbol is exported as. */
-  export?: string;
-  /** Token where this symbol was ref'd. */
-  ref?: {source?: Tokens.SourceInfo}; // TODO - plumb this through
-}
-
-interface ResolveOpts {
-  // Whether to create a forward reference for missing symbols.
-  allowForwardRef?: boolean;
-  // Reference Tokens.
-  ref?: {source?: Tokens.SourceInfo};
-}
-
-interface FwdRefResolveOpts extends ResolveOpts {
-  allowForwardRef: true;
-}
-
-abstract class BaseScope {
-  //closed = false;
-  readonly symbols = new Map<string, Symbol>();
-
-  protected pickScope(name: string): [string, BaseScope] {
-    return [name, this];
-  }
-
-  // TODO - may need additional options:
-  //   - lookup constant - won't return a mutable value or a value from
-  //     a parent scope, implies no forward ref
-  //   - shallow - don't recurse up the chain, for assignment only??
-  // Might just mean allowForwardRef is actually just a mode string?
-  //  * ca65's .definedsymbol is more permissive than .ifconst
-  resolve(name: string, opts: FwdRefResolveOpts): Symbol;
-  resolve(name: string, opts?: ResolveOpts): Symbol|undefined;
-  resolve(name: string, opts: ResolveOpts = {}):
-      Symbol|undefined {
-    const {allowForwardRef = false, ref} = opts;
-    const [tail, scope] = this.pickScope(name);
-    const sym = scope.symbols.get(tail);
-//console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
-    if (sym) {
-      if (tail !== name) sym.scoped = true;
-      return sym;
-    }
-    if (!allowForwardRef) return undefined;
-    // if (scope.closed) throw new Error(`Could not resolve symbol: ${name}`);
-    // make a new symbol - but only in an open scope
-    //const symbol = {id: this.symbolArray.length};
-//console.log('created:',symbol);
-    //this.symbolArray.push(symbol);
-    const symbol: Symbol = {ref};
-    scope.symbols.set(tail, symbol);
-    if (tail !== name) symbol.scoped = true;
-    return symbol;
-  }
-}
-
-class Scope extends BaseScope {
-  readonly global: Scope;
-  readonly children = new Map<string, Scope>();
-  readonly anonymousChildren: Scope[] = [];
-
-  constructor(readonly parent?: Scope, readonly kind?: 'scope'|'proc') {
-    super();
-    this.global = parent ? parent.global : this;
-  }
-
-  pickScope(name: string): [string, Scope] {
-    // TODO - plumb the source information through here?
-    // deno-lint-ignore no-this-alias
-    let scope: Scope = this;
-    const split = name.split(/::/g);
-    const tail = split.pop()!;
-    for (let i = 0; i < split.length; i++) {
-      if (!i && !split[i]) { // global
-        scope = scope.global;
-        continue;
-      }
-      let child = scope.children.get(split[i]);
-      while (!i && scope.parent && !child) {
-        child = (scope = scope.parent).children.get(split[i]);
-      }
-      // If the name has an explicit scope, this is an error?
-      if (!child) {
-        const scopeName = split.slice(0, i + 1).join('::');
-        throw new Error(`Could not resolve scope ${scopeName}`);
-      }
-      scope = child;
-    }
-    return [tail, scope];
-  }
-
-  // close() {
-  //   if (!this.parent) throw new Error(`Cannot close global scope`);
-  //   this.closed = true;
-  //   // Any undefined identifiers in the scope are automatically
-  //   // promoted to the parent scope.
-  //   for (const [name, sym] of this.symbols) {
-  //     if (sym.expr) continue; // if it's defined in the scope, do nothing
-  //     const parentSym = this.parent.symbols.get(sym);
-  //   }
-  // }
-}
-
-class CheapScope extends BaseScope {
-
-  /** Clear everything out, making sure everything was defined. */
-  clear() {
-    for (const [name, sym] of this.symbols) {
-      if (!sym.expr) {
-        const at = sym.ref ? Tokens.at(sym.ref) : '';
-        throw new Error(`Cheap local label never defined: ${name}${at}`);
-      }
-    }
-    this.symbols.clear();
-  }
-}
 
 export interface RefExtractor {
   label?(name: string, addr: number, segments: readonly string[]): void;
@@ -307,7 +175,7 @@ export class Assembler {
 
   // Returns an expr resolving to a symbol name (e.g. a label)
   symbol(name: string): Expr {
-    return Exprs.evaluate(Exprs.parseOnly([{token: 'ident', str: name}], 0, this.currentScope.symbols));
+    return Exprs.evaluate(Exprs.parseOnly([{token: 'ident', str: name}], 0, this.currentScope));
   }
 
   where(): string {
@@ -321,6 +189,15 @@ export class Assembler {
     const out = Exprs.traverse(expr, (e, rec) => {
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
+      }
+      while (e.op === 'sym' && (e.num ?? -1) >= 0) {
+        let t = this.symbols[e.num!];
+        if (t.ref)
+          e = t.ref as Expr;
+        else if (t.expr)
+          e = t.expr;
+        else
+          break;
       }
       return Exprs.evaluate(rec(e));
     });
@@ -378,7 +255,7 @@ export class Assembler {
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
     const sym = scope.resolve(name, {allowForwardRef: true, ref: symbol});
     if (sym.expr) {
-      // console.log(`sometging: ${JSON.stringify(sym)}`);
+      console.log(`sometging: ${JSON.stringify(sym)}`); // jroweboy
       return sym.expr;
     }
     // if the expression is not yet known then refer to the symbol table,
@@ -388,7 +265,7 @@ export class Assembler {
       this.symbols.push(sym);
     }
 
-    // console.log(`resolve 1: ${JSON.stringify(sym)}`);
+    console.log(`resolve 1: ${JSON.stringify(sym)}`); // jroweboy
     return {op: 'sym', num: sym.id};
   }
 
@@ -409,15 +286,15 @@ export class Assembler {
       for (const child of scope.anonymousChildren) {
         close(child);
       }
-      for (const [name, sym] of scope.symbols) {
+      for (const [name, sym] of scope.symbols()) {
         if (sym.expr || sym.id == null) continue;
         if (scope.parent) {
           // TODO - record where it was referenced?
           if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
-          const parentSym = scope.parent.symbols.get(name);
+          const parentSym = scope.parent.getSym(name);
           if (!parentSym) {
             // just alias it directly in the parent scope
-            scope.parent.symbols.set(name, sym);
+            scope.parent.addSym(name, sym);
           } else if (parentSym.id != null && parentSym.id >= 0) {
             // If this is resolving a macro from a parent symbol, try to use that value, otherwise
             // fall back to parent sym id
@@ -442,7 +319,7 @@ export class Assembler {
     close(this.currentScope);
 
     for (const [name, global] of this.globals) {
-      const sym = this.currentScope.symbols.get(name);
+      const sym = this.currentScope.getSym(name);
       if (global === 'export') {
         if (!sym?.expr) throw new Error(`Symbol '${name}' undefined`);
         if (sym.id == null) {
@@ -460,10 +337,7 @@ export class Assembler {
       }
     }
 
-    for (const [name, sym] of this.currentScope.symbols) {
-      if (!sym.expr) 
-        throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
-    }
+    this.currentScope.validate();
   }
 
   module(): Module {
@@ -646,7 +520,10 @@ export class Assembler {
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token) {
     // NOTE: * _will_ get current chunk!
 
-    if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
+    if (typeof expr === 'number') {
+      const meta = Exprs.size(expr);
+      expr = {op: 'num', num: expr, source: this._source, meta};
+    }
     const scope = ident.startsWith('@') ? this.cheapLocals : this.currentScope;
     // NOTE: This is incorrect - it will look up the scope chain when it
     // shouldn't.  Mutables may or may not want this, immutables must not.
@@ -661,7 +538,7 @@ export class Assembler {
       this.fail(`Mutable set requires constant`, token);
     } else if (!sym) {
       if (!mut) throw new Error(`impossible`);
-      scope.symbols.set(ident, sym = {id: -1});
+      scope.addSym(ident, sym = {id: -1});
     } else if (!mut && sym.expr) {
       const orig =
           sym.expr.source ? `\nOriginally defined${Tokens.at(sym.expr)}` : '';
@@ -670,7 +547,20 @@ export class Assembler {
       throw new Error(`Redefining symbol ${name}${orig}`);
     }
     sym.expr = expr;
-    // console.log(`setting sym = ${JSON.stringify(sym)}`);
+    console.log(`     Saving new symbol name: ${ident} val: ${JSON.stringify(sym)}`);
+    // If we are making an alias of an existing symbol, copy the size data for that symbol if it exists
+    if (expr.op === 'sym' && (expr.num ?? -1) >= 0) {
+      const resolved = this.symbols[expr.num!].ref as Expr|undefined;
+      console.log(`     resolving cause symlink: ${ident} ${JSON.stringify(resolved)}`);
+      const s = resolved?.meta?.size;
+      if (s) {
+        console.log(`     setting new size: ${ident} size: ${s}`);
+        if (sym.expr.meta)
+          sym.expr.meta.size = s;
+        else
+          sym.expr.meta = Exprs.size(s);
+      }
+    }
   }
 
   async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;
@@ -708,14 +598,9 @@ export class Assembler {
     if (m === 'add' || m === 'a,x' || m === 'a,y') {
       // Special case for address mnemonics
       let expr = arg[1]!;
-      // Attempt to resolve the expression first. If we are able to, then
-      // we can appropriately size the expression
+      const s = expr.meta?.size ?? 2;
 
-      // console.log(`before resolving: ${JSON.stringify(expr)}`);
-      // expr = this.resolve(expr);
-      
-      const s = expr.meta?.size || 2;
-      // console.log(`sizing up 'add' expr: ${JSON.stringify(expr)}`);
+      console.log(`Checking the size before gogo size: ${s} expr: ${JSON.stringify(expr)} `);
       if (m === 'add' && s === 1 && 'zpg' in ops) {
         return this.opcode(ops.zpg!, 1, expr);
       } else if (m === 'add' && 'abs' in ops) {
@@ -799,6 +684,7 @@ export class Assembler {
     const args = Tokens.parseArgList(tokens, start);
     if (!args.length) this.fail(`Bad arg`, front);
     const expr = this.parseExpr(args[0], 0);
+    console.log(`expr : ${JSON.stringify(expr)}`); // jroweboy
     if (args.length === 1) return ['add', expr];
     if (args.length === 2 && args[1].length === 1) {
       if (Tokens.isRegister(args[1][0], 'x')) return ['a,x', expr];
@@ -867,6 +753,7 @@ export class Assembler {
     expr = this.resolve(expr);
     const val = expr.num!;
     if (expr.op !== 'num' || expr.meta?.rel) {
+      console.log(` added placeholder for ${JSON.stringify(expr)}`)
       // use a placeholder and add a substitution
       const offset = chunk.data.length;
       (chunk.subs || (chunk.subs = [])).push({offset, size, expr});
@@ -1035,6 +922,8 @@ export class Assembler {
     } else {
       this.currentScope.anonymousChildren.push(child);
     }
+    // console.log(`setting new scope: ${JSON.stringify(child)} from ${JSON.stringify(this.currentScope)}`)
+    // console.table(child); // jroweboy
     this.currentScope = child;
   }
 
@@ -1089,7 +978,7 @@ export class Assembler {
     Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {
-    return Exprs.parseOnly(tokens, start, this.currentScope.symbols);
+    return Exprs.parseOnly(tokens, start, this.currentScope);
   }
   // parseStringList(tokens: Token[], start = 1): string[] {
   //   return Tokens.parseArgList(tokens, 1).map(ts => {

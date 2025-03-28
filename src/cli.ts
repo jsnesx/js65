@@ -47,7 +47,7 @@ class Arguments {
   patch : "ips" | "" = "";
 }
 
-const DEBUG_PRINT = false;
+const DEBUG_PRINT = true;
 
 const DEBUG = (...args : any) => {
   if (DEBUG_PRINT) {

@@ -752,7 +752,9 @@ class Link {
           }
           e = this.symbols[imported].expr!;
         } else {
-          if (e.num == null) throw new Error(`Symbol not global`);
+          const name = e.sym!;
+          const at = Tokens.at(expr);
+          if (e.num == null) throw new Error(`Symbol not global ${name}${at}`);
           e = this.symbols[e.num].expr!;
         }
       }

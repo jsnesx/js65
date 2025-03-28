@@ -1103,7 +1103,7 @@ describe('Assembler', function() {
         }],
         symbols: [
           {expr: {op: 'num', num: 14, meta: {size: 1}}},
-          {expr: {op: 'sym', num: 0}},
+          {expr: {op: 'num', num: 14, meta: {size: 1}}},
         ],
         segments: [],
       });
@@ -1133,13 +1133,14 @@ describe('Assembler', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('bar', 5);
       a.scope('foo');
-      await a.instruction([ident('sta'), ident('bar')]);
+      debugger;
+      await a.instruction([ident('lda'), ident('bar')]);
       a.endScope();
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
           segments: [],
-          data: Uint8Array.of(0xa5, 0x05),
+          data: Uint8Array.of(0xa5, 0xff),
           subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
         }],
         symbols: [{expr: {meta: {size: 1}, num: 5, op: "num"}}], segments: [],
