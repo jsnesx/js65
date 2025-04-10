@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { Base64 } from './base64.ts';
 import { ExprZ } from './expr.ts';
+import { SourceInfoZ } from './token.ts';
 
 
 // export interface Substitution {
@@ -56,6 +57,13 @@ const BaseChunk = z.object({
   asserts: z.optional(z.array(ExprZ)),
   /** How overwriting previously-written fixed-position data is handled. */
   overwrite: z.optional(OverwriteModeZ), // NOTE: only set programmatically?
+  /**
+   * Source infos for each byte in the chunk.  Should only exist for
+   * the first byte of each instruction, and not for data.
+   */
+  sourceMap: z.optional(z.map(z.number(), SourceInfoZ)),
+  /** Labels within the chunk, mapped to byte offset. */
+  labelIndex: z.optional(z.map(z.string(), z.number())),
 });
 
 export type ChunkNum = z.infer<typeof ChunkNumZ>;

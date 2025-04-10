@@ -13,6 +13,7 @@ import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
+import { type SourceInfo } from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream } from './tokenstream.ts';
 import { IntervalSet, SparseByteArray, binaryInsert } from './util.ts';
@@ -160,6 +161,12 @@ class LinkChunk {
    */
   overlaps = false;
 
+  /** Table of contents for labels in the chunk, for debugging. */
+  readonly labelIndex: Map<string, number>|undefined;
+
+  /** Table of contents for source info in the chunk, for debugging. */
+  readonly sourceMap: Map<number, SourceInfo>|undefined;
+
   private _data?: Uint8Array;
 
   private _org?: number;
@@ -176,6 +183,8 @@ class LinkChunk {
     this.name = chunk.name;
     this.size = chunk.data.length;
     this.segments = chunk.segments;
+    this.labelIndex = chunk.labelIndex && new Map(chunk.labelIndex);
+    this.sourceMap = chunk.sourceMap && new Map(chunk.sourceMap);
     this._data = chunk.data;
     for (const sub of chunk.subs || []) {
       this.subs.add(translateSub(sub, chunkOffset, symbolOffset));
@@ -184,6 +193,7 @@ class LinkChunk {
         .map(e => translateExpr(e, chunkOffset, symbolOffset));
     if (chunk.org) this._org = chunk.org;
     this._overwrite = chunk.overwrite || 'allow';
+    // TODO - copy data from chunk.sources and/or chunk.labels
   }
 
   get org() { return this._org; }

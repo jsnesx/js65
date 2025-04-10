@@ -11,6 +11,7 @@ import * as Exprs from './expr.ts';
 import * as mod from './module.ts';
 import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
+import { type SourceInfo } from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { IntervalSet, assertNever } from './util.ts';
 
@@ -597,6 +598,8 @@ export class Assembler {
     if (!ident.startsWith('@')) {
       this.cheapLocals.clear();
       if (!this.chunk.name && !this.chunk.data.length) this.chunk.name = ident;
+      (this.chunk.labelIndex || (this.chunk.labelIndex = new Map()))
+        .set(ident, this.chunk.data.length);
       if (this.opts.refExtractor?.label && this.chunk.org != null) {
         this.opts.refExtractor.label(
             ident, this.chunk.org + this.chunk.data.length, this.chunk.segments);
@@ -678,10 +681,12 @@ export class Assembler {
   async instruction(...args: [Token[]]|[string, (Arg|string)?]): Promise<void> {
     let mnemonic: string;
     let arg: Arg;
+    let source: SourceInfo|undefined;
     if (args.length === 1 && Array.isArray(args[0])) {
       // handle the line...
       const tokens = args[0];
       mnemonic = Tokens.expectIdentifier(tokens[0]).toLowerCase();
+      source = tokens[0].source;
       arg = this.parseArg(tokens, 1);
     } else if (typeof args[1] === 'string') {
       // parse the tokens first
@@ -717,19 +722,19 @@ export class Assembler {
       const s = expr.meta?.size || 2;
       // console.log(`sizing up 'add' expr: ${JSON.stringify(expr)}`);
       if (m === 'add' && s === 1 && 'zpg' in ops) {
-        return this.opcode(ops.zpg!, 1, expr);
+        return this.opcode(ops.zpg!, 1, expr, source);
       } else if (m === 'add' && 'abs' in ops) {
-        return this.opcode(ops.abs!, 2, expr);
+        return this.opcode(ops.abs!, 2, expr, source);
       } else if (m === 'add' && 'rel' in ops) {
-        return this.relative(ops.rel!, 1, expr);
+        return this.relative(ops.rel!, 1, expr, source);
       } else if (m === 'a,x' && s === 1 && 'zpx' in ops) {
-        return this.opcode(ops.zpx!, 1, expr);
+        return this.opcode(ops.zpx!, 1, expr, source);
       } else if (m === 'a,x' && 'abx' in ops) {
-        return this.opcode(ops.abx!, 2, expr);
+        return this.opcode(ops.abx!, 2, expr, source);
       } else if (m === 'a,y' && s === 1 && 'zpy' in ops) {
-        return this.opcode(ops.zpy!, 1, expr);
+        return this.opcode(ops.zpy!, 1, expr, source);
       } else if (m === 'a,y' && 'aby' in ops) {
-        return this.opcode(ops.aby!, 2, expr);
+        return this.opcode(ops.aby!, 2, expr, source);
       }
       this.fail(`Bad address mode ${m} for ${mnemonic}`);
     }
@@ -737,7 +742,7 @@ export class Assembler {
     if (m in ops) {
       const argLen = this.cpu.argLen(m);
       if (m === 'rel') return this.relative(ops[m]!, argLen, arg[1]!);
-      return this.opcode(ops[m]!, argLen, arg[1]!);
+      return this.opcode(ops[m]!, argLen, arg[1]!, source);
     }
     this.fail(`Bad address mode ${m} for ${mnemonic}`);
   }
@@ -807,7 +812,7 @@ export class Assembler {
     this.fail(`Bad arg`, front);
   }
 
-  relative(op: number, arglen: number, expr: Expr) {
+  relative(op: number, arglen: number, expr: Expr, source?: SourceInfo) {
     // Can arglen ever be 2? (yes - brl on 65816)
     // Basic plan here is that we actually want a relative expr.
     // TODO - clean this up to be more efficient.
@@ -819,14 +824,17 @@ export class Assembler {
     const nextPc = {op: 'num', num, meta};
     const rel: Expr = {op: '-', args: [expr, nextPc]};
     if (expr.source) rel.source = expr.source;
-    this.opcode(op, arglen, rel);
+    this.opcode(op, arglen, rel, source);
   }
 
-  opcode(op: number, arglen: number, expr: Expr) {
+  opcode(op: number, arglen: number, expr: Expr, source?: SourceInfo) {
     // Emit some bytes.
     if (arglen) expr = this.resolve(expr); // BEFORE opcode (in case of *)
     const {chunk} = this;
     this.markWritten(1 + arglen);
+    if (source) {
+      (chunk.sourceMap || (chunk.sourceMap = new Map())).set(chunk.data.length, source);
+    }
     chunk.data.push(op);
     if (arglen) {
       this.append(expr, arglen);
