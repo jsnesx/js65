@@ -31,11 +31,16 @@ const MACPACK: Map<string, string> = new Map(
 
 export interface ReadFileCallback { (path: string, filename: string) : Promise<string> }
 export interface ReadFileBinaryCallback { (path: string, filename: string) : Promise<Uint8Array|string> }
+export class SourceContents {
+  data: Map<string, string> = new Map<string, string>();
+}
+
 
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
   
   constructor(
+    readonly sourceContents?: SourceContents,
     readonly readFile?: ReadFileCallback,
     readonly readFileBinary?: ReadFileBinaryCallback,
     readonly opts?: Options) {}

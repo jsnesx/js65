@@ -13,14 +13,15 @@ import { Preprocessor } from "./preprocessor.ts"
 import type { Options } from "./tokenizer.ts"
 import { Tokenizer } from "./tokenizer.ts"
 import type { ReadFileCallback, ReadFileBinaryCallback } from "./tokenstream.ts"
-import { TokenStream } from "./tokenstream.ts"
+import { SourceContents, TokenStream } from "./tokenstream.ts"
 
 
 interface AnyMap { [key: string]: any; }
-async function processAction(a: Assembler, action: AnyMap, opts: Options, rf: ReadFileCallback, rfb: ReadFileBinaryCallback) {
+
+async function processAction(a: Assembler, action: AnyMap, opts: Options, src: SourceContents, rf: ReadFileCallback, rfb: ReadFileBinaryCallback) {
     switch (action["action"]) {
         case "code": {
-            const toks = new TokenStream(rf, rfb, opts);
+            const toks = new TokenStream(src, rf, rfb, opts);
             const tokenizer = new Tokenizer(action["code"], action["name"], opts);
             toks.enter(tokenizer);
             const pre = new Preprocessor(toks, a);
@@ -80,6 +81,7 @@ export async function compile(
 
     const mods : AnyMap[][] = (typeof modules === 'string') ? JSON.parse(modules) : modules;
     const opts : Options = (typeof options === 'string') ? JSON.parse(options) : options;
+    const src: SourceContents = new SourceContents();
 
     async function readTextWrapper(path: string, filename: string) {
         return Promise.resolve(readTextFileCb(path, filename));
@@ -93,7 +95,7 @@ export async function compile(
     for (const module of mods) {
         let a = new Assembler(Cpu.P02);
         for (const action of module) {
-            await processAction(a, action, opts, readTextWrapper, readBinaryWrapper);
+            await processAction(a, action, opts, src, readTextWrapper, readBinaryWrapper);
         }
         assembled.push(a);
     }

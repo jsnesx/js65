@@ -5,17 +5,17 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Assembler } from './assembler.ts';
-import { Cpu } from './cpu.ts';
+// import { Assembler } from './assembler.ts';
+// import { Cpu } from './cpu.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { Targets } from "./preamble.ts";
-import { Preprocessor } from './preprocessor.ts';
+// import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
 import { type SourceInfo } from './token.ts';
-import { Tokenizer } from './tokenizer.ts';
-import { TokenStream } from './tokenstream.ts';
+// import { Tokenizer } from './tokenizer.ts';
+import { SourceContents } from './tokenstream.ts';
 import { IntervalSet, SparseByteArray, binaryInsert } from './util.ts';
 
 export interface Export {
@@ -27,24 +27,25 @@ export interface Export {
 
 export class Linker {
   opts: Options;
+
   // TODO - accept a list of [filename, contents]?
-  static assemble(contents: string): Uint8Array {
-    const opts = {lineContinuations: true};
-    const source = new Tokenizer(contents, 'contents.s',
-                                 opts);
-    const asm = new Assembler(Cpu.P02);
-    const toks = new TokenStream(undefined, undefined, opts);
-    toks.enter(source);
-    const pre = new Preprocessor(toks, asm);
-    asm.tokens(pre);
-    const linker = new Linker();
-    //linker.base(this.prg, 0);
-    linker.read(asm.module());
-    const out = linker.link();
-    const data = new Uint8Array(out.length);
-    out.apply(data);
-    return data;
-  }
+  // static assemble(contents: string): Uint8Array {
+  //   const opts = {lineContinuations: true};
+  //   const source = new Tokenizer(contents, 'contents.s',
+  //                                opts);
+  //   const asm = new Assembler(Cpu.P02);
+  //   const toks = new TokenStream(undefined, undefined, undefined, opts);
+  //   toks.enter(source);
+  //   const pre = new Preprocessor(toks, asm);
+  //   asm.tokens(pre);
+  //   const linker = new Linker();
+  //   //linker.base(this.prg, 0);
+  //   linker.read(asm.module());
+  //   const out = linker.link();
+  //   const data = new Uint8Array(out.length);
+  //   out.apply(data);
+  //   return data;
+  // }
 
   static link(...files: Module[]): SparseByteArray {
     const linker = new Linker();

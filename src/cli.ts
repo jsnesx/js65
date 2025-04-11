@@ -12,7 +12,7 @@ import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { clean, smudge } from './smudge.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { TokenStream } from './tokenstream.ts';
+import { SourceContents, TokenStream } from './tokenstream.ts';
 import { type Module, ModuleZ } from "./module.ts";
 import { sha1 } from "./sha1"
 import { Base64 } from './base64.ts';
@@ -58,6 +58,9 @@ const DEBUG = (...args : any) => {
 export class Cli {
   public static readonly STDIN : string = "//stdin";
   public static readonly STDOUT : string = "//stdout";
+
+  sourceContents: SourceContents = new SourceContents();
+
   constructor(readonly callbacks: Callbacks) {
     this.callbacks = callbacks;
   }
@@ -172,7 +175,6 @@ export class Cli {
     }
   }
 
-
   async assemble(args: Arguments) {
     DEBUG("calling assemble");
 
@@ -197,7 +199,7 @@ export class Cli {
       //   DEBUG(`resolved ${fullpath}`);
       //   return await this.callbacks.fsReadBytes(fullpath);
       // }
-      const toks = new TokenStream(this.callbacks.fsReadString, this.callbacks.fsReadBytes, opts);
+      const toks = new TokenStream(this.sourceContents, this.callbacks.fsReadString, this.callbacks.fsReadBytes, opts);
 
       DEBUG("about to read asm file input");
       const str = await this.callbacks.fsReadString("", file);
@@ -241,7 +243,7 @@ export class Cli {
   }
 
   async link(args: Arguments, modules: Module[]) {
-    const linker = new Linker({ target: args.target });
+    const linker = new Linker(sourceContents, { target: args.target });
 
     DEBUG("starting linking");
     let data: string|Uint8Array|null = null;
