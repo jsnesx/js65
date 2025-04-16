@@ -8,20 +8,18 @@
     "lib": "bun build --entrypoints ./src/libassembler.ts --minify --sourcemap=linked --outdir ./build"
   },
   "bin": {
-    "analyze": "dist/js/analyze.js",
     "js65": "target/release/bin/js65",
-    "cryr": "target/release/bin/cryr"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shicks/js65.git"
+    "url": "git+https://github.com/jsnesx/js65.git"
   },
   "author": "Stephen Hicks",
   "license": "MPL-2.0",
   "bugs": {
-    "url": "https://github.com/shicks/js65/issues"
+    "url": "https://github.com/jsnesx/js65/issues"
   },
-  "homepage": "https://github.com/shicks/js65#readme",
+  "homepage": "https://github.com/jsnesx/js65#readme",
   "devDependencies": {
     "@types/bun": "^1.2.9",
     "@types/sprintf-js": "^1.1.4",
