@@ -72,7 +72,7 @@ abstract class BaseScope {
     const {allowForwardRef = false, ref} = opts;
     const [tail, scope] = this.pickScope(name);
     const sym = scope.symbols.get(tail);
-//console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
+    //console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
     if (sym) {
       if (tail !== name) sym.scoped = true;
       return sym;
@@ -81,7 +81,7 @@ abstract class BaseScope {
     // if (scope.closed) throw new Error(`Could not resolve symbol: ${name}`);
     // make a new symbol - but only in an open scope
     //const symbol = {id: this.symbolArray.length};
-//console.log('created:',symbol);
+    //console.log('created:',symbol);
     //this.symbolArray.push(symbol);
     const symbol: Symbol = {ref};
     scope.symbols.set(tail, symbol);
@@ -323,7 +323,9 @@ export class Assembler {
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
       }
-      return Exprs.evaluate(rec(e));
+      const ex = Exprs.evaluate(rec(e));
+      console.log(`ex resolved: `,ex);
+      return ex;
     });
     if (this.opts.refExtractor?.ref && out !== expr) {
       const orig = this.exprMap.get(expr) || expr;
@@ -379,6 +381,7 @@ export class Assembler {
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
     const sym = scope.resolve(name, {allowForwardRef: true, ref: symbol});
     if (sym.expr) {
+      // if (sym.expr.source?.ident == "R0")
       // console.log(`sometging: ${JSON.stringify(sym)}`);
       return sym.expr;
     }
@@ -389,7 +392,7 @@ export class Assembler {
       this.symbols.push(sym);
     }
 
-    // console.log(`resolve 1: ${JSON.stringify(sym)}`);
+    console.log(`resolve 1: ${JSON.stringify(sym)}`);
     return {op: 'sym', num: sym.id};
   }
 
@@ -411,7 +414,11 @@ export class Assembler {
         close(child);
       }
       for (const [name, sym] of scope.symbols) {
-        if (sym.expr || sym.id == null) continue;
+        if (sym.expr || sym.id == null) {
+          // if(sym.expr?.num == 6)
+          //   console.log(`ready already `, sym);
+          continue;
+        }
         if (scope.parent) {
           // TODO - record where it was referenced?
           if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
@@ -422,8 +429,14 @@ export class Assembler {
           } else if (parentSym.id != null && parentSym.id >= 0) {
             // If this is resolving a macro from a parent symbol, try to use that value, otherwise
             // fall back to parent sym id
-            sym.expr = {op: 'sym', num: parentSym.id};
+            // console.log(`closing `, parentSym);
+            // if(parentSym.expr?.source?.ident == "R0")
+            //   console.log(`closing `, sym);
+            sym.expr = {op: 'sym', num: parentSym.id, sym: parentSym.expr?.sym};
           } else if (parentSym.expr) {
+            // console.log(`parentsym closing `, parentSym);
+            // if(parentSym.expr?.source?.ident == "R0")
+            //   console.log(`parentsym closing `, sym);
             sym.expr = parentSym.expr;
           } else {
             // must have either id or expr...?
@@ -649,7 +662,9 @@ export class Assembler {
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token) {
     // NOTE: * _will_ get current chunk!
 
-    if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
+    if (typeof expr === 'number') {
+      expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
+    }
     const scope = ident.startsWith('@') ? this.cheapLocals : this.currentScope;
     // NOTE: This is incorrect - it will look up the scope chain when it
     // shouldn't.  Mutables may or may not want this, immutables must not.
@@ -673,7 +688,9 @@ export class Assembler {
       throw new Error(`Redefining symbol ${name}${orig}`);
     }
     sym.expr = expr;
-    // console.log(`setting sym = ${JSON.stringify(sym)}`);
+    if (sym.expr?.source) sym.expr.source.ident = ident;
+    if (ident == "R0")
+      console.log(`assigning symbol `, ident, sym);
   }
 
   async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;

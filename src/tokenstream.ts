@@ -71,13 +71,13 @@ export class TokenStream implements Tokens.Source {
             if (!this.readFile) this.err(line);
             // TODO - options?
             const code = await this.loadFile<string>(path, this.readFile);
-            this.enter(new Tokenizer(code, path, this.opts));
+            this.enter(new Tokenizer(code, path, this.sourceContents, this.opts));
             continue;
           }
           case '.macpack': {
             const pack = Tokens.expectIdentifier(line[1])?.toLowerCase();
             const code = MACPACK.get(pack) ?? this.err(line);
-            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts));
+            this.enter(new Tokenizer(code, `${pack}.macpack`, this.sourceContents, this.opts));
             continue;
           }
           case '.incbin': {

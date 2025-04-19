@@ -132,7 +132,7 @@ export function evaluate(expr: Expr): Expr {
         // deno-lint-ignore no-unused-vars
         const {rel, ...meta} = expr.meta;
         // TODO - pull size from meta?
-        return {op: 'num', num: expr.num! + meta.org!, meta};
+        return {op: 'num', num: expr.num! + meta.org!, meta, source: expr.source};
       }
       return expr;
     case '.max': return sameChunk(expr, Math.max);

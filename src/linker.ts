@@ -25,6 +25,13 @@ export interface Export {
   //segment?: string;
 }
 
+interface MesenLabelFormat {
+  type: 'P'|'R'|'S'|'W'|'G',
+  address: number|string,
+  label: string,
+  comment: string,
+}
+
 export class Linker {
   opts: Options;
 
@@ -91,6 +98,63 @@ export class Linker {
 
   watch(...offset: number[]) {
     this._link.watches.push(...offset);
+  }
+
+  getDebugInfo(sources?: SourceContents) : string {
+    if (!sources) return "";
+
+    let data = "";
+    const labels: MesenLabelFormat[] = [];
+    const seenLabels: Set<string> = new Set;
+    
+    // Check all symbols for constant values and set RAM labels
+    for (const s of this._link.symbols || []) {
+      if (s.expr?.op !== 'num') continue;
+      labels.push({
+        type: (s.expr.num! < 0x2000) ? 'R' : (s.expr.num! < 0x6000) ? 'G' : (s.expr.num! < 0x8000) ? 'S' : 'P',
+        address: `${s.expr.num?.toString(16) ?? 0}`,
+        label: JSON.stringify(s.expr) ?? "",
+        comment: "" // TODO add comments to RAM labels?
+      });
+    }
+    for (const c of this._link.chunks || []) {
+      if (c.overlaps) continue;
+      const rev = new Map();
+      for (const [k, v] of (c.labelIndex || [])) {
+        rev.set(v, k);
+      }
+      let name = c.name;
+      for (let offset = 0; offset < c.size; offset++) {
+        name = rev.get(offset) || name;
+        const e = c.sourceMap?.get(offset);
+        if (!e) continue;
+        let {file, line} = e;
+        line--;
+        let code = '';
+        const s = sources.data.get(file)?.split('\n');
+        // console.log(`file:`,sources.data);
+        if (s) {
+          let firstLine = line;
+          do { firstLine--; } while (firstLine >= 0 && /^(\s*;|\W:)/.test(s[firstLine]));
+          code = s.slice(firstLine + 1, line + 1).join('\n');
+        }
+        // nes.debug.chunkMap.mapping[c.offset + offset] = {name, offset, file, line, code};
+        const absOffset = c.offset! + offset - 0x10;
+        const n = !seenLabels.has(name!) ? name! : "";
+        seenLabels.add(n);
+        labels.push({
+          type: 'P',
+          address: `${absOffset.toString(16)}`,
+          label: n,
+          comment: code,
+        });
+      }
+    }
+
+    for (const label of labels) {
+      data += `${label.type}:${label.address}:${label.label}:${label.comment}\n`;
+    }
+    return data;
   }
 }
 
@@ -762,9 +826,12 @@ class Link {
             throw new Error(`Symbol never exported ${name}${at}`);
           }
           e = this.symbols[imported].expr!;
+          e.sym = name;
         } else {
           if (e.num == null) throw new Error(`Symbol not global`);
+          const name = e.sym!;
           e = this.symbols[e.num].expr!;
+          e.sym = name;
         }
       }
       return Exprs.evaluate(rec(e));

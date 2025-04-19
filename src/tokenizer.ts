@@ -8,14 +8,17 @@
 import {Buffer} from './buffer.ts';
 import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
+import { SourceContents } from './tokenstream.ts';
 
 export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
 
   constructor(str: string,
               readonly file = 'input.s',
+              readonly sourceContents?: SourceContents,
               readonly opts: Options = {}) {
     this.buffer = new Buffer(str);
+    this.sourceContents?.data.set(file, str);
   }
 
   async next(): Promise<Token[]|undefined> {
@@ -69,7 +72,9 @@ export class Tokenizer implements Tokens.Source {
     };
     try {
       const tok = this.tokenInternal();
-      if (!this.opts.skipSourceAnnotations) tok.source = source;
+      if (this.opts.generateDebugInfo) {
+        tok.source = source;
+      }
       return tok;
     } catch (err) {
       const {file, line, column} = source;
@@ -171,6 +176,5 @@ export interface Options {
   // caseInsensitive?: boolean; // handle elsewhere?
   lineContinuations?: boolean;
   numberSeparators?: boolean;
-  skipSourceAnnotations?: boolean;
+  generateDebugInfo?: boolean;
 }
-

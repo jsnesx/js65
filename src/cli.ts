@@ -42,12 +42,14 @@ class Arguments {
   rom = "";
   files : string[] = [];
   target = '';
+  debuginfo = true;
+  dbgfile = "";
   compileonly = false;
   includePaths : string[] = [];
   patch : "ips" | "" = "";
 }
 
-const DEBUG_PRINT = false;
+const DEBUG_PRINT = true;
 
 const DEBUG = (...args : any) => {
   if (DEBUG_PRINT) {
@@ -75,6 +77,13 @@ export class Cli {
       } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
         if (out.outfile) this.usage();
         out.outfile = args[++i];
+      } else if (arg === '--dbgfile') {
+        if (out.dbgfile) this.usage();
+        out.dbgfile = args[++i];
+      } else if (arg === '-g') {
+        out.debuginfo = true; // This is default on contrary to most compilers.
+      } else if (arg === '--no-debuginfo') {
+        out.debuginfo = false; // Invert it to allow turning off debug info generation
       } else if (arg === '-c' || arg === '--compileonly') {
         out.compileonly = true;
       } else if (arg.startsWith('--output=')) {
@@ -166,9 +175,12 @@ export class Cli {
         return;
       }
 
-      const linked = await this.link(args, modules);
+      const {data, dbginfo} = await this.link(args, modules);
       
-      await this.callbacks.fsWriteBytes("", args.outfile, linked);
+      await this.callbacks.fsWriteBytes("", args.outfile, data);
+      if (args.dbgfile) {
+        await this.callbacks.fsWriteString("", args.dbgfile, dbginfo);
+      }
     } catch (e) {
       this.printerrors(e);
       throw e;
@@ -187,7 +199,8 @@ export class Cli {
           file.substring(0, file.lastIndexOf("/")),
           ...args.includePaths
         ],
-        lineContinuations: true
+        lineContinuations: true,
+        generateDebugInfo: args.debuginfo,
       };
       // const readfile = async (path: string, filename: string) => {
       //   const fullpath = await this.callbacks.fsResolve(path, filename);
@@ -202,8 +215,10 @@ export class Cli {
       const toks = new TokenStream(this.sourceContents, this.callbacks.fsReadString, this.callbacks.fsReadBytes, opts);
 
       DEBUG("about to read asm file input");
-      const str = await this.callbacks.fsReadString("", file);
-      // if (err) throw err;
+      const str = await this.callbacks.fsReadString("", file).catch((err) => {
+        this.usage(-1, err)
+        throw err;
+      });
       
       DEBUG("attempting to parse module");
       // try to parse the input as a Module first to see if its already compiled
@@ -224,7 +239,7 @@ export class Cli {
         // if it doesn't parse as a module, treat it as source code
         DEBUG(`not a module because json parse failed ${err}`);
       }
-      const tokenizer = new Tokenizer(str!, file, opts);
+      const tokenizer = new Tokenizer(str!, file, this.sourceContents, opts);
       DEBUG("tokenization complete");
       // toks.enter(Tokens.concat(tokenizer));
       toks.enter(tokenizer);
@@ -243,7 +258,7 @@ export class Cli {
   }
 
   async link(args: Arguments, modules: Module[]) {
-    const linker = new Linker(sourceContents, { target: args.target });
+    const linker = new Linker({ target: args.target });
 
     DEBUG("starting linking");
     let data: string|Uint8Array|null = null;
@@ -269,8 +284,8 @@ export class Cli {
       if (!data) data = new Uint8Array(out.length);
       out.apply(data);
     }
-
-    return data;
+    const dbginfo: string = !args.dbgfile ? "" : linker.getDebugInfo(this.sourceContents);
+    return {data, dbginfo};
     // console.log("writing data to disk");
     // await this.callbacks.fsWriteBytes(args.outfile, data);
   }
@@ -354,6 +369,8 @@ optional arguments:
   -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
   -r FILE/--rom=FILE      Name of the file to use as a base onto which patches will be assembled.
   --ips                   Produce an IPS patch rather than a complete binary. Cannot be used with --compileonly.
+  -g                      Add debug info to the assembly that can be used at link time to produce debug symbols (Default ON)
+  --no-debuginfo          Disable debug info generation.
   -h/--help               Print this help text and exit.
 
 ===

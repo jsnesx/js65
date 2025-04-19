@@ -19,7 +19,7 @@ public record Js65Options
     public IEnumerable<string> includePaths = new List<string>();
     public bool lineContinuations = false;
     public bool numberSeperators = false;
-    public bool skipSourceAnnotations = false;
+    public bool generateDebugInfo = true;
 }
 
 public abstract class Assembler(Js65Options? options = null, Js65Callbacks? callbacks = null)

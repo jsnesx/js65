@@ -55,7 +55,7 @@ let opts = {
     includePaths: [...Options.includePaths],
     lineContinuations: !!Options.lineContinuations,
     numberSeparators: !!Options.numberSeparators,
-    skipSourceAnnotations: !!Options.skipSourceAnnotations
+    generateDebugInfo: !!Options.generateDebugInfo
 };
 
 compile(modules, romdata, opts, FileCallbacks.OnFileReadText, FileCallbacks.OnFileReadBinary);
