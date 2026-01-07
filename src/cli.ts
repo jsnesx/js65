@@ -5,17 +5,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
-import { Linker } from './linker.ts';
-// import * as Tokens from './token.ts';
-import { Preprocessor } from './preprocessor.ts';
 import { clean, smudge } from './smudge.ts';
-import { Tokenizer } from './tokenizer.ts';
-import { TokenStream } from './tokenstream.ts';
-import { type Module, ModuleZ } from "./module.ts";
-import { sha1 } from "./sha1"
+import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
+import { assemble, compile, type AssemblyInput, type AssemblerOptions, type LinkerOptions, type OutputFormat } from './libassembler.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -115,7 +109,7 @@ export class Cli {
     if (args.files.length === 0) {
       return this.usage(1, [new Error("No input files provided")]);
     }
-    
+
     if (args.compileonly) {
       if (args.files.length != 1)
         return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
@@ -145,12 +139,31 @@ export class Cli {
         return this.smudge(args);
       }
 
-      // assemble
-      const modules = await this.assemble(args);
-      
+      // Convert CLI arguments to libassembler inputs
+      const inputs: AssemblyInput[] = [];
+      for (const file of args.files) {
+        const code = await this.callbacks.fsReadString("", file);
+        inputs.push({ type: 'source', code, name: file });
+      }
+
+      // Prepare options
+      const assemblerOpts: AssemblerOptions = {
+        includePaths: args.files[0] ? [
+          args.files[0].substring(0, args.files[0].lastIndexOf("/")),
+          ...args.includePaths
+        ] : args.includePaths,
+        lineContinuations: true
+      };
+
+      const callbacks = {
+        readText: this.callbacks.fsReadString,
+        readBinary: this.callbacks.fsReadBytes
+      };
+
       if (args.compileonly) {
         DEBUG("stopping before linking cause --compileonly");
-        // there should only be one module at this point
+        // Assemble only, no linking
+        const modules = await assemble(inputs, assemblerOpts, callbacks);
 
         const module = JSON.stringify(modules[0], (k, v) => {
           if (k === "data" && typeof v === "object") {
@@ -163,114 +176,26 @@ export class Cli {
         return;
       }
 
-      const linked = await this.link(args, modules);
-      
+      // Full compile (assemble + link)
+      const linkerOpts: LinkerOptions = {
+        target: args.target
+      };
+
+      // Load base ROM if specified
+      if (args.rom) {
+        let romData = await this.callbacks.fsReadBytes("", args.rom);
+        if (typeof romData === "string") romData = new Base64().decode(romData);
+        linkerOpts.baseRom = romData;
+      }
+
+      const outputFormat: OutputFormat = args.patch === "ips" ? "ips" : "binary";
+      const linked = await compile(inputs, assemblerOpts, linkerOpts, outputFormat, callbacks);
+
       await this.callbacks.fsWriteBytes("", args.outfile, linked);
     } catch (e) {
       this.printerrors(e);
       throw e;
     }
-  }
-
-
-  async assemble(args: Arguments) {
-    DEBUG("calling assemble");
-
-    const modules : Module[] = [];
-    for (const file of args.files) {
-      DEBUG(`building asm file ${file}`);
-      const asm = new Assembler(Cpu.P02);
-      const opts = {
-        includePaths: [
-          file.substring(0, file.lastIndexOf("/")),
-          ...args.includePaths
-        ],
-        lineContinuations: true
-      };
-      // const readfile = async (path: string, filename: string) => {
-      //   const fullpath = await this.callbacks.fsResolve(path, filename);
-      //   DEBUG(`resolved ${fullpath}`);
-      //   return await this.callbacks.fsReadString(fullpath);
-      // }
-      // const readfilebin = async (path: string, filename: string) => {
-      //   const fullpath = await this.callbacks.fsResolve(path, filename);
-      //   DEBUG(`resolved ${fullpath}`);
-      //   return await this.callbacks.fsReadBytes(fullpath);
-      // }
-      const toks = new TokenStream(this.callbacks.fsReadString, this.callbacks.fsReadBytes, opts);
-
-      DEBUG("about to read asm file input");
-      const str = await this.callbacks.fsReadString("", file);
-      // if (err) throw err;
-      
-      DEBUG("attempting to parse module");
-      // try to parse the input as a Module first to see if its already compiled
-      try {
-        const obj = JSON.parse(str!);
-        DEBUG(`parsed json: ${JSON.stringify(obj)}`);
-        const parsedModule = await ModuleZ.safeParseAsync(obj);
-        if (parsedModule.success) {
-          DEBUG("successfully parsed as a module");
-          // if it parsed as a module, just add it to the module list
-          modules.push(parsedModule.data);
-          continue;
-        } else {
-          // if it doesn't parse as a module, treat it as source code
-          DEBUG(`not a module because zod parse failed ${parsedModule.error}`);
-        }
-      } catch (err) {
-        // if it doesn't parse as a module, treat it as source code
-        DEBUG(`not a module because json parse failed ${err}`);
-      }
-      const tokenizer = new Tokenizer(str!, file, opts);
-      DEBUG("tokenization complete");
-      // toks.enter(Tokens.concat(tokenizer));
-      toks.enter(tokenizer);
-      DEBUG("running preprocessor");
-      const pre = new Preprocessor(toks, asm);
-      // const appliedPreprocessor = await pre.tokens();
-      DEBUG("applying tokens to assembly");
-      // const pre2 = new Preprocessor(toks, asm);
-      await asm.tokens(pre);
-      DEBUG("assembly complete, writing module");
-      const module = asm.module();
-      module.name = file;
-      modules.push(module);
-    }
-    return modules;
-  }
-
-  async link(args: Arguments, modules: Module[]) {
-    const linker = new Linker({ target: args.target });
-
-    DEBUG("starting linking");
-    let data: string|Uint8Array|null = null;
-    if (!args.patch && args.rom) {
-      DEBUG(`reading ROM: ${args.rom}`);
-      data = await this.callbacks.fsReadBytes("", args.rom);
-      if (typeof data === "string") data = new Base64().decode(data);
-
-      linker.base(data, 0);
-    }
-
-    for (const module of modules) {
-      DEBUG(`reading module: ${module.name}`);
-      linker.read(module);
-    }
-    DEBUG("about to run linking");
-    const out = linker.link();
-
-    DEBUG("linking complete, writing data to the output array");
-    if (args.patch == "ips") {
-      data = out.toIpsPatch();
-    } else {
-      if (!data) data = new Uint8Array(out.length);
-      out.apply(data);
-    }
-
-    return data;
-    // console.log("writing data to disk");
-    // await this.callbacks.fsWriteBytes(args.outfile, data);
   }
 
   async smudge(args: Arguments) {

@@ -51,14 +51,120 @@ public class ClearScriptEngine : Assembler
             _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
 import { compile } from '@system/libassembler'
 
-let opts = {
+// Convert action-based modules to source inputs
+const module_list = Object.values(modules);
+const inputs = module_list.map((module_expando, idx) => {
+    // Convert actions to assembly source code
+    const lines = [];
+
+    const module = Object.values(module_expando);
+    for (const action of module) {
+        switch (action.action) {
+            case 'code':
+                if (action.code) {
+                    lines.push(action.code);
+                }
+                break;
+
+            case 'label':
+                lines.push(`${action.label}:`);
+                break;
+
+            case 'byte':
+                if (Array.isArray(action.bytes)) {
+                    const values = action.bytes.map(b => {
+                        if (typeof b === 'object' && b.op === 'sym') {
+                            return b.sym; // Symbol reference
+                        }
+                        return `$${b.toString(16).padStart(2, '0')}`;
+                    }).join(', ');
+                    lines.push(`.byte ${values}`);
+                }
+                break;
+
+            case 'word':
+                if (Array.isArray(action.words)) {
+                    const values = action.words.map(w => {
+                        if (typeof w === 'object' && w.op === 'sym') {
+                            return w.sym; // Symbol reference
+                        }
+                        return `$${w.toString(16).padStart(4, '0')}`;
+                    }).join(', ');
+                    lines.push(`.word ${values}`);
+                }
+                break;
+
+            case 'org':
+                const addr = `$${action.addr.toString(16).padStart(4, '0')}`;
+                lines.push(`.org ${addr}`);
+                break;
+
+            case 'segment':
+                if (Array.isArray(action.name)) {
+                    const segments = action.name.map(s => `"${s}"`).join(', ');
+                    lines.push(`.segment ${segments}`);
+                } else if (action.name) {
+                    lines.push(`.segment "${action.name}"`);
+                }
+                break;
+
+            case 'reloc':
+                lines.push('.reloc');
+                break;
+
+            case 'export':
+                lines.push(`.export ${action.name}`);
+                break;
+
+            case 'assign':
+                lines.push(`${action.name} = ${action.value}`);
+                break;
+
+            case 'set':
+                lines.push(`.set ${action.name}, ${action.value}`);
+                break;
+
+            case 'free':
+                if (action.size) {
+                    lines.push(`.res ${action.size}, $ff`);
+                }
+                break;
+
+            default:
+                console.warn(`Unknown action type: ${action.action}`);
+        }
+    }
+
+    const source = lines.join('\n');
+    return {
+        type: 'source',
+        code: source,
+        name: `module_${idx}.s`
+    };
+});
+
+const assemblerOpts = {
     includePaths: [...Options.includePaths],
     lineContinuations: !!Options.lineContinuations,
     numberSeparators: !!Options.numberSeparators,
     skipSourceAnnotations: !!Options.skipSourceAnnotations
 };
 
-compile(modules, romdata, opts, FileCallbacks.OnFileReadText, FileCallbacks.OnFileReadBinary);
+const linkerOpts = {
+    baseRom: romdata
+};
+
+const callbacks = {
+    readText: FileCallbacks.OnFileReadText,
+    readBinary: FileCallbacks.OnFileReadBinary
+};
+
+compile(inputs, assemblerOpts, linkerOpts, 'binary', callbacks).then(result => {
+    // Copy result back to romdata
+    for (let i = 0; i < result.length; i++) {
+        romdata[i] = result[i];
+    }
+});
 """);
         });
         var outdata = new byte[rom.Length];
