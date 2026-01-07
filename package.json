@@ -5,10 +5,10 @@
   "scripts": {
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65",
-    "lib": "bun build --entrypoints ./src/libassembler.ts --minify --sourcemap=linked --outdir ./build"
+    "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build"
   },
   "bin": {
-    "js65": "target/release/bin/js65",
+    "js65": "target/release/bin/js65"
   },
   "repository": {
     "type": "git",
