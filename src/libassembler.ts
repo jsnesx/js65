@@ -10,7 +10,7 @@ import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { TokenStream } from './tokenstream.ts';
+import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, ModuleZ } from "./module.ts";
 
 /**
@@ -27,7 +27,7 @@ export interface AssemblerOptions {
   includePaths?: string[];
   lineContinuations?: boolean;
   numberSeparators?: boolean;
-  skipSourceAnnotations?: boolean;
+  generateDebugInfo?: boolean;
 }
 
 /**
@@ -59,12 +59,14 @@ export interface FileCallbacks {
  * @param inputs - Array of source code or modules to assemble
  * @param options - Assembler configuration
  * @param callbacks - File system callbacks for .include/.incbin
+ * @param sourceContents - Optional SourceContents to store source for debug info
  * @returns Array of compiled Module objects
  */
 export async function assemble(
   inputs: AssemblyInput[],
   options?: AssemblerOptions,
-  callbacks?: FileCallbacks
+  callbacks?: FileCallbacks,
+  sourceContents?: SourceContents
 ): Promise<Module[]> {
   const modules: Module[] = [];
 
@@ -81,13 +83,14 @@ export async function assemble(
       includePaths: options?.includePaths || [],
       lineContinuations: options?.lineContinuations ?? true,
       numberSeparators: options?.numberSeparators,
-      skipSourceAnnotations: options?.skipSourceAnnotations
+      generateDebugInfo: options?.generateDebugInfo
     };
 
     const toks = new TokenStream(
       callbacks?.readText,
       callbacks?.readBinary,
-      opts
+      opts,
+      sourceContents
     );
 
     // Try to parse as JSON Module first (for .o files)
@@ -104,7 +107,7 @@ export async function assemble(
     }
 
     // Tokenize and assemble source code
-    const tokenizer = new Tokenizer(input.code, input.name, opts);
+    const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents);
     toks.enter(tokenizer);
     const pre = new Preprocessor(toks, asm);
     await asm.tokens(pre);

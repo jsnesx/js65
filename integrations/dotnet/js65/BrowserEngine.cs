@@ -18,6 +18,7 @@ namespace js65;
 [JsonSerializable(typeof(Dictionary<string, object>[]))]
 [JsonSerializable(typeof(Js65Options))]
 [JsonSerializable(typeof(Js65Callbacks))]
+[JsonSerializable(typeof(Js65CompileResult))]
 internal partial class AssmeblerContext : JsonSerializerContext;
 
 [SupportedOSPlatform("browser")]
@@ -35,7 +36,7 @@ public partial class BrowserJsEngine(Js65Options? options = null, Js65Callbacks?
 
     private readonly Task<JSObject> _module = JSHost.ImportAsync("js65.libassembler.js", "js65/libassembler.js");
 
-    public override async Task<byte[]?> Apply(byte[] rom)
+    public override async Task<Js65CompileResult?> Apply(byte[] rom)
     {
         // Import the module and wait for it to finish
         _ = await _module;
@@ -43,9 +44,9 @@ public partial class BrowserJsEngine(Js65Options? options = null, Js65Callbacks?
         var modulesJson = JsonSerializer.Serialize(expando, AssmeblerContext.Default.ListListExpandoObject);
         var optsJson = JsonSerializer.Serialize(Options, AssmeblerContext.Default.Js65Options);
         var b64Bytes = Convert.ToBase64String(rom);
-        var output = await Compile(modulesJson, b64Bytes, optsJson, 
+        var output = await Compile(modulesJson, b64Bytes, optsJson,
             (basePath, filePath) => Callbacks?.OnFileReadText?.Invoke(basePath, filePath) ?? "",
             (basePath, filePath) => Convert.ToBase64String(Callbacks?.OnFileReadBinary?.Invoke(basePath, filePath) ?? []));
-        return Convert.FromBase64String(output);
+        return JsonSerializer.Deserialize(Convert.FromBase64String(output), AssmeblerContext.Default.Js65CompileResult);
     }
 }

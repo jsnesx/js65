@@ -19,7 +19,13 @@ public record Js65Options
     public IEnumerable<string> includePaths = new List<string>();
     public bool lineContinuations = false;
     public bool numberSeperators = false;
-    public bool skipSourceAnnotations = false;
+    public bool generateDebugInfo = true;
+}
+
+public record Js65CompileResult
+{
+    public byte[] romdata;
+    public string debugfile;
 }
 
 public abstract class Assembler(Js65Options? options = null, Js65Callbacks? callbacks = null)
@@ -40,7 +46,7 @@ public abstract class Assembler(Js65Options? options = null, Js65Callbacks? call
         return mod;
     }
 
-    public abstract Task<byte[]?> Apply(byte[] rom);
+    public abstract Task<Js65CompileResult?> Apply(byte[] rom);
 
     protected List<List<ExpandoObject>> IntoExpandoObject()
     {

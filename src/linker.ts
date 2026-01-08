@@ -13,8 +13,9 @@ import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
+import { type SourceInfo } from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { TokenStream } from './tokenstream.ts';
+import { TokenStream, SourceContents } from './tokenstream.ts';
 import { IntervalSet, SparseByteArray, binaryInsert } from './util.ts';
 
 export interface Export {
@@ -24,13 +25,19 @@ export interface Export {
   //segment?: string;
 }
 
+interface MesenLabelFormat {
+  type: 'P'|'R'|'S'|'W'|'G',
+  address: number|string,
+  label: string,
+  comment: string,
+}
+
 export class Linker {
   opts: Options;
   // TODO - accept a list of [filename, contents]?
   static assemble(contents: string): Uint8Array {
     const opts = {lineContinuations: true};
-    const source = new Tokenizer(contents, 'contents.s',
-                                 opts);
+    const source = new Tokenizer(contents, 'contents.s', opts);
     const asm = new Assembler(Cpu.P02);
     const toks = new TokenStream(undefined, undefined, opts);
     toks.enter(source);
@@ -89,6 +96,61 @@ export class Linker {
 
   watch(...offset: number[]) {
     this._link.watches.push(...offset);
+  }
+
+  getDebugInfo(sources?: SourceContents) : string {
+    if (!sources) return "";
+
+    let data = "";
+    const labels: MesenLabelFormat[] = [];
+    const seenLabels: Set<string> = new Set;
+
+    // Check all symbols for constant values and set RAM labels
+    for (const s of this._link.symbols || []) {
+      if (s.expr?.op !== 'num') continue;
+      labels.push({
+        type: (s.expr.num! < 0x2000) ? 'R' : (s.expr.num! < 0x6000) ? 'G' : (s.expr.num! < 0x8000) ? 'S' : 'P',
+        address: `${s.expr.num?.toString(16) ?? 0}`,
+        label: JSON.stringify(s.expr) ?? "",
+        comment: "" // TODO add comments to RAM labels?
+      });
+    }
+    for (const c of this._link.chunks || []) {
+      if (c.overlaps) continue;
+      const rev = new Map();
+      for (const [k, v] of (c.labelIndex || [])) {
+        rev.set(v, k);
+      }
+      let name = c.name;
+      for (let offset = 0; offset < c.size; offset++) {
+        name = rev.get(offset) || name;
+        const e = c.sourceMap?.get(offset);
+        if (!e) continue;
+        let {file, line} = e;
+        line--;
+        let code = '';
+        const s = sources.data.get(file)?.split('\n');
+        if (s) {
+          let firstLine = line;
+          do { firstLine--; } while (firstLine >= 0 && /^(\s*;|\W:)/.test(s[firstLine]));
+          code = s.slice(firstLine + 1, line + 1).join('\n');
+        }
+        const absOffset = c.offset! + offset - 0x10;
+        const n = !seenLabels.has(name!) ? name! : "";
+        seenLabels.add(n);
+        labels.push({
+          type: 'P',
+          address: `${absOffset.toString(16)}`,
+          label: n,
+          comment: code,
+        });
+      }
+    }
+
+    for (const label of labels) {
+      data += `${label.type}:${label.address}:${label.label}:${label.comment}\n`;
+    }
+    return data;
   }
 }
 
@@ -160,6 +222,12 @@ class LinkChunk {
    */
   overlaps = false;
 
+  /** Table of contents for labels in the chunk, for debugging. */
+  readonly labelIndex: Map<string, number>|undefined;
+
+  /** Table of contents for source info in the chunk, for debugging. */
+  readonly sourceMap: Map<number, SourceInfo>|undefined;
+
   private _data?: Uint8Array;
 
   private _org?: number;
@@ -176,6 +244,8 @@ class LinkChunk {
     this.name = chunk.name;
     this.size = chunk.data.length;
     this.segments = chunk.segments;
+    this.labelIndex = chunk.labelIndex && new Map(chunk.labelIndex);
+    this.sourceMap = chunk.sourceMap && new Map(chunk.sourceMap);
     this._data = chunk.data;
     for (const sub of chunk.subs || []) {
       this.subs.add(translateSub(sub, chunkOffset, symbolOffset));

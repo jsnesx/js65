@@ -32,13 +32,18 @@ const MACPACK: Map<string, string> = new Map(
 export interface ReadFileCallback { (path: string, filename: string) : Promise<string> }
 export interface ReadFileBinaryCallback { (path: string, filename: string) : Promise<Uint8Array|string> }
 
+export class SourceContents {
+  data: Map<string, string> = new Map<string, string>();
+}
+
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
-  
+
   constructor(
     readonly readFile?: ReadFileCallback,
     readonly readFileBinary?: ReadFileBinaryCallback,
-    readonly opts?: Options) {}
+    readonly opts?: Options,
+    readonly sourceContents?: SourceContents) {}
 
   loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>) {
     const paths = this.opts?.includePaths ?? ['./'];
@@ -66,13 +71,13 @@ export class TokenStream implements Tokens.Source {
             if (!this.readFile) this.err(line);
             // TODO - options?
             const code = await this.loadFile<string>(path, this.readFile);
-            this.enter(new Tokenizer(code, path, this.opts));
+            this.enter(new Tokenizer(code, path, this.opts, this.sourceContents));
             continue;
           }
           case '.macpack': {
             const pack = Tokens.expectIdentifier(line[1])?.toLowerCase();
             const code = MACPACK.get(pack) ?? this.err(line);
-            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts));
+            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts, this.sourceContents));
             continue;
           }
           case '.incbin': {

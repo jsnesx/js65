@@ -172,8 +172,8 @@ asm.Module().Code("""
 // Apply all the modules in this assembler to the ROM. This will compile and link all of the modules together and
 // overwrite the data in the rom provided
 
-var romBytes = await asm.Apply(vanillaRom.ToArray());
+var result = await asm.Apply(vanillaRom.ToArray());
 
 Console.WriteLine("Test patch to call the new armor subtract function");
-Console.WriteLine($"sbc,x instruction should be patched to jsr ($20): ${romBytes[0x10 + 0x0005]:x2}");
-Console.WriteLine($"included file should write constant ($89) at address $8089: ${romBytes[0x10 + 0x0089]:x2}");
+Console.WriteLine($"sbc,x instruction should be patched to jsr ($20): ${result.romdata[0x10 + 0x0005]:x2}");
+Console.WriteLine($"included file should write constant ($89) at address $8089: ${result.romdata[0x10 + 0x0089]:x2}");

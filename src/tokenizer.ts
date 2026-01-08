@@ -8,14 +8,17 @@
 import {Buffer} from './buffer.ts';
 import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
+import { SourceContents } from './tokenstream.ts';
 
 export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
 
   constructor(str: string,
               readonly file = 'input.s',
-              readonly opts: Options = {}) {
+              readonly opts: Options = {},
+              readonly sourceContents?: SourceContents) {
     this.buffer = new Buffer(str);
+    this.sourceContents?.data?.set(file, str);
   }
 
   async next(): Promise<Token[]|undefined> {
@@ -69,7 +72,9 @@ export class Tokenizer implements Tokens.Source {
     };
     try {
       const tok = this.tokenInternal();
-      if (!this.opts.skipSourceAnnotations) tok.source = source;
+      if (this.opts.generateDebugInfo) {
+        tok.source = source;
+      }
       return tok;
     } catch (err) {
       const {file, line, column} = source;
@@ -166,11 +171,26 @@ function parseBin(str: string): Token {
   return {token: 'num', num: Number.parseInt(str, 2), width: Math.ceil(str.length / 8)};
 }
 
+/**
+ * Options for assembly and linking
+ *
+ * includePaths: when a file is included, the file path will be appended to each include path
+ *               and will attempt to be loaded from the FS callbacks.
+ *
+ * lineContinuations: if enabled, the assembler will allow the `\` to escape a newline to continue
+ *               a single line declaration across multiple lines.
+ *
+ * numberSeparators: if enabled, you can use the single quote `'` character as an arbitrary number separator
+ *
+ * generateDebugInfo: when enabled, information from the source files are stored for linking in a `SourceContents`
+ *               class. Passing this class into the linker will allow it to generate a `mlb` file
+ *               with symbols for linking
+ */
 export interface Options {
   includePaths?: string[];
   // caseInsensitive?: boolean; // handle elsewhere?
   lineContinuations?: boolean;
   numberSeparators?: boolean;
-  skipSourceAnnotations?: boolean;
+  generateDebugInfo?: boolean;
 }
 
