@@ -9,7 +9,8 @@ import { Cpu } from './cpu.ts';
 import { clean, smudge } from './smudge.ts';
 import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
-import { assemble, compile, type AssemblyInput, type AssemblerOptions, type LinkerOptions, type OutputFormat } from './libassembler.ts';
+import { assemble, link, type AssemblyInput, type AssemblerOptions, type LinkerOptions, type OutputFormat, type FileCallbacks } from './libassembler.ts';
+import { SourceContents } from './tokenstream.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -36,6 +37,8 @@ class Arguments {
   rom = "";
   files : string[] = [];
   target = '';
+  debuginfo = true;
+  dbgfile = "";
   compileonly = false;
   includePaths : string[] = [];
   patch : "ips" | "" = "";
@@ -52,6 +55,9 @@ const DEBUG = (...args : any) => {
 export class Cli {
   public static readonly STDIN : string = "//stdin";
   public static readonly STDOUT : string = "//stdout";
+
+  sourceContents: SourceContents = new SourceContents();
+
   constructor(readonly callbacks: Callbacks) {
     this.callbacks = callbacks;
   }
@@ -66,6 +72,13 @@ export class Cli {
       } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
         if (out.outfile) this.usage();
         out.outfile = args[++i];
+      } else if (arg === '--dbgfile') {
+        if (out.dbgfile) this.usage();
+        out.dbgfile = args[++i];
+      } else if (arg === '-g') {
+        out.debuginfo = true; // This is default on contrary to most compilers.
+      } else if (arg === '--no-debuginfo') {
+        out.debuginfo = false; // Invert it to allow turning off debug info generation
       } else if (arg === '-c' || arg === '--compileonly') {
         out.compileonly = true;
       } else if (arg.startsWith('--output=')) {
@@ -152,10 +165,11 @@ export class Cli {
           args.files[0].substring(0, args.files[0].lastIndexOf("/")),
           ...args.includePaths
         ] : args.includePaths,
-        lineContinuations: true
+        lineContinuations: true,
+        generateDebugInfo: args.debuginfo,
       };
 
-      const callbacks = {
+      const callbacks: FileCallbacks = {
         readText: this.callbacks.fsReadString,
         readBinary: this.callbacks.fsReadBytes
       };
@@ -163,7 +177,7 @@ export class Cli {
       if (args.compileonly) {
         DEBUG("stopping before linking cause --compileonly");
         // Assemble only, no linking
-        const modules = await assemble(inputs, assemblerOpts, callbacks);
+        const modules = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
 
         const module = JSON.stringify(modules[0], (k, v) => {
           if (k === "data" && typeof v === "object") {
@@ -189,9 +203,24 @@ export class Cli {
       }
 
       const outputFormat: OutputFormat = args.patch === "ips" ? "ips" : "binary";
-      const linked = await compile(inputs, assemblerOpts, linkerOpts, outputFormat, callbacks);
+
+      // Assemble and link separately to get debug info
+      const modules = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
+      const linked = link(modules, linkerOpts, outputFormat);
 
       await this.callbacks.fsWriteBytes("", args.outfile, linked);
+
+      // Generate debug info if requested
+      if (args.dbgfile) {
+        const { Linker } = await import('./linker.ts');
+        const linker = new Linker(linkerOpts);
+        for (const module of modules) {
+          linker.read(module);
+        }
+        linker.link();
+        const dbginfo = linker.getDebugInfo(this.sourceContents);
+        await this.callbacks.fsWriteString("", args.dbgfile, dbginfo);
+      }
     } catch (e) {
       this.printerrors(e);
       throw e;
@@ -277,6 +306,9 @@ optional arguments:
   -c/--compileonly        Compile and assemble, but don't link. Outputs a module that can be linked later.
   -r FILE/--rom=FILE      Name of the file to use as a base onto which patches will be assembled.
   --ips                   Produce an IPS patch rather than a complete binary. Cannot be used with --compileonly.
+  -g                      Add debug info to the assembly that can be used at link time to produce debug symbols (Default ON)
+  --no-debuginfo          Disable debug info generation.
+  --dbgfile FILE          Output debug symbols to the specified file.
   -h/--help               Print this help text and exit.
 
 ===

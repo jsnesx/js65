@@ -29,6 +29,7 @@ export function concat(...sources: Source[]): Source {
 }
 
 const BaseSourceInfo = z.object({
+  ident: z.optional(z.string()),
   file: z.string(),
   line: z.number(),
   column: z.number(),

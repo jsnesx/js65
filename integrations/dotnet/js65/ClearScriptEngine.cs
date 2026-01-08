@@ -38,7 +38,7 @@ public class ClearScriptEngine : Assembler
         Callbacks.OnFileReadBinary = LoadBinaryFileCallback;
     }
     
-    public override async Task<byte[]?> Apply(byte[] rom)
+    public override async Task<Js65CompileResult?> Apply(byte[] rom)
     {
         var data = (ITypedArray<byte>) _engine.Evaluate($"new Uint8Array({rom.Length});");
         data.WriteBytes(rom, 0, data.Length, 0);
@@ -46,6 +46,7 @@ public class ClearScriptEngine : Assembler
         _engine.AddHostObject("Options", Options);
         _engine.AddHostObject("FileCallbacks", Callbacks);
         _engine.Script.romdata = data;
+        _engine.Script.debugFile = "";
         _engine.Script.modules = IntoExpandoObject();
         await Task.Run(() => {
             _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
@@ -147,7 +148,7 @@ const assemblerOpts = {
     includePaths: [...Options.includePaths],
     lineContinuations: !!Options.lineContinuations,
     numberSeparators: !!Options.numberSeparators,
-    skipSourceAnnotations: !!Options.skipSourceAnnotations
+    generateDebugInfo: !!Options.generateDebugInfo
 };
 
 const linkerOpts = {
@@ -169,7 +170,12 @@ compile(inputs, assemblerOpts, linkerOpts, 'binary', callbacks).then(result => {
         });
         var outdata = new byte[rom.Length];
         data.ReadBytes(0, (ulong)outdata.Length, outdata, 0);
-        return outdata;
+        var debugFileContents = (string)_engine.Script.debugFile;
+        return new Js65CompileResult
+        {
+            romdata = outdata,
+            debugfile = debugFileContents
+        };
     }
 
     private static string ReadResource(Assembly assembly, string name)
