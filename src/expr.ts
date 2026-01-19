@@ -445,7 +445,8 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
 //console.log('post-pop:', exprs);
   if (!tokens[index]) throw new Error(`No token at ${index}:\n${tokens.map(t => '  ' + Tokens.nameAt(t) + '\n')}`);
   if (exprs.length !== 1) throw new Error(`expression parse failed: nonunique result ${Tokens.nameAt(tokens[index])}`);
-  if (tokens[index].source) exprs[0].source = tokens[index].source;
+  if (!exprs[0].source && tokens[index].source)
+    exprs[0].source = tokens[index].source;
   return [exprs[0], i];
 }
 

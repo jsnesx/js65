@@ -37,6 +37,7 @@ export interface LinkerOptions {
   target?: string;
   baseRom?: Uint8Array;
   baseRomOffset?: number;
+  debugLevel?: number; // -1 = disabled, 0 = comments/labels only, 1 = full source
 }
 
 /**
@@ -54,7 +55,6 @@ export interface FileCallbacks {
 
 /**
  * Assemble source files into Module objects
- * Extracted from cli.ts assemble() method
  *
  * @param inputs - Array of source code or modules to assemble
  * @param options - Assembler configuration
@@ -78,7 +78,10 @@ export async function assemble(
     }
 
     // Process source code
-    const asm = new Assembler(Cpu.P02);
+    const asmOpts = {
+      generateDebugInfo: options?.generateDebugInfo
+    };
+    const asm = new Assembler(Cpu.P02, asmOpts);
     const opts = {
       includePaths: options?.includePaths || [],
       lineContinuations: options?.lineContinuations ?? true,
@@ -121,19 +124,30 @@ export async function assemble(
 }
 
 /**
+ * Result of linking operation
+ */
+export interface LinkResult {
+  /** Binary output or IPS patch */
+  data: Uint8Array;
+  /** Debug information in MLB format (empty string if sourceContents not provided) */
+  debugInfo: string;
+}
+
+/**
  * Link modules into final binary or IPS patch
- * Extracted from cli.ts link() method
  *
  * @param modules - Array of Module objects to link
  * @param options - Linker configuration
  * @param outputFormat - Output format ('binary' or 'ips')
- * @returns Binary output or IPS patch
+ * @param sourceContents - Optional source contents for debug info generation
+ * @returns Link result with binary data and debug info
  */
 export function link(
   modules: Module[],
   options?: LinkerOptions,
-  outputFormat: OutputFormat = 'binary'
-): Uint8Array {
+  outputFormat: OutputFormat = 'binary',
+  sourceContents?: SourceContents
+): LinkResult {
   const linker = new Linker({ target: options?.target });
 
   // Load base ROM if provided and not generating IPS
@@ -152,13 +166,22 @@ export function link(
   const out = linker.link();
 
   // Generate output based on format
+  let binaryData: Uint8Array;
   if (outputFormat === 'ips') {
-    return out.toIpsPatch();
+    binaryData = out.toIpsPatch();
   } else {
     if (!data) data = new Uint8Array(out.length);
     out.apply(data);
-    return data;
+    binaryData = data;
   }
+
+  // Generate debug info if source contents provided
+  const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
+
+  return {
+    data: binaryData,
+    debugInfo
+  };
 }
 
 /**
@@ -169,15 +192,17 @@ export function link(
  * @param linkerOpts - Linker configuration
  * @param outputFormat - Output format ('binary' or 'ips')
  * @param callbacks - File system callbacks
- * @returns Binary output according to output options
+ * @param sourceContents - Optional source contents for debug info generation
+ * @returns Link result with binary data and debug info
  */
 export async function compile(
   inputs: AssemblyInput[],
   assemblerOpts?: AssemblerOptions,
   linkerOpts?: LinkerOptions,
   outputFormat: OutputFormat = 'binary',
-  callbacks?: FileCallbacks
-): Promise<Uint8Array> {
-  const modules = await assemble(inputs, assemblerOpts, callbacks);
-  return link(modules, linkerOpts, outputFormat);
+  callbacks?: FileCallbacks,
+  sourceContents?: SourceContents
+): Promise<LinkResult> {
+  const modules = await assemble(inputs, assemblerOpts, callbacks, sourceContents);
+  return link(modules, linkerOpts, outputFormat, sourceContents);
 }

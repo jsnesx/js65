@@ -19,7 +19,8 @@ public class ClearScriptEngine : Assembler
     {
         // If you need to debug the javascript, add these flags and connect to the debugger through vscode.
         // follow this tutorial for how https://microsoft.github.io/ClearScript/Details/Build.html#_Debugging_with_ClearScript_2
-        var debugFlags = debugJavascript
+        var overrideDebug = true;
+        var debugFlags = debugJavascript || overrideDebug
             ? V8ScriptEngineFlags.EnableDebugging | V8ScriptEngineFlags.EnableRemoteDebugging |
               V8ScriptEngineFlags.AwaitDebuggerAndPauseOnStart
             : 0;
@@ -47,18 +48,18 @@ public class ClearScriptEngine : Assembler
         _engine.AddHostObject("FileCallbacks", Callbacks);
         _engine.Script.romdata = data;
         _engine.Script.debugFile = "";
-        _engine.Script.modules = IntoExpandoObject();
+        _engine.Script.modulesJson = SerializeModulesToJson();
         await Task.Run(() => {
             _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
 import { compile } from '@system/libassembler'
 
+// Parse the JSON modules from C#
+const modules = JSON.parse(modulesJson);
+
 // Convert action-based modules to source inputs
-const module_list = Object.values(modules);
-const inputs = module_list.map((module_expando, idx) => {
+const inputs = modules.map((module, idx) => {
     // Convert actions to assembly source code
     const lines = [];
-
-    const module = Object.values(module_expando);
     for (const action of module) {
         switch (action.action) {
             case 'code':
@@ -132,7 +133,8 @@ const inputs = module_list.map((module_expando, idx) => {
                 break;
 
             default:
-                console.warn(`Unknown action type: ${action.action}`);
+                debugger;
+                console.warn(`Unknown action type: `, action);
         }
     }
 
@@ -160,11 +162,12 @@ const callbacks = {
     readBinary: FileCallbacks.OnFileReadBinary
 };
 
-compile(inputs, assemblerOpts, linkerOpts, 'binary', callbacks).then(result => {
+compile(inputs, assemblerOpts, linkerOpts, 'binary', callbacks, null).then(result => {
     // Copy result back to romdata
-    for (let i = 0; i < result.length; i++) {
-        romdata[i] = result[i];
+    for (let i = 0; i < result.data.length; i++) {
+        romdata[i] = result.data[i];
     }
+    debugFile = result.debugInfo || "";
 });
 """);
         });

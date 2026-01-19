@@ -8,14 +8,6 @@ using System.Text.Json.Serialization;
 namespace js65;
 
 [JsonSourceGenerationOptions(WriteIndented = false)]
-[JsonSerializable(typeof(List<List<ExpandoObject>>))]
-[JsonSerializable(typeof(List<object>))]
-[JsonSerializable(typeof(string[]))]
-[JsonSerializable(typeof(byte[]))]
-[JsonSerializable(typeof(byte))]
-[JsonSerializable(typeof(ushort))]
-[JsonSerializable(typeof(int))]
-[JsonSerializable(typeof(Dictionary<string, object>[]))]
 [JsonSerializable(typeof(Js65Options))]
 [JsonSerializable(typeof(Js65Callbacks))]
 [JsonSerializable(typeof(Js65CompileResult))]
@@ -40,8 +32,7 @@ public partial class BrowserJsEngine(Js65Options? options = null, Js65Callbacks?
     {
         // Import the module and wait for it to finish
         _ = await _module;
-        var expando = IntoExpandoObject();
-        var modulesJson = JsonSerializer.Serialize(expando, AssmeblerContext.Default.ListListExpandoObject);
+        var modulesJson = SerializeModulesToJson();
         var optsJson = JsonSerializer.Serialize(Options, AssmeblerContext.Default.Js65Options);
         var b64Bytes = Convert.ToBase64String(rom);
         var output = await Compile(modulesJson, b64Bytes, optsJson,

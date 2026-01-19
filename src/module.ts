@@ -57,10 +57,7 @@ const BaseChunk = z.object({
   asserts: z.optional(z.array(ExprZ)),
   /** How overwriting previously-written fixed-position data is handled. */
   overwrite: z.optional(OverwriteModeZ), // NOTE: only set programmatically?
-  /**
-   * Source infos for each byte in the chunk.  Should only exist for
-   * the first byte of each instruction, and not for data.
-   */
+  /** Source infos for each byte in the chunk. */
   sourceMap: z.optional(z.map(z.number(), SourceInfoZ)),
   /** Labels within the chunk, mapped to byte offset. */
   labelIndex: z.optional(z.map(z.string(), z.number())),
@@ -168,6 +165,8 @@ export const ModuleZ = z.object({
   symbols: z.optional(z.array(SymbolZ)),
   /** All segments.  Indexed by name, but we don't use a map. */
   segments: z.optional(z.array(SegmentZ)),
+  /** All symbols from all scopes for debug purposes. */
+  debugSymbols: z.optional(z.array(SymbolZ)),
 });
 
 export type Module = z.infer<typeof ModuleZ>;
