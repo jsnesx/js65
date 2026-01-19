@@ -258,6 +258,12 @@ export class Assembler {
       if (this._name) this._chunk.name = this._name;
       this.chunks.push(this._chunk);
       this._chunk.overwrite = this.overwriteMode;
+
+      // Initialize debug info tracking if enabled
+      if (this.opts.generateDebugInfo) {
+        this._chunk.sourceMap = new Map();
+        this._chunk.labelIndex = new Map();
+      }
     }
   }
 
@@ -485,7 +491,48 @@ export class Assembler {
       symbols.push(out);
     }
     const segments: mod.Segment[] = [...this.segmentData.values()];
-    return {chunks, symbols, segments};
+
+    // Collect all symbols from all scopes for debug purposes
+    let debugSymbols: mod.Symbol[] | undefined = undefined;
+    if (this.opts.generateDebugInfo) {
+      debugSymbols = [];
+      let anonymousCounter = 0;
+      const usedNames = new Set<string>();
+
+      const collectSymbols = (scope: Scope) => {
+        for (const [name, sym] of scope.symbols) {
+          if (sym.expr != null) {
+            const expr = {...sym.expr};
+
+            // De-anonymize symbols by creating unique names
+            if (name.startsWith('@')) {
+              const baseName = name.substring(1).replace(':', '');
+              let uniqueName = `${baseName}${anonymousCounter}`;
+              while (usedNames.has(uniqueName)) {
+                anonymousCounter++;
+                uniqueName = `${baseName}${anonymousCounter}`;
+              }
+              usedNames.add(uniqueName);
+              expr.sym = uniqueName;
+              anonymousCounter++;
+            } else if (!expr.sym) {
+              expr.sym = name;
+            }
+
+            debugSymbols!.push({expr});
+          }
+        }
+        for (const child of scope.children.values()) {
+          collectSymbols(child);
+        }
+        for (const child of scope.anonymousChildren) {
+          collectSymbols(child);
+        }
+      };
+      collectSymbols(this.currentScope.global);
+    }
+
+    return {chunks, symbols, segments, debugSymbols};
   }
 
   // Assemble from a list of tokens
@@ -601,6 +648,10 @@ export class Assembler {
         this.opts.refExtractor.label(
             ident, this.chunk.org + this.chunk.data.length, this.chunk.segments);
       }
+      // Add label to debug info
+      if (this.opts.generateDebugInfo && this._chunk?.labelIndex) {
+        this._chunk.labelIndex.set(ident, this.chunk.data.length);
+      }
     }
     this.assignSymbol(ident, false, expr, token);
     // const symbol = this.scope.resolve(str, true);
@@ -614,10 +665,18 @@ export class Assembler {
   }
 
   assignSym(tokens: Token[]) {
+    // Set source location for debug info before processing the assignment
+    if (this.opts.generateDebugInfo && tokens[0].source) {
+      this._source = tokens[0].source;
+    }
     this.assign(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
   }
 
   setSym(tokens: Token[]) {
+    // Set source location for debug info before processing the assignment
+    if (this.opts.generateDebugInfo && tokens[0].source) {
+      this._source = tokens[0].source;
+    }
     this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
   }
 
@@ -647,6 +706,12 @@ export class Assembler {
     // NOTE: * _will_ get current chunk!
 
     if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
+
+    // Store symbol name and source info in expression for debug info
+    if (this.opts.generateDebugInfo && this._source && !expr.source) {
+      expr.source = this._source;
+    }
+
     const scope = ident.startsWith('@') ? this.cheapLocals : this.currentScope;
     // NOTE: This is incorrect - it will look up the scope chain when it
     // shouldn't.  Mutables may or may not want this, immutables must not.
@@ -670,7 +735,6 @@ export class Assembler {
       throw new Error(`Redefining symbol ${name}${orig}`);
     }
     sym.expr = expr;
-    // console.log(`setting sym = ${JSON.stringify(sym)}`);
   }
 
   async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;
@@ -827,6 +891,12 @@ export class Assembler {
     if (arglen) expr = this.resolve(expr); // BEFORE opcode (in case of *)
     const {chunk} = this;
     this.markWritten(1 + arglen);
+
+    // Record source info for this instruction
+    if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+      this._chunk.sourceMap.set(chunk.data.length, this._source);
+    }
+
     chunk.data.push(op);
     if (arglen) {
       this.append(expr, arglen);
@@ -1313,6 +1383,7 @@ export interface Options {
   reentrantScopes?: boolean;
   overwriteMode?: mod.OverwriteMode;
   refExtractor?: RefExtractor;
+  generateDebugInfo?: boolean;
 }
 
 

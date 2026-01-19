@@ -1,6 +1,6 @@
 ﻿
-using System.Collections;
-using System.Dynamic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace js65;
 
@@ -20,6 +20,7 @@ public record Js65Options
     public bool lineContinuations = false;
     public bool numberSeperators = false;
     public bool generateDebugInfo = true;
+    public int debugLevel = 0;
 }
 
 public record Js65CompileResult
@@ -48,63 +49,24 @@ public abstract class Assembler(Js65Options? options = null, Js65Callbacks? call
 
     public abstract Task<Js65CompileResult?> Apply(byte[] rom);
 
-    protected List<List<ExpandoObject>> IntoExpandoObject()
+    protected string SerializeModulesToJson()
     {
-        var modules = new List<List<ExpandoObject>>();
-        foreach (var module in Modules)
-        {
-            var outmodule = new List<ExpandoObject>();
-            foreach (var dict in module.Actions)
-            {
-                outmodule.Add(dict.ToExpandoObject());
-            }
-            modules.Add(outmodule);
-        }
-        return modules;
+        var modules = Modules.Select(module => module.Actions).ToList();
+        return JsonSerializer.Serialize(modules, Js65JsonContext.Default.ListListDictionaryStringObject);
     }
 }
 
-internal static class DictionaryExtensions
+[JsonSourceGenerationOptions(WriteIndented = false)]
+[JsonSerializable(typeof(List<List<Dictionary<string, object>>>))]
+[JsonSerializable(typeof(Dictionary<string, object>))]
+[JsonSerializable(typeof(Dictionary<string, object>[]))]
+[JsonSerializable(typeof(string[]))]
+[JsonSerializable(typeof(byte[]))]
+[JsonSerializable(typeof(ushort[]))]
+[JsonSerializable(typeof(int))]
+[JsonSerializable(typeof(ushort))]
+[JsonSerializable(typeof(byte))]
+[JsonSerializable(typeof(string))]
+internal partial class Js65JsonContext : JsonSerializerContext
 {
-    public static ExpandoObject ToExpandoObject(this IDictionary<string, object> dictionary)
-    {
-        var bag = new ExpandoObject();
-        var dict = bag as IDictionary<string, object>;
-        foreach (var kvp in dictionary)
-        {
-            switch (kvp.Value)
-            {
-                case IDictionary<string, object> objects:
-                {
-                    var inner = objects.ToExpandoObject() as IDictionary<string, object>;
-                    dict.Add(kvp.Key, inner);
-                    break;
-                }
-                case ICollection list:
-                {
-                    var itemList = new List<object>();
-                    foreach (var item in list)
-                    {
-                        if (item is IDictionary<string, object> objs)
-                        {
-                            var bagitem = objs.ToExpandoObject();
-                            itemList.Add(bagitem);
-                        }
-                        else
-                        {
-                            itemList.Add(item);
-                        }
-                    }
-
-                    dict.Add(kvp.Key, itemList);
-                    break;
-                }
-                default:
-                    dict.Add(kvp.Key, kvp.Value);
-                    break;
-            }
-        }
-
-        return bag;
-    }
 }

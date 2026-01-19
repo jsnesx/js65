@@ -37,7 +37,7 @@ class Arguments {
   rom = "";
   files : string[] = [];
   target = '';
-  debuginfo = true;
+  debugLevel = 0; // -1 = disabled, 0 = comments/labels only, 1 = full source
   dbgfile = "";
   compileonly = false;
   includePaths : string[] = [];
@@ -75,10 +75,12 @@ export class Cli {
       } else if (arg === '--dbgfile') {
         if (out.dbgfile) this.usage();
         out.dbgfile = args[++i];
-      } else if (arg === '-g') {
-        out.debuginfo = true; // This is default on contrary to most compilers.
+      } else if (arg === '-g' || arg === '-g0') {
+        out.debugLevel = 0; // Comments and labels only
+      } else if (arg === '-g1') {
+        out.debugLevel = 1; // Full source code
       } else if (arg === '--no-debuginfo') {
-        out.debuginfo = false; // Invert it to allow turning off debug info generation
+        out.debugLevel = -1; // Disable debug info generation
       } else if (arg === '-c' || arg === '--compileonly') {
         out.compileonly = true;
       } else if (arg.startsWith('--output=')) {
@@ -166,7 +168,7 @@ export class Cli {
           ...args.includePaths
         ] : args.includePaths,
         lineContinuations: true,
-        generateDebugInfo: args.debuginfo,
+        generateDebugInfo: args.debugLevel >= 0,
       };
 
       const callbacks: FileCallbacks = {
@@ -190,9 +192,9 @@ export class Cli {
         return;
       }
 
-      // Full compile (assemble + link)
       const linkerOpts: LinkerOptions = {
-        target: args.target
+        target: args.target,
+        debugLevel: args.debugLevel
       };
 
       // Load base ROM if specified
@@ -204,22 +206,15 @@ export class Cli {
 
       const outputFormat: OutputFormat = args.patch === "ips" ? "ips" : "binary";
 
-      // Assemble and link separately to get debug info
+      // Assemble and link with debug info
       const modules = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
-      const linked = link(modules, linkerOpts, outputFormat);
+      const result = link(modules, linkerOpts, outputFormat, this.sourceContents);
 
-      await this.callbacks.fsWriteBytes("", args.outfile, linked);
+      await this.callbacks.fsWriteBytes("", args.outfile, result.data);
 
-      // Generate debug info if requested
-      if (args.dbgfile) {
-        const { Linker } = await import('./linker.ts');
-        const linker = new Linker(linkerOpts);
-        for (const module of modules) {
-          linker.read(module);
-        }
-        linker.link();
-        const dbginfo = linker.getDebugInfo(this.sourceContents);
-        await this.callbacks.fsWriteString("", args.dbgfile, dbginfo);
+      // Write debug info if requested
+      if (args.dbgfile && result.debugInfo) {
+        await this.callbacks.fsWriteString("", args.dbgfile, result.debugInfo);
       }
     } catch (e) {
       this.printerrors(e);

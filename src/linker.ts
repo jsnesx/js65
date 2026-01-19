@@ -25,9 +25,9 @@ export interface Export {
   //segment?: string;
 }
 
-interface MesenLabelFormat {
-  type: 'P'|'R'|'S'|'W'|'G',
-  address: number|string,
+export interface MesenLabelFormat {
+  type: "NesMemory"|"NesPrgRom"|"NesInternalRam"|"NesSaveRam"|"NesWorkRam",
+  address: string,
   label: string,
   comment: string,
 }
@@ -98,21 +98,104 @@ export class Linker {
     this._link.watches.push(...offset);
   }
 
-  getDebugInfo(sources?: SourceContents) : string {
+  private static getComment(sourceLines?: string[], line: number = 0, debugLevel: number = 1) {
+    if (sourceLines && line >= 0) {
+      const actualLine = line;
+      let firstLine = actualLine;
+
+      if (debugLevel === 0) {
+        // Level 0: Only include comments and labels, skip source code lines
+        // Walk backwards while we see comment lines (;) or label definitions (ending with :)
+        do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
+
+        const lines = sourceLines.slice(firstLine + 1, actualLine + 1);
+        const result: string[] = [];
+
+        for (const l of lines) {
+          const trimmed = l.trim();
+          // Check if line is a full comment line
+          if (/^\s*;/.test(l)) {
+            // Remove leading semicolon and colons from comments
+            const commentText = trimmed.substring(1).trim().replace(/:/g, '');
+            if (commentText) {
+              result.push(commentText);
+            }
+          } else if (/^\s*.*:\s*$/.test(l)) {
+            // Label-only line - remove the colon
+            result.push(trimmed.replace(/:/g, ''));
+          } else {
+            // Check if line has an inline comment (code ; comment)
+            const inlineCommentMatch = l.match(/;(.*)$/);
+            if (inlineCommentMatch) {
+              // Remove colons from the comment (no leading semicolon)
+              const commentText = inlineCommentMatch[1].trim().replace(/:/g, '');
+              if (commentText) {
+                result.push(commentText);
+              }
+            }
+            // Otherwise skip the line (it's just code with no comment)
+          }
+        }
+
+        return result.join('\\n');
+      } else {
+        // Level 1: Include all source lines (comments, labels, and code)
+        // Walk backwards while we see comment lines (;) or label definitions (ending with :)
+        do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
+        // Remove colons from all lines to avoid breaking MLB format parsing
+        return sourceLines.slice(firstLine + 1, actualLine + 1).map((s) => s.trim().replace(/:/g, '')).join('\\n');
+      }
+    }
+    return "";
+  }
+
+  getDebugInfo(sources?: SourceContents, debugLevel: number = 1) : string {
     if (!sources) return "";
 
     let data = "";
     const labels: MesenLabelFormat[] = [];
     const seenLabels: Set<string> = new Set;
 
+    // Build a set of all labels that appear in chunks to avoid duplicates
+    const chunkLabels = new Set<string>();
+    for (const c of this._link.chunks || []) {
+      if (c.labelIndex) {
+        for (const [label, _offset] of c.labelIndex) {
+          chunkLabels.add(label);
+        }
+      }
+    }
+
     // Check all symbols for constant values and set RAM labels
-    for (const s of this._link.symbols || []) {
+    // Use debugSymbols if available (contains all symbols), otherwise fall back to symbols (exported only)
+    const symbolsToProcess = this._link.debugSymbols || this._link.symbols || [];
+    for (const s of symbolsToProcess) {
       if (s.expr?.op !== 'num') continue;
+      if (!s.expr.sym) continue; // Skip anonymous symbols
+
+      // Skip symbols that are already in chunks (they'll be added with their source comments)
+      if (chunkLabels.has(s.expr.sym)) continue;
+
+      // Generate comment from source info if available
+      let comment = "";
+      if (s.expr.source) {
+        const {file, line} = s.expr.source;
+        const sourceLines = sources.data.get(file)?.split('\n');
+        comment = Linker.getComment(sourceLines, line, debugLevel);
+      }
+      const labelType = (s.expr.num! < 0x2000) ? "NesInternalRam" :
+          (s.expr.num! < 0x6000) ? "NesMemory" :
+          (s.expr.num! < 0x8000) ? "NesSaveRam" :
+          "NesPrgRom";
+      let addr = s.expr.num ?? 0;
+      if (addr >= 0x6000 && labelType === "NesSaveRam") {
+        addr -= 0x6000;
+      }
       labels.push({
-        type: (s.expr.num! < 0x2000) ? 'R' : (s.expr.num! < 0x6000) ? 'G' : (s.expr.num! < 0x8000) ? 'S' : 'P',
-        address: `${s.expr.num?.toString(16) ?? 0}`,
-        label: JSON.stringify(s.expr) ?? "",
-        comment: "" // TODO add comments to RAM labels?
+        type: labelType,
+        address: `${addr.toString(16)}`,
+        label: s.expr.sym,
+        comment
       });
     }
     for (const c of this._link.chunks || []) {
@@ -124,25 +207,27 @@ export class Linker {
       let name = c.name;
       for (let offset = 0; offset < c.size; offset++) {
         name = rev.get(offset) || name;
-        const e = c.sourceMap?.get(offset);
-        if (!e) continue;
-        let {file, line} = e;
+        const srcInfo = c.sourceMap?.get(offset);
+        if (!srcInfo) continue;
+        let {file, line} = srcInfo;
         line--;
-        let code = '';
-        const s = sources.data.get(file)?.split('\n');
-        if (s) {
-          let firstLine = line;
-          do { firstLine--; } while (firstLine >= 0 && /^(\s*;|\W:)/.test(s[firstLine]));
-          code = s.slice(firstLine + 1, line + 1).join('\n');
-        }
-        const absOffset = c.offset! + offset - 0x10;
+        const sourceLines = sources.data.get(file)?.split('\n');
+        const comment = Linker.getComment(sourceLines, line, debugLevel);
+
+        // In debug level 0, skip entries with no comment and no label
         const n = !seenLabels.has(name!) ? name! : "";
+        if (debugLevel === 0 && !comment && !n) {
+          continue;
+        }
+
+        // Calculate the segment offset (c.segment.offset) for this chunk (offset) based on the file offset (c.offset)
+        const absOffset = c.offset! + offset - c.segment!.offset;
         seenLabels.add(n);
         labels.push({
-          type: 'P',
+          type: "NesPrgRom",
           address: `${absOffset.toString(16)}`,
           label: n,
-          comment: code,
+          comment: comment,
         });
       }
     }
@@ -501,6 +586,7 @@ class Link {
   exports = new Map<string, number>(); // readonly [number, Set<number>]>();
   chunks: LinkChunk[] = [];
   symbols: Symbol[] = [];
+  debugSymbols?: Symbol[] = undefined;
   written = new IntervalSet();
   free = new IntervalSet();
   rawSegments = new Map<string, Segment[]>();
@@ -537,6 +623,13 @@ class Link {
     }
     for (const symbol of file.symbols || []) {
       this.symbols.push(translateSymbol(symbol, dc, ds));
+    }
+    // Read debug symbols if available
+    if (file.debugSymbols) {
+      if (!this.debugSymbols) this.debugSymbols = [];
+      for (const symbol of file.debugSymbols) {
+        this.debugSymbols.push(translateSymbol(symbol, dc, ds));
+      }
     }
     // TODO - what the heck do we do with segments?
     //      - in particular, who is responsible for defining them???
