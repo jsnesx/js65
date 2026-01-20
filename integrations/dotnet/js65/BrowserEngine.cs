@@ -40,4 +40,9 @@ public partial class BrowserJsEngine(Js65Options? options = null, Js65Callbacks?
             (basePath, filePath) => Convert.ToBase64String(Callbacks?.OnFileReadBinary?.Invoke(basePath, filePath) ?? []));
         return JsonSerializer.Deserialize(Convert.FromBase64String(output), AssmeblerContext.Default.Js65CompileResult);
     }
+
+    public override void Dispose()
+    {
+        // Unused
+    }
 }

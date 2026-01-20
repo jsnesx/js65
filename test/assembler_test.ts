@@ -208,7 +208,7 @@ describe('Assembler', function() {
       const a = new Assembler(Cpu.P02);
       try {
         await a.instruction([ident('lda'), ident('z'), COLON, num(0x8000), COMMA, ident('y')]);
-      } catch (err) {
+      } catch (err: any) {
         expect(err.message).toEqual("Bad address mode zpy for lda");
       }
     });
@@ -554,9 +554,9 @@ describe('Assembler', function() {
           segments: [],
           data: Uint8Array.of(0xd0, 0xff, 0x90, 0xff, 0x4a, 0x4a),
           subs: [{offset: 1, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 0}, off(2)]}},
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 0}, off(2)]}},
                  {offset: 3, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 1}, off(4)]}}],
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 1}, off(4)]}}],
         }],
         symbols: [{expr: off(4)},
                   {expr: off(6)}],
@@ -594,7 +594,7 @@ describe('Assembler', function() {
           segments: [],
           data: Uint8Array.of(0xd0, 0xff, 0x90, 0xfe),
           subs: [{offset: 1, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 0}, off(2)]}}],
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 0}, off(2)]}}],
         }],
         symbols: [{expr: off(2)}],
         segments: []});
@@ -628,11 +628,11 @@ describe('Assembler', function() {
             0x60,
             0x60),
           subs: [{offset: 4, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 0}, off(5)]}},
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 0}, off(5)]}},
                  {offset: 7, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 1}, off(8)]}},
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 1}, off(8)]}},
                  {offset: 11, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 1}, off(12)]}}],
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 1}, off(12)]}}],
         }],
         symbols: [{expr: off(5)},
                   {expr: off(15)}],
@@ -656,9 +656,9 @@ describe('Assembler', function() {
           segments: [],
           data: Uint8Array.of(0xd0, 0xff, 0x90, 0xff, 0x4a, 0x4a),
           subs: [{offset: 1, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 0}, off(2)]}},
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 0}, off(2)]}},
                  {offset: 3, size: 1,
-                  expr: {op: '-', args: [{op: 'sym', num: 1}, off(4)]}}],
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 1}, off(4)]}}],
         }],
         symbols: [{expr: off(4)},
                   {expr: off(6)}],

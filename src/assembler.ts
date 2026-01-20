@@ -876,12 +876,12 @@ export class Assembler {
     // Basic plan here is that we actually want a relative expr.
     // TODO - clean this up to be more efficient.
     // TODO - handle local/anonymous labels separately?
-    // TODO - check the range somehow?
     const num = this.chunk.data.length + arglen + 1;
     const meta: Exprs.Meta = {rel: true, chunk: this.chunks.length - 1};
     if (this._chunk?.org) meta.org = this._chunk.org;
     const nextPc = {op: 'num', num, meta};
-    const rel: Expr = {op: '-', args: [expr, nextPc]};
+    // Mark the subtraction as a branch for signed range checking
+    const rel: Expr = {op: '-', args: [expr, nextPc], meta: {branch: true}};
     if (expr.source) rel.source = expr.source;
     this.opcode(op, arglen, rel);
   }

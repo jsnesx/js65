@@ -20,9 +20,11 @@ async function assembleAndGetDebugInfo(source: string, filename: string = 'test.
   const initsrc = { type: 'source' as const, name: 'init.s', code: `
 .macpack common
 .segment "HEADER" :bank $00 :size $0010 :mem $0000 :off $00000
-.segment "PRG"    :bank $00 :size $8000 :mem $8000 :off $00010
+.segment "PRG"    :bank $00 :size $4000 :mem $8000 :off $00010
+.segment "FIXED"  :bank $00 :size $4000 :mem $c000 :off $04010
 .segment "CHR"    :bank $00 :size $2000 :mem $0000 :off $08010
-FREE "PRG" [$8000, $10000)
+FREE "PRG" [$8000, $c000)
+FREE "FIXED" [$c000, $10000)
 `};
 
   const modulesrc = { type: 'source' as const, name: filename, code: source };
@@ -331,7 +333,7 @@ Start:
 
     it('should handle addresses at different ROM locations', async function() {
       const source = `
-.segment "PRG"
+.segment "FIXED"
 .org $C000
 
 FixedBank:
@@ -540,6 +542,29 @@ Start:
       const mlb = await assembleAndGetDebugInfo(source);
 
       expect(mlb).toBeTruthy();
+    });
+    it('should calculate the correct offset for the memory type', async function() {
+      const source = `
+.segment "PRG"
+.org $8123
+Start:
+  jmp Start
+
+.segment "FIXED"
+.org $c100
+Nmi:
+  rti
+`;
+
+      const mlb = await assembleAndGetDebugInfo(source);
+      expect(mlb).toBeTruthy();
+
+      const nmi = mlb.find(e => e.label.includes('Nmi'));
+      expect(nmi).toBeTruthy();
+      expect(nmi?.address).toEqual("4100");
+      const start = mlb.find(e => e.label.includes('Start'));
+      expect(start).toBeTruthy();
+      expect(start?.address).toEqual("123");
     });
   });
 });
