@@ -172,7 +172,7 @@ Relocatable:
   describe('Error handling', function() {
     it('should report undefined symbol errors', async function() {
       const source = `
-.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "PRG"
 .org $8000
   lda UndefinedSymbol
 `;
@@ -184,7 +184,7 @@ Relocatable:
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
   beq FarLabel
-  .res 200, $00
+.org $8200
 FarLabel:
   rts
 `;

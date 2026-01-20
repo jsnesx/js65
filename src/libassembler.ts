@@ -11,7 +11,12 @@ import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
-import { type Module, ModuleZ } from "./module.ts";
+import { type Module, ModuleZ, type Segment } from "./module.ts";
+import type { Expr } from './expr.ts';
+
+// Re-export Assembler for direct programmatic use
+export { Assembler, Cpu, SourceContents };
+export type { Expr, Module, Segment };
 
 /**
  * Assembly input - supports source code or pre-compiled modules
@@ -157,12 +162,10 @@ export function link(
     linker.base(data, options.baseRomOffset ?? 0);
   }
 
-  // Feed all modules to the linker
   for (const module of modules) {
     linker.read(module);
   }
 
-  // Run linking
   const out = linker.link();
 
   // Generate output based on format
@@ -175,7 +178,7 @@ export function link(
     binaryData = data;
   }
 
-  // Generate debug info if source contents provided
+  debugger;
   const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
 
   return {
@@ -185,7 +188,7 @@ export function link(
 }
 
 /**
- * Convenience function: assemble + link in one step
+ * Assemble + link
  *
  * @param inputs - Array of source code or modules
  * @param assemblerOpts - Assembler configuration
@@ -204,5 +207,157 @@ export async function compile(
   sourceContents?: SourceContents
 ): Promise<LinkResult> {
   const modules = await assemble(inputs, assemblerOpts, callbacks, sourceContents);
+  return link(modules, linkerOpts, outputFormat, sourceContents);
+}
+
+/**
+ * Action types for programmatic assembly
+ */
+export type AssemblyAction =
+  | { action: 'code', code: string, name?: string }
+  | { action: 'label', label: string }
+  | { action: 'byte', bytes: Array<number | { op: 'sym', sym: string }> }
+  | { action: 'word', words: Array<number | { op: 'sym', sym: string }> }
+  | { action: 'org', addr: number, name?: string }
+  | { action: 'segment', name: string | string[] }
+  | { action: 'reloc', name?: string }
+  | { action: 'export', name: string }
+  | { action: 'assign', name: string, value: number | string }
+  | { action: 'set', name: string, value: number | string }
+  | { action: 'free', size: number };
+
+/**
+ * Assembles modules from actions, without converting to source text.
+ * AssemblyActions are a way to programatically create a module, which is handy
+ * for applications that want to write data to the rom without needing to generate
+ * source text and passing it in as code.
+ *
+ * @param actionModules - Array of action arrays (one per module)
+ * @param options - Assembler configuration
+ * @param callbacks - File system callbacks for .include/.incbin in code actions
+ * @param sourceContents - Optional SourceContents for debug info
+ * @returns Array of compiled Module objects
+ */
+export async function assembleActions(
+  actionModules: AssemblyAction[][],
+  options?: AssemblerOptions,
+  callbacks?: FileCallbacks,
+  sourceContents?: SourceContents
+): Promise<Module[]> {
+  const modules: Module[] = [];
+
+  for (let moduleIdx = 0; moduleIdx < actionModules.length; moduleIdx++) {
+    const actions = actionModules[moduleIdx];
+    const asmOpts = {
+      generateDebugInfo: options?.generateDebugInfo
+    };
+    const asm = new Assembler(Cpu.P02, asmOpts);
+
+    for (const action of actions) {
+      switch (action.action) {
+        case 'code': {
+          // For code actions, we need to tokenize and process through the full pipeline
+          const opts = {
+            includePaths: options?.includePaths || [],
+            lineContinuations: options?.lineContinuations ?? true,
+            numberSeparators: options?.numberSeparators,
+            generateDebugInfo: options?.generateDebugInfo
+          };
+          const toks = new TokenStream(
+            callbacks?.readText,
+            callbacks?.readBinary,
+            opts,
+            sourceContents
+          );
+          const tokenizer = new Tokenizer(action.code, action.name || `module_${moduleIdx}`, opts, sourceContents);
+          toks.enter(tokenizer);
+          const pre = new Preprocessor(toks, asm);
+          await asm.tokens(pre);
+          break;
+        }
+
+        case 'label':
+          asm.label(action.label);
+          break;
+
+        case 'byte': {
+          asm.byte(...action.bytes);
+          break;
+        }
+
+        case 'word': {
+          asm.word(...action.words);
+          break;
+        }
+
+        case 'org':
+          asm.org(action.addr, action.name);
+          break;
+
+        case 'segment':
+          asm.segment(...action.name);
+          break;
+
+        case 'reloc':
+          asm.reloc(action.name);
+          break;
+
+        case 'export':
+          asm.export(action.name);
+          break;
+
+        case 'assign': {
+          const value = typeof action.value === 'string'
+            ? parseInt(action.value, 10)
+            : action.value;
+          asm.assign(action.name, value);
+          break;
+        }
+
+        case 'set': {
+          const value = typeof action.value === 'string'
+            ? parseInt(action.value, 10)
+            : action.value;
+          asm.set(action.name, value);
+          break;
+        }
+
+        case 'free':
+          asm.free(action.size);
+          break;
+
+        default:
+          console.warn(`Unknown action type:`, action);
+      }
+    }
+
+    const module = asm.module();
+    module.name = `module_${moduleIdx}`;
+    modules.push(module);
+  }
+
+  return modules;
+}
+
+/**
+ * Convenience function: assemble actions + link in one step
+ *
+ * @param actionModules - Array of action arrays (one per module)
+ * @param assemblerOpts - Assembler configuration
+ * @param linkerOpts - Linker configuration
+ * @param outputFormat - Output format ('binary' or 'ips')
+ * @param callbacks - File system callbacks
+ * @param sourceContents - Optional source contents for debug info generation
+ * @returns Link result with binary data and debug info
+ */
+export async function compileActions(
+  actionModules: AssemblyAction[][],
+  assemblerOpts?: AssemblerOptions,
+  linkerOpts?: LinkerOptions,
+  outputFormat: OutputFormat = 'binary',
+  callbacks?: FileCallbacks,
+  sourceContents?: SourceContents
+): Promise<LinkResult> {
+  const modules = await assembleActions(actionModules, assemblerOpts, callbacks, sourceContents);
   return link(modules, linkerOpts, outputFormat, sourceContents);
 }

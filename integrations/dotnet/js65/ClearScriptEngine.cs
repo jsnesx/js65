@@ -11,15 +11,15 @@ namespace js65;
 [SupportedOSPlatform("windows")]
 [SupportedOSPlatform("linux")]
 [SupportedOSPlatform("macos")]
-public class ClearScriptEngine : Assembler
+public class ClearScriptEngine : Assembler, IDisposable
 {
     private readonly V8ScriptEngine _engine;
 
     public ClearScriptEngine(Js65Options? options = null, bool useFileSystemCallbacks = true, bool debugJavascript = false) : base(options)
     {
         // If you need to debug the javascript, add these flags and connect to the debugger through vscode.
-        // follow this tutorial for how https://microsoft.github.io/ClearScript/Details/Build.html#_Debugging_with_ClearScript_2
-        var overrideDebug = true;
+        // follow this tutorial for how https://clearscript.clearfoundry.net/Details/Build.html#_Debugging_with_ClearScript_2
+        var overrideDebug = false;
         var debugFlags = debugJavascript || overrideDebug
             ? V8ScriptEngineFlags.EnableDebugging | V8ScriptEngineFlags.EnableRemoteDebugging |
               V8ScriptEngineFlags.AwaitDebuggerAndPauseOnStart
@@ -51,100 +51,9 @@ public class ClearScriptEngine : Assembler
         _engine.Script.modulesJson = SerializeModulesToJson();
         await Task.Run(() => {
             _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
-import { compile } from '@system/libassembler'
+import { compileActions, SourceContents } from '@system/libassembler'
 
-// Parse the JSON modules from C#
 const modules = JSON.parse(modulesJson);
-
-// Convert action-based modules to source inputs
-const inputs = modules.map((module, idx) => {
-    // Convert actions to assembly source code
-    const lines = [];
-    for (const action of module) {
-        switch (action.action) {
-            case 'code':
-                if (action.code) {
-                    lines.push(action.code);
-                }
-                break;
-
-            case 'label':
-                lines.push(`${action.label}:`);
-                break;
-
-            case 'byte':
-                if (Array.isArray(action.bytes)) {
-                    const values = action.bytes.map(b => {
-                        if (typeof b === 'object' && b.op === 'sym') {
-                            return b.sym; // Symbol reference
-                        }
-                        return `$${b.toString(16).padStart(2, '0')}`;
-                    }).join(', ');
-                    lines.push(`.byte ${values}`);
-                }
-                break;
-
-            case 'word':
-                if (Array.isArray(action.words)) {
-                    const values = action.words.map(w => {
-                        if (typeof w === 'object' && w.op === 'sym') {
-                            return w.sym; // Symbol reference
-                        }
-                        return `$${w.toString(16).padStart(4, '0')}`;
-                    }).join(', ');
-                    lines.push(`.word ${values}`);
-                }
-                break;
-
-            case 'org':
-                const addr = `$${action.addr.toString(16).padStart(4, '0')}`;
-                lines.push(`.org ${addr}`);
-                break;
-
-            case 'segment':
-                if (Array.isArray(action.name)) {
-                    const segments = action.name.map(s => `"${s}"`).join(', ');
-                    lines.push(`.segment ${segments}`);
-                } else if (action.name) {
-                    lines.push(`.segment "${action.name}"`);
-                }
-                break;
-
-            case 'reloc':
-                lines.push('.reloc');
-                break;
-
-            case 'export':
-                lines.push(`.export ${action.name}`);
-                break;
-
-            case 'assign':
-                lines.push(`${action.name} = ${action.value}`);
-                break;
-
-            case 'set':
-                lines.push(`.set ${action.name}, ${action.value}`);
-                break;
-
-            case 'free':
-                if (action.size) {
-                    lines.push(`.res ${action.size}, $ff`);
-                }
-                break;
-
-            default:
-                debugger;
-                console.warn(`Unknown action type: `, action);
-        }
-    }
-
-    const source = lines.join('\n');
-    return {
-        type: 'source',
-        code: source,
-        name: `module_${idx}.s`
-    };
-});
 
 const assemblerOpts = {
     includePaths: [...Options.includePaths],
@@ -154,21 +63,31 @@ const assemblerOpts = {
 };
 
 const linkerOpts = {
-    baseRom: romdata
+    baseRom: romdata,
+    debugLevel: Options.debugLevel
 };
 
 const callbacks = {
     readText: FileCallbacks.OnFileReadText,
     readBinary: FileCallbacks.OnFileReadBinary
 };
-
-compile(inputs, assemblerOpts, linkerOpts, 'binary', callbacks, null).then(result => {
-    // Copy result back to romdata
-    for (let i = 0; i < result.data.length; i++) {
-        romdata[i] = result.data[i];
+(async () => {
+    try {
+        let src = null;
+        if (assemblerOpts.generateDebugInfo) {
+            src = new SourceContents();
+        }
+        debugger;
+        await compileActions(modules, assemblerOpts, linkerOpts, 'binary', callbacks, src).then(result => {
+            for (let i = 0; i < result.data.length; i++) {
+                romdata[i] = result.data[i];
+            }
+            debugFile = result.debugInfo || "";
+        });
+    } catch (e) {
+        console.log("Error?", e);
     }
-    debugFile = result.debugInfo || "";
-});
+})();
 """);
         });
         var outdata = new byte[rom.Length];
@@ -206,5 +125,10 @@ compile(inputs, assemblerOpts, linkerOpts, 'binary', callbacks, null).then(resul
             throw new FileNotFoundException($"Could not find file {fullPath}");
         var data = File.ReadAllBytes(fullPath);
         return data;
+    }
+
+    public override void Dispose()
+    {
+        _engine.Dispose();
     }
 }

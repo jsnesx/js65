@@ -44,6 +44,8 @@ const MetaZ = z.object({
   offset: z.number().optional(),
   /** Size hint for number. */
   size: z.number().optional(),
+  /** Whether this is a branch offset (requires signed range checking). */
+  branch: z.boolean().optional(),
 });
 
 export type Meta = z.infer<typeof MetaZ>;
@@ -508,12 +510,24 @@ function minus(expr: Expr): Expr {
   const [a, b] = expr.args!;
   if (a.op !== 'num' || b.op !== 'num') return expr;
   const out: Expr = {op: 'num', num: a.num! - b.num!};
+  // Preserve branch flag from the parent expression (set by assembler for branches)
+  const isBranch = expr.meta?.branch;
   if (b.meta?.rel) {
-    return a.meta?.rel && a.meta.chunk === b.meta.chunk ? out : expr;
+    if (a.meta?.rel && a.meta.chunk === b.meta.chunk) {
+      // Same-chunk relative subtraction - preserve branch flag if set
+      out.meta = {size: size(out.num!).size};
+      if (isBranch) out.meta.branch = true;
+      return out;
+    }
+    return expr;
   }
   if (a.meta?.rel) out.meta = a.meta;
   if (!out.meta?.rel && out.meta?.size == null) {
     (out.meta || (out.meta = {})).size = size(out.num!).size;
+  }
+  // Preserve branch flag even for non-relative subtractions
+  if (isBranch && out.op === 'num') {
+    (out.meta || (out.meta = {})).branch = true;
   }
   return out;
 }

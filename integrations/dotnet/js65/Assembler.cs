@@ -29,7 +29,7 @@ public record Js65CompileResult
     public string debugfile;
 }
 
-public abstract class Assembler(Js65Options? options = null, Js65Callbacks? callbacks = null)
+public abstract class Assembler(Js65Options? options = null, Js65Callbacks? callbacks = null) : IDisposable
 {
     public Js65Options Options = options ?? new Js65Options();
     public Js65Callbacks? Callbacks = callbacks;
@@ -54,6 +54,8 @@ public abstract class Assembler(Js65Options? options = null, Js65Callbacks? call
         var modules = Modules.Select(module => module.Actions).ToList();
         return JsonSerializer.Serialize(modules, Js65JsonContext.Default.ListListDictionaryStringObject);
     }
+
+    public abstract void Dispose();
 }
 
 [JsonSourceGenerationOptions(WriteIndented = false)]

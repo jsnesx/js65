@@ -104,7 +104,7 @@ export class Linker {
       let firstLine = actualLine;
 
       if (debugLevel === 0) {
-        // Level 0: Only include comments and labels, skip source code lines
+        // Level 0: Only include comments, skip source code and labels
         // Walk backwards while we see comment lines (;) or label definitions (ending with :)
         do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
 
@@ -121,8 +121,7 @@ export class Linker {
               result.push(commentText);
             }
           } else if (/^\s*.*:\s*$/.test(l)) {
-            // Label-only line - remove the colon
-            result.push(trimmed.replace(/:/g, ''));
+            // Label-only line - skip it (labels go in the label field, not comments)
           } else {
             // Check if line has an inline comment (code ; comment)
             const inlineCommentMatch = l.match(/;(.*)$/);
@@ -139,11 +138,14 @@ export class Linker {
 
         return result.join('\\n');
       } else {
-        // Level 1: Include all source lines (comments, labels, and code)
+        // Level 1: Include comments and code, but not labels
         // Walk backwards while we see comment lines (;) or label definitions (ending with :)
         do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
-        // Remove colons from all lines to avoid breaking MLB format parsing
-        return sourceLines.slice(firstLine + 1, actualLine + 1).map((s) => s.trim().replace(/:/g, '')).join('\\n');
+        // Filter out label-only lines and remove colons from remaining lines
+        return sourceLines.slice(firstLine + 1, actualLine + 1)
+          .filter((s) => !/^\s*\S+:\s*$/.test(s))  // Exclude label-only lines
+          .map((s) => s.trim().replace(/:/g, ''))
+          .join('\\n');
       }
     }
     return "";
@@ -155,6 +157,18 @@ export class Linker {
     let data = "";
     const labels: MesenLabelFormat[] = [];
     const seenLabels: Set<string> = new Set;
+
+    // Calculate PRG ROM base offset from the minimum segment file offset
+    // Find the earliest file offset where the ORG address is at least > $4000
+    // which is a good enough approximation for any ROM only output segments
+    let prgBaseOffset = Infinity;
+    for (const [_, seg] of this._link.segments) {
+      if (seg.offset < prgBaseOffset && seg.memory >= 0x4000) {
+        prgBaseOffset = seg.offset;
+      }
+    }
+    // If we can't find any "PRG" segments, then just assume there's an iNES header?
+    if (prgBaseOffset === Infinity) prgBaseOffset = 0x10;
 
     // Build a set of all labels that appear in chunks to avoid duplicates
     const chunkLabels = new Set<string>();
@@ -220,12 +234,12 @@ export class Linker {
           continue;
         }
 
-        // Calculate the segment offset (c.segment.offset) for this chunk (offset) based on the file offset (c.offset)
-        const absOffset = c.offset! + offset - c.segment!.offset;
+        // Calculate the PRG ROM offset (file offset minus the PRG base offset/header)
+        const prgRomOffset = c.offset! + offset - prgBaseOffset;
         seenLabels.add(n);
         labels.push({
           type: "NesPrgRom",
-          address: `${absOffset.toString(16)}`,
+          address: `${prgRomOffset.toString(16)}`,
           label: n,
           comment: comment,
         });
@@ -500,7 +514,7 @@ class LinkChunk {
     // See if we can do it immediately.
     let del = false;
     if (sub.expr.op === 'num' && !sub.expr.meta?.rel) {
-      this.writeValue(sub.offset, sub.expr.num!, sub.size);
+      this.writeValue(sub.offset, sub.expr.num!, sub.size, sub.expr.meta?.branch, sub.expr.source);
       del = true;
     } else if (sub.expr.op === '.move') {
       if (sub.expr.args!.length !== 1) throw new Error(`bad .move`);
@@ -541,13 +555,25 @@ class LinkChunk {
     }
   }
 
-  writeValue(offset: number, val: number, size: number) {
-    // TODO - this is almost entirely copied from processor writeNumber
-    const bits = (size) << 3;
-    if (val != null && (val < (-1 << bits) || val >= (1 << bits))) {
-      const name = ['byte', 'word', 'farword', 'dword'][size - 1];
-      throw new Error(`Not a ${name}: $${val.toString(16)} at $${
-          (this.org! + offset).toString(16)}`);
+  writeValue(offset: number, val: number, size: number, isBranch?: boolean, source?: SourceInfo) {
+    // Check range based on whether this is a branch (signed) or regular value
+    if (isBranch) {
+      // Branch offsets use signed range
+      const min = -(1 << ((size << 3) - 1));  // -128 for 1 byte, -32768 for 2 bytes
+      const max = (1 << ((size << 3) - 1)) - 1;  // 127 for 1 byte, 32767 for 2 bytes
+      if (val < min || val > max) {
+        const at = source ? Tokens.at({source}) : '';
+        throw new Error(`Branch out of range: offset ${val} at $${
+            (this.org! + offset).toString(16)} (valid range: ${min} to ${max})${at}`);
+      }
+    } else {
+      // Regular values use unsigned range check
+      const bits = (size) << 3;
+      if (val != null && (val < (-1 << bits) || val >= (1 << bits))) {
+        const name = ['byte', 'word', 'farword', 'dword'][size - 1];
+        throw new Error(`Not a ${name}: $${val.toString(16)} at $${
+            (this.org! + offset).toString(16)}`);
+      }
     }
     const bytes = new Uint8Array(size);
     for (let i = 0; i < size; i++) {
@@ -895,9 +921,7 @@ class Link {
       }
     }
     if (DEBUG) console.log(`Initial:\n${this.initialReport}`);
-    console.log(`After filling:\n${this.report(true)}`);
     const name = chunk.name ? `${chunk.name} ` : '';
-    console.log(this.segments.get(chunk.segments[0]));
     throw new Error(`Could not find space for ${size}-byte chunk ${name} in ${
                      chunk.segments.join(', ')}`);
   }
