@@ -1002,6 +1002,12 @@ export class Assembler {
   byteInternal(args: Array<Expr|string|number>) {
     const {chunk} = this;
     this.markWritten(args.length);
+
+    // Record source info for this data directive
+    if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+      this._chunk.sourceMap.set(chunk.data.length, this._source);
+    }
+
     for (const arg of args) {
       // TODO - if we ran off the end of the segment, make a new chunk???
       // For now, we're avoiding needing to worry about it because orgToOffset
@@ -1025,6 +1031,12 @@ export class Assembler {
   word(...args: Array<Expr|number>) {
     const {chunk} = this;
     this.markWritten(2 * args.length);
+
+    // Record source info for this data directive
+    if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+      this._chunk.sourceMap.set(chunk.data.length, this._source);
+    }
+
     for (const arg of args) {
       if (typeof arg === 'number') {
         this.writeNumber(chunk.data, 2, arg);
@@ -1174,6 +1186,13 @@ export class Assembler {
     return str;
   }
 
+  parseOptionalStr(tokens: Token[], start: number): string | undefined {
+    const tok = tokens[start];
+    if (!tok) return undefined;
+    if (tok.token === 'str') return tok.str;
+    return undefined;
+  }
+
   parseSegmentList(tokens: Token[], start: number, allowEmptySegmentList: boolean): Array<string|mod.Segment> {
     if (tokens.length < start + 1) {
       if (allowEmptySegmentList) {
@@ -1197,7 +1216,7 @@ export class Assembler {
           case 'off': seg.offset = this.parseConst(val, 0); break;
           case 'mem': seg.memory = this.parseConst(val, 0); break;
           case 'fill': seg.fill = this.parseConst(val, 0); break;
-          case 'out': seg.out = true; break;
+          case 'out': seg.out = this.parseOptionalStr(val, 0) ?? '%O'; break;
           case 'overlay': seg.overlay = this.parseStr(val, 0); break;
           // TODO allow setting free space
           // case 'free': seg.free = this.parseConst(val, 0); break;
@@ -1205,7 +1224,9 @@ export class Assembler {
           default: this.fail(`Unknown segment attr: ${key}`);
         }
       }
-      if (seg.offset === undefined && seg.size !== undefined) {
+      // Only auto-assign offset if segment has an output file specified
+      // Segments without :out and without :off are RAM segments (no file output)
+      if (seg.offset === undefined && seg.size !== undefined && seg.out !== undefined) {
         seg.offset = this._segmentOffset;
         this._segmentOffset += seg.size;
       }

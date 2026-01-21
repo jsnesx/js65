@@ -214,6 +214,7 @@ export class Linker {
     }
     for (const c of this._link.chunks || []) {
       if (c.overlaps) continue;
+      const isRamChunk = c.segment?.isRam ?? false;
       const rev = new Map();
       for (const [k, v] of (c.labelIndex || [])) {
         rev.set(v, k);
@@ -234,15 +235,38 @@ export class Linker {
           continue;
         }
 
-        // Calculate the PRG ROM offset (file offset minus the PRG base offset/header)
-        const prgRomOffset = c.offset! + offset - prgBaseOffset;
         seenLabels.add(n);
-        labels.push({
-          type: "NesPrgRom",
-          address: `${prgRomOffset.toString(16)}`,
-          label: n,
-          comment: comment,
-        });
+
+        if (isRamChunk) {
+          // For RAM, use org address directly with proper type
+          const memAddr = c.org! + offset;
+          const labelType: MesenLabelFormat['type'] =
+              (memAddr < 0x2000) ? "NesInternalRam" :
+              (memAddr < 0x6000) ? "NesMemory" :
+              (memAddr < 0x8000) ? "NesSaveRam" : "NesWorkRam";
+
+          let addr = memAddr;
+          // SRAM addresses need offset adjustment
+          if (memAddr >= 0x6000 && memAddr < 0x8000) {
+            addr -= 0x6000;
+          }
+
+          labels.push({
+            type: labelType,
+            address: `${addr.toString(16)}`,
+            label: n,
+            comment: comment,
+          });
+        } else {
+          // Calculate the PRG ROM offset (file offset minus the PRG base offset/header)
+          const prgRomOffset = c.offset! + offset - prgBaseOffset;
+          labels.push({
+            type: "NesPrgRom",
+            address: `${prgRomOffset.toString(16)}`,
+            label: n,
+            comment: comment,
+          });
+        }
       }
     }
 
@@ -280,13 +304,18 @@ class LinkSegment {
   readonly memory: number;
   readonly addressing: number;
   readonly fill: number;
+  readonly isRam: boolean;
 
   constructor(segment: Segment) {
     const name = this.name = segment.name;
     this.bank = segment.bank ?? 0;
     this.addressing = segment.addressing ?? 2;
     this.size = segment.size ?? fail(`Size must be specified: ${name}`);
-    this.offset = segment.offset ?? fail(`Offset must be specified: ${name}`);
+    // A segment is RAM if it has no output file and no offset specified
+    // If out is specified (any string), it outputs. If offset is specified without out, it outputs to main file.
+    this.isRam = !segment.out && segment.offset == null;
+    // For RAM segments, offset defaults to memory (so delta=0, org space = tracking space)
+    this.offset = segment.offset ?? (this.isRam ? segment.memory ?? 0 : fail(`Offset must be specified: ${name}`));
     // this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
     // Allow memory offset to be null for non-prg segments
     this.memory = segment.memory ?? 0;
@@ -294,7 +323,10 @@ class LinkSegment {
   }
 
   // offset = org + delta
-  get delta(): number { return this.offset - this.memory; }
+  // For RAM segments, use a high bit offset to separate from ROM file offset space
+  // This prevents RAM free space tracking from conflicting with ROM file offsets
+  static readonly RAM_OFFSET = 0x80000000;
+  get delta(): number { return this.isRam ? LinkSegment.RAM_OFFSET : (this.offset - this.memory); }
 }
 
 class LinkChunk {
@@ -351,7 +383,7 @@ class LinkChunk {
     }
     this.asserts = (chunk.asserts || [])
         .map(e => translateExpr(e, chunkOffset, symbolOffset));
-    if (chunk.org) this._org = chunk.org;
+    if (chunk.org != null) this._org = chunk.org;
     this._overwrite = chunk.overwrite || 'allow';
   }
 
@@ -394,10 +426,22 @@ class LinkChunk {
     this._segment = segment;
     const offset = this._offset = org + segment.delta;
     for (const w of this.linker.watches) {
-      if (w >= offset && w < offset + this.size) 
+      if (w >= offset && w < offset + this.size)
         fail("Unable to place");
     }
     binaryInsert(this.linker.placed, x => x[0], [offset, this]);
+
+    // For RAM segments, skip data manipulation but still track free space
+    if (segment.isRam) {
+      this.linker.free.delete(offset, offset + this.size);
+      // Notify follow-ons
+      for (const [sub, chunk] of this.follow) {
+        chunk.resolveSub(sub, false);
+      }
+      this._data = undefined;
+      return;
+    }
+
     // Copy data, leaving out any holes
     const full = this.linker.data;
     const data = this._data ?? fail(`No data`);
@@ -846,6 +890,7 @@ class Link {
     const patch = new SparseByteArray();
     // Before placing the data, add the fill bytes to segments with fill
     for (const [_name, seg] of this.segments) {
+      if (seg.isRam) continue;  // RAM segments don't need fill
       if (seg.fill) {
         const buf = new Uint8Array(new ArrayBuffer(seg.size));
         buf.fill(seg.fill);
@@ -860,6 +905,7 @@ class Link {
         throw new Error(`Assertion failed${at}`);
       }
       if (c.overlaps) continue;
+      if (c.segment?.isRam) continue;  // RAM chunks not in output
       patch.set(c.offset!, Uint8Array.from(this.data.slice(c.offset!, c.offset! + c.size!)));
     }
     if (DEBUG) console.log(this.report(true));
@@ -886,6 +932,7 @@ class Link {
       const pattern = this.data.pattern(chunk.data);
       for (const name of chunk.segments) {
         const segment = this.segments.get(name) ?? fail(`Segment not found with name: ${name}`);
+        if (segment.isRam) continue;  // Skip pattern matching for RAM segments
         const start = segment.offset!;
         const end = start + segment.size!;
         const index = pattern.search(start, end);
@@ -899,7 +946,9 @@ class Link {
     // look for the smallest possible free block.
     for (const name of chunk.segments) {
       const segment = this.segments.get(name) ?? fail(`Segment not found with name: ${name}`);
-      const s0 = segment.offset!;
+      // For RAM segments, free space is tracked with RAM_OFFSET added to memory addresses
+      // For ROM segments, free space is tracked in file offset coordinates
+      const s0 = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset!;
       const s1 = s0 + segment.size!;
       let found: number|undefined;
       let smallest = Infinity;

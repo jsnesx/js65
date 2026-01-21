@@ -124,8 +124,8 @@ const SegmentZ = z.object({
   addressing: z.number().optional(),
   /** Address size. */
   fill: z.number().optional(),
-  /** True if the segment should be written to the output file. */
-  out: z.boolean().optional(),
+  /** Output file for the segment. Use "%O" for the main output file, or a filename. Empty/undefined means no output. */
+  out: z.string().optional(),
   /** Name of the segment that this should be placed inside. */
   overlay: z.string().optional(),
   /** True if this segment is the "default" segment to use if no segment is defined */
