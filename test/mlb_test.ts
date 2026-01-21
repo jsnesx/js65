@@ -567,4 +567,57 @@ Nmi:
       expect(start?.address).toEqual("123");
     });
   });
+
+  describe('RAM Segment Debug Info', function() {
+    it('should generate NesInternalRam for zero page labels in RAM segments', async function() {
+      const source = `
+.segment "ZP" :size $100 :mem $0000 :zp
+.org $00
+temp: .res 1
+ptr: .res 2
+.segment "PRG"
+.org $8000
+  lda temp
+  sta ptr
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const temp = entries.find(e => e.label === 'temp');
+      const ptr = entries.find(e => e.label === 'ptr');
+
+      expect(temp).toBeTruthy();
+      expect(temp?.type).toBe("NesInternalRam");
+      expect(temp?.address).toBe('0');
+
+      expect(ptr).toBeTruthy();
+      expect(ptr?.type).toBe("NesInternalRam");
+      expect(ptr?.address).toBe('1');
+    });
+
+    it('should generate NesSaveRam for SRAM labels in RAM segments', async function() {
+      const source = `
+.segment "SRAM" :size $2000 :mem $6000
+.segment "SRAM"
+.org $6000
+SaveSlot1: .res $100
+SaveSlot2: .res $100
+.segment "PRG"
+.org $8000
+  lda SaveSlot1
+  sta SaveSlot2
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const save1 = entries.find(e => e.label === 'SaveSlot1');
+      const save2 = entries.find(e => e.label === 'SaveSlot2');
+
+      expect(save1).toBeTruthy();
+      expect(save1?.type).toBe("NesSaveRam");
+      expect(save1?.address).toBe('0');  // $6000 - $6000 = 0
+
+      expect(save2).toBeTruthy();
+      expect(save2?.type).toBe("NesSaveRam");
+      expect(save2?.address).toBe('100');  // $6100 - $6000 = $100
+    });
+  });
 });

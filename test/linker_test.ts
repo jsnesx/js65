@@ -416,4 +416,113 @@ describe('Linker', function() {
     expect([...link(m).chunks()])
         .toEqual([[0, [2, 0x04, 0x80, 4, 3, 5, 0x00, 0x80, 7, 9]]]);
   });
+
+  // RAM segment tests
+  it('should not output chunks from RAM segments', function() {
+    const m = {
+      chunks: [{
+        segments: ['ram'],
+        org: 0,
+        data: Uint8Array.of(0, 0, 0, 0),
+      }, {
+        segments: ['code'],
+        org: 0x8000,
+        data: Uint8Array.of(0xa9, 0x00),
+      }],
+      segments: [
+        {name: 'ram', size: 256, memory: 0, free: [[0x10, 0x20]]},
+        {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
+      ],
+    };
+    expect([...link(m).chunks()]).toEqual([[0x10, [0xa9, 0x00]]]);
+  });
+
+  it('should treat segments without offset as RAM', function() {
+    const m = {
+      chunks: [{
+        segments: ['zp'],
+        org: 0,
+        data: Uint8Array.of(0, 0),
+      }, {
+        segments: ['code'],
+        org: 0x8000,
+        data: Uint8Array.of(0xa5, 0x00),
+      }],
+      segments: [
+        {name: 'zp', size: 256, memory: 0, free: [[0x10, 0x20]]},
+        {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
+      ],
+    };
+    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x00]]]);
+  });
+
+  it('should resolve RAM symbols in ROM code', function() {
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        org: 0x8000,
+        data: Uint8Array.of(0xa5, 0xff),
+        subs: [{offset: 1, size: 1, expr: {op: 'sym', num: 0}}],
+      }],
+      symbols: [{
+        expr: {op: 'num', num: 0x42, meta: {size: 1}},
+      }],
+      segments: [
+        {name: 'zp', size: 256, memory: 0},
+        {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
+      ],
+    };
+    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x42]]]);
+  });
+
+  it('should allocate relocatable chunks in RAM free space', function() {
+    const m = {
+      chunks: [{
+        segments: ['zp'],
+        // No org = relocatable, will be allocated from free space
+        data: Uint8Array.of(0, 0, 0, 0),  // 4 bytes
+      }, {
+        segments: ['code'],
+        org: 0x8000,
+        data: Uint8Array.of(0xa5, 0xff),  // lda $xx
+        subs: [{offset: 1, size: 1, expr: off(0, 0)}],  // Reference start of chunk 0
+      }],
+      segments: [
+        {name: 'zp', size: 256, memory: 0, free: [[0x10, 0x20]]},
+        {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
+      ],
+    };
+    // RAM chunk allocated at $10 (start of free space), ROM references it
+    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x10]]]);
+  });
+
+  it('should allocate multiple RAM chunks without overlap', function() {
+    const m = {
+      chunks: [{
+        segments: ['zp'],
+        data: Uint8Array.of(0, 0, 0, 0),  // 4 bytes
+      }, {
+        segments: ['zp'],
+        data: Uint8Array.of(0, 0),  // 2 bytes
+      }, {
+        segments: ['code'],
+        org: 0x8000,
+        data: Uint8Array.of(0xa5, 0xff, 0xa5, 0xff),
+        subs: [
+          {offset: 1, size: 1, expr: off(0, 0)},  // Reference chunk 0
+          {offset: 3, size: 1, expr: off(1, 0)},  // Reference chunk 1
+        ],
+      }],
+      segments: [
+        {name: 'zp', size: 256, memory: 0, free: [[0x10, 0x20]]},
+        {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
+      ],
+    };
+    // Both RAM chunks allocated, no overlap
+    const result = [...link(m).chunks()];
+    expect(result.length).toBe(1);  // Only ROM chunk in output
+    // The addresses should be different (allocated sequentially)
+    const [_offset, data] = result[0];
+    expect(data[1]).not.toBe(data[3]);  // Different addresses
+  });
 });

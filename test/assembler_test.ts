@@ -864,6 +864,7 @@ describe('Assembler', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('size', 100)
       a.directive([cs('.segment'), str('03'),
+                   COLON, ident('off'), num(0),
                    COLON, ident('bank'), num(2), op('+'), num(1),
                    COLON, ident('size'), ident('size')]);
       expect(strip(a.module())).toEqual({
@@ -877,7 +878,7 @@ describe('Assembler', function() {
 
     it('should merge multiple attr lists', function() {
       const a = new Assembler(Cpu.P02);
-      a.directive([cs('.segment'), str('02'), COLON, ident('bank'), num(2)]);
+      a.directive([cs('.segment'), str('02'), COLON, ident('off'), num(0), COLON, ident('bank'), num(2)]);
       a.directive([cs('.segment'), str('02'), COLON, ident('size'), num(200)]);
       expect(strip(a.module())).toEqual({
         chunks: [], symbols: [], segments: [{
