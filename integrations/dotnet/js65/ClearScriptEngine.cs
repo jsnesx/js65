@@ -83,7 +83,6 @@ const callbacks = {
         if (assemblerOpts.generateDebugInfo) {
             src = new SourceContents();
         }
-        debugger;
         await compileActions(modules, assemblerOpts, linkerOpts, 'binary', callbacks, src).then(result => {
             for (let i = 0; i < result.data.length; i++) {
                 romdata[i] = result.data[i];
