@@ -6,6 +6,7 @@
  */
 
 import { Assembler } from './assembler.ts';
+import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
@@ -16,7 +17,7 @@ import type { Expr } from './expr.ts';
 import type { SourceInfo } from './token.ts';
 
 // Re-export Assembler for direct programmatic use
-export { Assembler, Cpu, SourceContents };
+export { Assembler, Cpu, SourceContents, Base64 };
 export type { Expr, Module, Segment };
 
 /**
@@ -276,6 +277,8 @@ export async function assembleActions(
       generateDebugInfo: options?.generateDebugInfo
     };
     const asm = new Assembler(Cpu.P02, asmOpts);
+    let module_name = `module_${moduleIdx}`;
+    const original_module_name = module_name;
 
     for (const action of actions) {
       // Set source info for debug purposes before processing each action
@@ -296,7 +299,11 @@ export async function assembleActions(
             opts,
             sourceContents
           );
-          const tokenizer = new Tokenizer(action.code, action.name || `module_${moduleIdx}`, opts, sourceContents);
+          // Use the first name provided through a code action as the outer module name
+          if (module_name == original_module_name && action.name) {
+            module_name = action.name;
+          }
+          const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents);
           toks.enter(tokenizer);
           const pre = new Preprocessor(toks, asm);
           await asm.tokens(pre);
@@ -359,7 +366,7 @@ export async function assembleActions(
     }
 
     const module = asm.module();
-    module.name = `module_${moduleIdx}`;
+    module.name = module_name;
     modules.push(module);
   }
 
