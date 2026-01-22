@@ -233,6 +233,11 @@ export class Assembler {
 
   constructor(readonly cpu = Cpu.P02, readonly opts: Options = {}) {}
 
+  /** Sets the current source location for debug info from an external source. */
+  setSource(source?: Tokens.SourceInfo) {
+    this._source = source;
+  }
+
   private get chunk(): Chunk {
     // make chunk only when needed
     this.ensureChunk();
@@ -1003,21 +1008,30 @@ export class Assembler {
     const {chunk} = this;
     this.markWritten(args.length);
 
-    // Record source info for this data directive
-    if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-      this._chunk.sourceMap.set(chunk.data.length, this._source);
-    }
-
     for (const arg of args) {
       // TODO - if we ran off the end of the segment, make a new chunk???
       // For now, we're avoiding needing to worry about it because orgToOffset
       // and markWritten are based on the start of the chunk, rather than where
       // it ends; but this is still a potential source of bugs!
       if (typeof arg === 'number') {
+        // Record source info for each byte
+        if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+          this._chunk.sourceMap.set(chunk.data.length, this._source);
+        }
         this.writeNumber(chunk.data, 1, arg);
       } else if (typeof arg === 'string') {
+        // Record source info for each character in the string
+        if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+          for (let i = 0; i < arg.length; i++) {
+            this._chunk.sourceMap.set(chunk.data.length + i, this._source);
+          }
+        }
         writeString(chunk.data, arg);
       } else {
+        // Record source info before append (which writes 1 byte)
+        if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+          this._chunk.sourceMap.set(chunk.data.length, this._source);
+        }
         this.append(arg, 1);
       }
     }
@@ -1032,12 +1046,12 @@ export class Assembler {
     const {chunk} = this;
     this.markWritten(2 * args.length);
 
-    // Record source info for this data directive
-    if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-      this._chunk.sourceMap.set(chunk.data.length, this._source);
-    }
-
     for (const arg of args) {
+      // Record source info for each byte of the word (2 bytes)
+      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+        this._chunk.sourceMap.set(chunk.data.length, this._source);
+        this._chunk.sourceMap.set(chunk.data.length + 1, this._source);
+      }
       if (typeof arg === 'number') {
         this.writeNumber(chunk.data, 2, arg);
       } else {

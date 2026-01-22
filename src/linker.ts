@@ -98,7 +98,9 @@ export class Linker {
     this._link.watches.push(...offset);
   }
 
-  private static getComment(sourceLines?: string[], line: number = 0, debugLevel: number = 1) {
+  private static getComment(sourceLines?: string[], line: number = 0, debugLevel: number = 1, sourceInfo?: SourceInfo) {
+    let comment = "";
+
     if (sourceLines && line >= 0) {
       const actualLine = line;
       let firstLine = actualLine;
@@ -136,19 +138,26 @@ export class Linker {
           }
         }
 
-        return result.join('\\n');
+        comment = result.join('\\n');
       } else {
-        // Level 1: Include comments and code, but not labels
+        // Level 1+: Include comments and code, but not labels
         // Walk backwards while we see comment lines (;) or label definitions (ending with :)
         do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
         // Filter out label-only lines and remove colons from remaining lines
-        return sourceLines.slice(firstLine + 1, actualLine + 1)
+        comment = sourceLines.slice(firstLine + 1, actualLine + 1)
           .filter((s) => !/^\s*\S+:\s*$/.test(s))  // Exclude label-only lines
           .map((s) => s.trim().replace(/:/g, ''))
           .join('\\n');
       }
     }
-    return "";
+
+    // Level 2: Append source file location
+    if (debugLevel >= 2 && sourceInfo) {
+      const suffix = ` in file ${sourceInfo.file}:${sourceInfo.line}`;
+      comment = comment ? comment + suffix : suffix.trim();
+    }
+
+    return comment;
   }
 
   getDebugInfo(sources?: SourceContents, debugLevel: number = 1) : string {
@@ -195,7 +204,7 @@ export class Linker {
       if (s.expr.source) {
         const {file, line} = s.expr.source;
         const sourceLines = sources.data.get(file)?.split('\n');
-        comment = Linker.getComment(sourceLines, line, debugLevel);
+        comment = Linker.getComment(sourceLines, line, debugLevel, s.expr.source);
       }
       const labelType = (s.expr.num! < 0x2000) ? "NesInternalRam" :
           (s.expr.num! < 0x6000) ? "NesMemory" :
@@ -219,55 +228,105 @@ export class Linker {
       for (const [k, v] of (c.labelIndex || [])) {
         rev.set(v, k);
       }
+
+      // Group consecutive bytes with the same source info into ranges
+      let rangeStart = -1;
+      let rangeEnd = -1;
+      let rangeSrcInfo: SourceInfo | undefined;
+      let rangeName: string | undefined;
       let name = c.name;
-      for (let offset = 0; offset < c.size; offset++) {
-        name = rev.get(offset) || name;
-        const srcInfo = c.sourceMap?.get(offset);
-        if (!srcInfo) continue;
-        let {file, line} = srcInfo;
+
+      const flushRange = () => {
+        if (rangeStart < 0 || !rangeSrcInfo) return;
+
+        let {file, line} = rangeSrcInfo;
         line--;
         const sourceLines = sources.data.get(file)?.split('\n');
-        const comment = Linker.getComment(sourceLines, line, debugLevel);
+        const comment = Linker.getComment(sourceLines, line, debugLevel, rangeSrcInfo);
 
         // In debug level 0, skip entries with no comment and no label
-        const n = !seenLabels.has(name!) ? name! : "";
+        const n = !seenLabels.has(rangeName!) ? rangeName! : "";
         if (debugLevel === 0 && !comment && !n) {
-          continue;
+          rangeStart = -1;
+          return;
         }
 
         seenLabels.add(n);
 
+        // Format address as range if more than one byte, otherwise single address
+        // Mesen uses inclusive end addresses, so subtract 1 from end
+        const formatAddr = (start: number, end: number) => {
+          if (end > start + 1) {
+            return `${start.toString(16)}-${(end - 1).toString(16)}`;
+          }
+          return start.toString(16);
+        };
+
         if (isRamChunk) {
           // For RAM, use org address directly with proper type
-          const memAddr = c.org! + offset;
+          const memAddrStart = c.org! + rangeStart;
+          const memAddrEnd = c.org! + rangeEnd;
           const labelType: MesenLabelFormat['type'] =
-              (memAddr < 0x2000) ? "NesInternalRam" :
-              (memAddr < 0x6000) ? "NesMemory" :
-              (memAddr < 0x8000) ? "NesSaveRam" : "NesWorkRam";
+              (memAddrStart < 0x2000) ? "NesInternalRam" :
+              (memAddrStart < 0x6000) ? "NesMemory" :
+              (memAddrStart < 0x8000) ? "NesSaveRam" : "NesWorkRam";
 
-          let addr = memAddr;
+          let addrStart = memAddrStart;
+          let addrEnd = memAddrEnd;
           // SRAM addresses need offset adjustment
-          if (memAddr >= 0x6000 && memAddr < 0x8000) {
-            addr -= 0x6000;
+          if (memAddrStart >= 0x6000 && memAddrStart < 0x8000) {
+            addrStart -= 0x6000;
+            addrEnd -= 0x6000;
           }
 
           labels.push({
             type: labelType,
-            address: `${addr.toString(16)}`,
+            address: formatAddr(addrStart, addrEnd),
             label: n,
             comment: comment,
           });
         } else {
           // Calculate the PRG ROM offset (file offset minus the PRG base offset/header)
-          const prgRomOffset = c.offset! + offset - prgBaseOffset;
+          const prgRomOffsetStart = c.offset! + rangeStart - prgBaseOffset;
+          const prgRomOffsetEnd = c.offset! + rangeEnd - prgBaseOffset;
           labels.push({
             type: "NesPrgRom",
-            address: `${prgRomOffset.toString(16)}`,
+            address: formatAddr(prgRomOffsetStart, prgRomOffsetEnd),
             label: n,
             comment: comment,
           });
         }
+
+        rangeStart = -1;
+      };
+
+      for (let offset = 0; offset < c.size; offset++) {
+        name = rev.get(offset) || name;
+        const srcInfo = c.sourceMap?.get(offset);
+
+        // Check if this continues the current range
+        const sameSource = srcInfo && rangeSrcInfo &&
+          srcInfo.file === rangeSrcInfo.file &&
+          srcInfo.line === rangeSrcInfo.line;
+
+        if (srcInfo && sameSource && offset === rangeEnd) {
+          // Continue the range
+          rangeEnd = offset + 1;
+        } else {
+          // Flush previous range and start new one
+          flushRange();
+
+          if (srcInfo) {
+            rangeStart = offset;
+            rangeEnd = offset + 1;
+            rangeSrcInfo = srcInfo;
+            rangeName = name;
+          }
+        }
       }
+
+      // Flush final range
+      flushRange();
     }
 
     for (const label of labels) {

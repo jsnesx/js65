@@ -591,7 +591,7 @@ ptr: .res 2
 
       expect(ptr).toBeTruthy();
       expect(ptr?.type).toBe("NesInternalRam");
-      expect(ptr?.address).toBe('1');
+      expect(ptr?.address).toBe('1-2');
     });
 
     it('should generate NesSaveRam for SRAM labels in RAM segments', async function() {
@@ -613,11 +613,132 @@ SaveSlot2: .res $100
 
       expect(save1).toBeTruthy();
       expect(save1?.type).toBe("NesSaveRam");
-      expect(save1?.address).toBe('0');  // $6000 - $6000 = 0
+      // $100 bytes (256) starting at 0: 0-ff inclusive
+      expect(save1?.address).toBe('0-ff');
 
       expect(save2).toBeTruthy();
       expect(save2?.type).toBe("NesSaveRam");
-      expect(save2?.address).toBe('100');  // $6100 - $6000 = $100
+      // $100 bytes starting at $100: 100-1ff inclusive
+      expect(save2?.address).toBe('100-1ff');
+    });
+  });
+
+  describe('Address Range Format', function() {
+    it('should use range format for .res with multiple bytes', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Buffer: .res 16
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const buffer = entries.find(e => e.label === 'Buffer');
+      expect(buffer).toBeTruthy();
+      expect(buffer?.type).toBe("NesPrgRom");
+      expect(buffer?.address).toBe('0-f');
+    });
+
+    it('should use range format for .byte with multiple values', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+DataTable: .byte $01, $02, $03, $04, $05, $06, $07, $08
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const dataTable = entries.find(e => e.label === 'DataTable');
+      expect(dataTable).toBeTruthy();
+      expect(dataTable?.type).toBe("NesPrgRom");
+      expect(dataTable?.address).toBe('0-7');
+    });
+
+    it('should use range format for .word with multiple values', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Pointers: .word $1000, $2000, $3000, $4000
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const pointers = entries.find(e => e.label === 'Pointers');
+      expect(pointers).toBeTruthy();
+      expect(pointers?.type).toBe("NesPrgRom");
+      expect(pointers?.address).toBe('0-7');
+    });
+
+    it('should use single address for single byte instructions', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+SingleByte: .byte $FF
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const singleByte = entries.find(e => e.label === 'SingleByte');
+      expect(singleByte).toBeTruthy();
+      // Single byte should NOT have a range, just a single address
+      expect(singleByte?.address).toBe('0');
+    });
+
+    it('should create separate ranges for different source lines', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+FirstBlock: .res 4
+SecondBlock: .res 4
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const firstBlock = entries.find(e => e.label === 'FirstBlock');
+      const secondBlock = entries.find(e => e.label === 'SecondBlock');
+
+      expect(firstBlock).toBeTruthy();
+      expect(firstBlock?.address).toBe('0-3');
+
+      expect(secondBlock).toBeTruthy();
+      expect(secondBlock?.address).toBe('4-7');
+    });
+
+    it('should handle RAM segment ranges correctly', async function() {
+      const source = `
+.segment "ZP" :size $100 :mem $0000 :zp
+.org $00
+TempBuffer: .res 8
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const tempBuffer = entries.find(e => e.label === 'TempBuffer');
+      expect(tempBuffer).toBeTruthy();
+      expect(tempBuffer?.type).toBe("NesInternalRam");
+      expect(tempBuffer?.address).toBe('0-7');
+    });
+
+    it('should handle mixed code and data with proper ranges', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+DataBlock: .byte $01, $02, $03, $04
+Continue:
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const start = entries.find(e => e.label === 'Start');
+      const dataBlock = entries.find(e => e.label === 'DataBlock');
+      const cont = entries.find(e => e.label === 'Continue');
+
+      expect(start).toBeTruthy();
+      // lda #$00 is 2 bytes at offset 0 with no range
+      expect(start?.address).toBe('0');
+
+      expect(dataBlock).toBeTruthy();
+      // 4 bytes at offset 2 (after lda #$00): 2-5 inclusive
+      expect(dataBlock?.address).toBe('2-5');
+
+      expect(cont).toBeTruthy();
+      expect(cont?.address).toBe('6');
     });
   });
 });
