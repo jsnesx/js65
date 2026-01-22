@@ -13,6 +13,7 @@ import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, ModuleZ, type Segment } from "./module.ts";
 import type { Expr } from './expr.ts';
+import type { SourceInfo } from './token.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents };
@@ -42,7 +43,13 @@ export interface LinkerOptions {
   target?: string;
   baseRom?: Uint8Array;
   baseRomOffset?: number;
-  debugLevel?: number; // -1 = disabled, 0 = comments/labels only, 1 = full source
+  /** Debug level for debug info generation:
+   * -1 = disabled
+   *  0 = comments/labels only
+   *  1 = full source
+   *  2 = full source + file:line location suffix
+   */
+  debugLevel?: number;
 }
 
 /**
@@ -178,7 +185,6 @@ export function link(
     binaryData = data;
   }
 
-  debugger;
   const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
 
   return {
@@ -211,20 +217,28 @@ export async function compile(
 }
 
 /**
+ * Source location for an action (from the caller's code)
+ */
+export interface ActionSource {
+  file: string;
+  line: number;
+}
+
+/**
  * Action types for programmatic assembly
  */
 export type AssemblyAction =
-  | { action: 'code', code: string, name?: string }
-  | { action: 'label', label: string }
-  | { action: 'byte', bytes: Array<number | { op: 'sym', sym: string }> }
-  | { action: 'word', words: Array<number | { op: 'sym', sym: string }> }
-  | { action: 'org', addr: number, name?: string }
-  | { action: 'segment', name: string | string[] }
-  | { action: 'reloc', name?: string }
-  | { action: 'export', name: string }
-  | { action: 'assign', name: string, value: number | string }
-  | { action: 'set', name: string, value: number | string }
-  | { action: 'free', size: number };
+  | { action: 'code', code: string, name?: string, source?: ActionSource }
+  | { action: 'label', label: string, source?: ActionSource }
+  | { action: 'byte', bytes: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'word', words: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'org', addr: number, name?: string, source?: ActionSource }
+  | { action: 'segment', name: string | string[], source?: ActionSource }
+  | { action: 'reloc', name?: string, source?: ActionSource }
+  | { action: 'export', name: string, source?: ActionSource }
+  | { action: 'assign', name: string, value: number | string, source?: ActionSource }
+  | { action: 'set', name: string, value: number | string, source?: ActionSource }
+  | { action: 'free', size: number, source?: ActionSource };
 
 /**
  * Assembles modules from actions, without converting to source text.
@@ -246,6 +260,16 @@ export async function assembleActions(
 ): Promise<Module[]> {
   const modules: Module[] = [];
 
+  // Helper to convert ActionSource to SourceInfo
+  const toSourceInfo = (source?: ActionSource): SourceInfo | undefined => {
+    if (!source) return undefined;
+    return {
+      file: source.file,
+      line: source.line,
+      column: 0
+    };
+  };
+
   for (let moduleIdx = 0; moduleIdx < actionModules.length; moduleIdx++) {
     const actions = actionModules[moduleIdx];
     const asmOpts = {
@@ -254,6 +278,9 @@ export async function assembleActions(
     const asm = new Assembler(Cpu.P02, asmOpts);
 
     for (const action of actions) {
+      // Set source info for debug purposes before processing each action
+      asm.setSource(toSourceInfo(action.source));
+
       switch (action.action) {
         case 'code': {
           // For code actions, we need to tokenize and process through the full pipeline
