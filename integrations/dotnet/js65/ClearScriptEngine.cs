@@ -51,9 +51,15 @@ public class ClearScriptEngine : Assembler, IDisposable
         _engine.Script.modulesJson = SerializeModulesToJson();
         await Task.Run(() => {
             _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
-import { compileActions, SourceContents } from '@system/libassembler'
+import { Base64, compileActions, SourceContents } from '@system/libassembler'
 
-const modules = JSON.parse(modulesJson);
+const modules = JSON.parse(modulesJson, (key, value) => {
+  // Deserialize any of the byte or word b64 arrays into a regular number array
+  if ((key === 'bytes' || key == 'words') && typeof value === 'string') {
+    return new Base64().decode(value);
+  }
+  return value;
+});
 
 const assemblerOpts = {
     includePaths: [...Options.includePaths],
