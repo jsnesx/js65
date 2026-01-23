@@ -395,3 +395,79 @@ export async function compileActions(
   const modules = await assembleActions(actionModules, assemblerOpts, callbacks, sourceContents);
   return link(modules, linkerOpts, outputFormat, sourceContents);
 }
+
+/**
+ * Browser-compatible wrapper for compileActions that accepts JSON strings and returns base64-encoded result.
+ * This function is designed to be called from C# using JSImport in the browser engine.
+ *
+ * @param modulesJson - JSON string containing array of action modules
+ * @param assemblerOptsJson - JSON string containing assembler options
+ * @param linkerOptsJson - JSON string containing linker options (baseRom should be base64-encoded)
+ * @param outputFormat - Output format ('binary' or 'ips')
+ * @param readTextCallback - Callback function for reading text files (basePath, filePath) => content
+ * @param readBinaryCallback - Callback function for reading binary files (basePath, filePath) => base64-encoded content
+ * @param useSourceContents - Whether to create SourceContents for debug info
+ * @returns Promise<string> - Base64-encoded JSON result with romdata and debugfile
+ */
+export async function compileActionsBrowser(
+  modulesJson: string,
+  assemblerOptsJson: string,
+  linkerOptsJson: string,
+  outputFormat: OutputFormat = 'binary',
+  readTextCallback: (basePath: string, filePath: string) => string,
+  readBinaryCallback: (basePath: string, filePath: string) => string,
+  useSourceContents: boolean = false
+): Promise<string> {
+  const base64 = new Base64();
+
+  // Parse action modules JSON
+  const actionModules: AssemblyAction[][] = JSON.parse(modulesJson, (key, value) => {
+    // Deserialize base64-encoded byte/word arrays into number arrays
+    if ((key === 'bytes' || key === 'words') && typeof value === 'string') {
+      return base64.decode(value);
+    }
+    return value;
+  });
+
+  // Parse assembler options
+  const assemblerOpts: AssemblerOptions = JSON.parse(assemblerOptsJson);
+
+  // Parse linker options and decode base64 ROM
+  const linkerOptsRaw = JSON.parse(linkerOptsJson);
+  const linkerOpts: LinkerOptions = {
+    ...linkerOptsRaw,
+    baseRom: linkerOptsRaw.baseRom ? base64.decode(linkerOptsRaw.baseRom) : undefined
+  };
+
+  // Create callbacks object
+  const callbacks: FileCallbacks = {
+    readText: async (basePath: string, filePath: string) => {
+      return readTextCallback(basePath, filePath);
+    },
+    readBinary: async (basePath: string, filePath: string) => {
+      const base64Content = readBinaryCallback(basePath, filePath);
+      return base64.decode(base64Content);
+    }
+  };
+
+  // Create source contents if needed
+  const sourceContents = useSourceContents ? new SourceContents() : undefined;
+
+  // Call compileActions
+  const result = await compileActions(
+    actionModules,
+    assemblerOpts,
+    linkerOpts,
+    outputFormat,
+    callbacks,
+    sourceContents
+  );
+
+  // Encode result as base64 JSON
+  const resultJson = JSON.stringify({
+    romdata: base64.encode(result.data),
+    debugfile: result.debugInfo || ''
+  });
+
+  return base64.encode(new TextEncoder().encode(resultJson));
+}
