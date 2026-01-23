@@ -1,23 +1,48 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-    <PropertyGroup>
-        <OutputType>Exe</OutputType>
-        <TargetFramework>net8.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <IsPackable>false</IsPackable>
-    </PropertyGroup>
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net8.0-browser</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <AllowUnsafeBlocks Condition="'$(TargetFramework)' == 'net8.0-browser'">true</AllowUnsafeBlocks>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+  </PropertyGroup>
 
-    <ItemGroup>
-      <ProjectReference Include="..\js65.clearscript\js65.clearscript.csproj" />
-      <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
-      <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
-      <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
-    </ItemGroup>
-    <ItemGroup>
-      <Content Include="example.s">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-    </ItemGroup>
+  <!-- Desktop-only references -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <ProjectReference Include="..\js65.clearscript\js65.clearscript.csproj" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
+  </ItemGroup>
+
+  <!-- Browser-only references -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-browser'">
+    <ProjectReference Include="..\js65.browser\js65.browser.csproj" />
+    <WasmExtraFilesToDeploy Include="$(ProjectDir)/../../../build/libassembler.js" TargetPath="js65/libassembler.js" />
+    <WasmExtraFilesToDeploy Include="$(ProjectDir)/../js65.browser/interop.js" TargetPath="js65/interop.js" />
+    <WasmExtraFilesToDeploy Include="example.s" />
+    <WasmExtraFilesToDeploy Include="wwwroot/**/*" />
+  </ItemGroup>
+
+  <!-- Shared content files -->
+  <ItemGroup>
+    <Content Include="example.s">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Exclude DesktopExample.cs when building for browser -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-browser'">
+    <Compile Remove="DesktopExample.cs" />
+  </ItemGroup>
+
+  <!-- Exclude BrowserExample.cs when building for desktop -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <Compile Remove="BrowserExample.cs" />
+  </ItemGroup>
 
 </Project>
