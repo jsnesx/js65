@@ -75,7 +75,7 @@ public class JsFileCallbackConfig
 [SupportedOSPlatform("browser")]
 public partial class BrowserJsEngine : Assembler
 {
-    [JSImport("compileActionsBrowser", "js65.interface.libassembler.js")]
+    [JSImport("compileActionsBrowser", "js65.interop.libassembler.js")]
     [return: JSMarshalAs<JSType.Promise<JSType.String>>]
     private static partial Task<string> CompileActionsBrowser(
         string modulesJson,
@@ -116,7 +116,7 @@ public partial class BrowserJsEngine : Assembler
     {
         _fileCallbackConfig = fileCallbackConfig;
         // Paths are relative to _framework directory, so use ../ to reach the app root
-        _module = JSHost.ImportAsync("js65.interface.libassembler.js", "../js65/libassembler.js");
+        _module = JSHost.ImportAsync("js65.interop.libassembler.js", "../js65/libassembler.js");
         _interopModule = JSHost.ImportAsync("js65.interop.js", "../js65/interop.js");
     }
 

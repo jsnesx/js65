@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <OutputType>Library</OutputType>
-    <PackageId>js65.interface</PackageId>
+    <PackageId>js65.interop</PackageId>
     <RootNamespace>js65</RootNamespace>
   </PropertyGroup>
 

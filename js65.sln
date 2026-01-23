@@ -9,7 +9,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet", "dotnet", "{0F0D0C
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "example", "integrations\dotnet\example\example.csproj", "{AD27FB99-F93A-444E-B2DF-31A4ADEA858A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "js65.interface", "integrations\dotnet\js65.interface\js65.interface.csproj", "{366E894B-34A5-4935-B958-364A8D5E37F4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "js65.interop", "integrations\dotnet\js65.interop\js65.interop.csproj", "{366E894B-34A5-4935-B958-364A8D5E37F4}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "js65.clearscript", "integrations\dotnet\js65.clearscript\js65.clearscript.csproj", "{B6C2A5A7-FA5C-43AC-9646-2F420060153E}"
 EndProject
