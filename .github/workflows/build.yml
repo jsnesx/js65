@@ -26,6 +26,8 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - name: Install WASM workload
+        run: dotnet workload restore
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
@@ -44,8 +46,7 @@ jobs:
       - name: Run example project (desktop)
         run: |
           dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0
-          dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0browser
-          ./integrations/dotnet/example/bin/Release/net8.0/example
+          dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0-browser
       - name: Upload bun artifact
         uses: actions/upload-artifact@v4
         with:
@@ -64,7 +65,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Install WASM workload
-        run: dotnet workload install wasm-tools
+        run: dotnet workload restore
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
