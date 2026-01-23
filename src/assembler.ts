@@ -140,13 +140,16 @@ class CheapScope extends BaseScope {
 
   /** Clear everything out, making sure everything was defined. */
   clear() {
+    this.validate();
+    this.symbols.clear();
+  }
+  validate() {
     for (const [name, sym] of this.symbols) {
       if (!sym.expr) {
         const at = sym.ref ? Tokens.at(sym.ref) : '';
         throw new Error(`Cheap local label never defined: ${name}${at}`);
       }
     }
-    this.symbols.clear();
   }
 }
 
@@ -218,6 +221,9 @@ export class Assembler {
 
   /** Current source location, for error messages. */
   private _source?: Tokens.SourceInfo;
+
+  /** Debug labels for anonymous/temp labels that aren't in normal symbol tables. */
+  private debugLabels: Array<{name: string, expr: Expr}> = [];
 
   /** Token for reporting errors. */
   private errorToken?: Token;
@@ -501,27 +507,36 @@ export class Assembler {
     let debugSymbols: mod.Symbol[] | undefined = undefined;
     if (this.opts.generateDebugInfo) {
       debugSymbols = [];
-      let anonymousCounter = 0;
+      let tempLabelCounter = 0;
       const usedNames = new Set<string>();
+
+      // Helper to create unique name with _<IDX> suffix for temp/anonymous labels
+      const makeUniqueName = (baseName: string): string => {
+        let uniqueName = `${baseName}_${tempLabelCounter}`;
+        while (usedNames.has(uniqueName)) {
+          tempLabelCounter++;
+          uniqueName = `${baseName}_${tempLabelCounter}`;
+        }
+        usedNames.add(uniqueName);
+        tempLabelCounter++;
+        return uniqueName;
+      };
 
       const collectSymbols = (scope: Scope) => {
         for (const [name, sym] of scope.symbols) {
           if (sym.expr != null) {
             const expr = {...sym.expr};
 
-            // De-anonymize symbols by creating unique names
+            // De-anonymize temp labels by creating unique names with _<IDX> suffix
             if (name.startsWith('@')) {
               const baseName = name.substring(1).replace(':', '');
-              let uniqueName = `${baseName}${anonymousCounter}`;
-              while (usedNames.has(uniqueName)) {
-                anonymousCounter++;
-                uniqueName = `${baseName}${anonymousCounter}`;
+              expr.sym = makeUniqueName(baseName);
+            } else {
+              if (!expr.sym) {
+                expr.sym = name;
               }
-              usedNames.add(uniqueName);
-              expr.sym = uniqueName;
-              anonymousCounter++;
-            } else if (!expr.sym) {
-              expr.sym = name;
+              // Track global names to avoid conflicts with temp labels
+              usedNames.add(expr.sym);
             }
 
             debugSymbols!.push({expr});
@@ -535,6 +550,15 @@ export class Assembler {
         }
       };
       collectSymbols(this.currentScope.global);
+
+      // Add cheap local and anonymous labels from debugLabels array
+      for (const {name, expr: originalExpr} of this.debugLabels) {
+        const expr = {...originalExpr};
+        // All entries in debugLabels start with @ (temp labels like @loop, anonymous like @p/@m)
+        const baseName = name.substring(1).replace(':', ''); // Remove @ prefix and any colons
+        expr.sym = makeUniqueName(baseName);
+        debugSymbols.push({expr});
+      }
     }
 
     return {chunks, symbols, segments, debugSymbols};
@@ -633,16 +657,25 @@ export class Assembler {
       this.anonymousReverse.push(expr);
       const sym = this.anonymousForward.shift();
       if (sym != null) this.symbols[sym].expr = expr;
+      if (this.opts.generateDebugInfo) {
+        this.debugLabels.push({name: '@p', expr});
+      }
       return;
     } else if (/^\++$/.test(ident)) {
       // relative forward ref - fill in global symbol we made earlier
       const sym = this.relativeForward[ident.length - 1];
       delete this.relativeForward[ident.length - 1];
       if (sym != null) this.symbols[sym].expr = expr;
+      if (this.opts.generateDebugInfo) {
+        this.debugLabels.push({name: '@p', expr});
+      }
       return;
     } else if (/^-+$/.test(ident)) {
       // relative backref - store the expr for later
       this.relativeReverse[ident.length - 1] = expr;
+      if (this.opts.generateDebugInfo) {
+        this.debugLabels.push({name: '@m', expr});
+      }
       return;
     }
 
@@ -717,7 +750,8 @@ export class Assembler {
       expr.source = this._source;
     }
 
-    const scope = ident.startsWith('@') ? this.cheapLocals : this.currentScope;
+    const isCheapLocal = ident.startsWith('@');
+    const scope = isCheapLocal ? this.cheapLocals : this.currentScope;
     // NOTE: This is incorrect - it will look up the scope chain when it
     // shouldn't.  Mutables may or may not want this, immutables must not.
     // Whether this is tied to allowFwdRef or not is unclear.  It's also
@@ -740,6 +774,11 @@ export class Assembler {
       throw new Error(`Redefining symbol ${name}${orig}`);
     }
     sym.expr = expr;
+
+    // Add cheap locals to debugLabels for MLB output
+    if (isCheapLocal && !mut && this.opts.generateDebugInfo) {
+      this.debugLabels.push({name: ident, expr});
+    }
   }
 
   async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;
