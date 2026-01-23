@@ -741,4 +741,307 @@ Continue:
       expect(cont?.address).toBe('6');
     });
   });
+
+  describe('Temporary and Anonymous Labels', function() {
+    it('should include temporary labels with _<IDX> suffix', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+@loop:
+  dex
+  bne @loop
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const start = entries.find(e => e.label === 'Start');
+      expect(start).toBeTruthy();
+
+      const tempLabel = entries.find(e => e.label?.startsWith('loop_'));
+      expect(tempLabel).toBeTruthy();
+      expect(tempLabel?.type).toBe("NesPrgRom");
+    });
+
+    it('should include multiple temporary labels with unique suffixes', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Func1:
+  lda #$00
+@loop:
+  dex
+  bne @loop
+  rts
+Func2:
+  ldx #$10
+@loop:
+  dex
+  bne @loop
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Func1')).toBeTruthy();
+      expect(entries.find(e => e.label === 'Func2')).toBeTruthy();
+
+      const loopLabels = entries.filter(e => e.label?.startsWith('loop_'));
+      expect(loopLabels.length).toBe(2);
+      expect(loopLabels[0].label).not.toBe(loopLabels[1].label);
+    });
+
+    it('should include anonymous forward labels (+) as p_<IDX>', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+  beq +
+  nop
++
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Start')).toBeTruthy();
+
+      const anonLabel = entries.find(e => e.label?.startsWith('p_'));
+      expect(anonLabel).toBeTruthy();
+      expect(anonLabel?.type).toBe("NesPrgRom");
+    });
+
+    it('should include anonymous backward labels (-) as m_<IDX>', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+-
+  dex
+  bne -
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Start')).toBeTruthy();
+
+      const anonLabel = entries.find(e => e.label?.startsWith('m_'));
+      expect(anonLabel).toBeTruthy();
+      expect(anonLabel?.type).toBe("NesPrgRom");
+    });
+
+    it('should not conflict with global labels of similar names', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+loop_0:
+  nop
+Func:
+  lda #$00
+@loop:
+  dex
+  bne @loop
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const globalLoop = entries.find(e => e.label === 'loop_0');
+      expect(globalLoop).toBeTruthy();
+      const tempLabels = entries.filter(e => e.label?.startsWith('loop_') && e.label !== 'loop_0');
+      expect(tempLabels.length).toBe(1);
+      expect(tempLabels[0].label).not.toBe('loop_0');
+    });
+
+    it('should include anonymous colon labels (:) as p_<IDX>', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+  beq :+
+  nop
+:
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Start')).toBeTruthy();
+      const anonLabel = entries.find(e => e.label?.startsWith('p_'));
+      expect(anonLabel).toBeTruthy();
+      expect(anonLabel?.type).toBe("NesPrgRom");
+    });
+
+    it('should handle multiple forward and backward branches without conflicts', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #1
+-
+  beq +
+  rts
++
+  beq +
+  rts
++
+  bne -
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Start')).toBeTruthy();
+      const forwardLabels = entries.filter(e => e.label?.startsWith('p_'));
+      expect(forwardLabels.length).toBe(2);
+      expect(forwardLabels[0].label).not.toBe(forwardLabels[1].label);
+      const backwardLabels = entries.filter(e => e.label?.startsWith('m_'));
+      expect(backwardLabels.length).toBe(1);
+    });
+
+    it('should handle multiple levels of forward references without duplicates', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  bne ++
+  bcc +
+  rts
++
+  jmp Exit
+++
+  lda #1
+Exit:
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Start')).toBeTruthy();
+      expect(entries.find(e => e.label === 'Exit')).toBeTruthy();
+
+      const forwardLabels = entries.filter(e => e.label?.startsWith('p_'));
+      expect(forwardLabels.length).toBe(2);
+
+      expect(forwardLabels[0].label).not.toBe(forwardLabels[1].label);
+      expect(forwardLabels.every(l => l.type === "NesPrgRom")).toBe(true);
+    });
+
+    it('should have correct addresses for temporary labels', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+@loop:
+  dex
+  bne @loop
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const start = entries.find(e => e.label === 'Start');
+      expect(start).toBeTruthy();
+      expect(start?.address).toBe('0');
+
+      const loopLabel = entries.find(e => e.label?.startsWith('loop_'));
+      expect(loopLabel).toBeTruthy();
+      expect(loopLabel?.type).toBe("NesPrgRom");
+      expect(loopLabel?.address).toBe('2');
+    });
+    it('should have correct addresses for temporary labels for reloc chunk', async function() {
+      const source = `
+.segment "PRG"
+.org $8100
+  jsr Main
+.reloc
+Main:
+  lda $2000
+  beq +
+    ldy #10
+    lda #0
+  @loop:
+      sta $500-1,y
+      dey
+      bne @loop
+    sta $400
++
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+      console.log("entries", entries);
+
+      const main = entries.find(e => e.label === 'Main');
+      expect(main).toBeTruthy();
+      expect(main?.address).toBe('0');
+
+      const loopLabel = entries.find(e => e.label?.startsWith('loop_'));
+      const skipLabel = entries.find(e => e.label?.startsWith('p_'));
+      expect(loopLabel).toBeTruthy();
+      expect(loopLabel?.type).toBe("NesPrgRom");
+      expect(loopLabel?.address).toBe('9');
+      expect(skipLabel).toBeTruthy();
+      expect(skipLabel?.type).toBe("NesPrgRom");
+      expect(skipLabel?.address).toBe('12');
+    });
+
+    it('should have correct addresses for anonymous labels', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+-
+  dex
+  beq +
+  bne -
++
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+
+      const start = entries.find(e => e.label === 'Start');
+      expect(start).toBeTruthy();
+      expect(start?.address).toBe('0');
+
+      const backLabel = entries.find(e => e.label?.startsWith('m_'));
+      expect(backLabel).toBeTruthy();
+      expect(backLabel?.type).toBe("NesPrgRom");
+      expect(backLabel?.address).toBe('2');
+
+      const forwardLabel = entries.find(e => e.label?.startsWith('p_'));
+      expect(forwardLabel).toBeTruthy();
+      expect(forwardLabel?.type).toBe("NesPrgRom");
+      expect(forwardLabel?.address).toBe('7');
+    });
+
+    it('should not create duplicate address entries when label and instruction have different source lines', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+Start:
+  lda #$00
+@Loop2:
+  sta $0100 + $20 - 1,x
+  dex
+  bne @Loop2
+  rts
+`;
+      const entries = await assembleAndGetDebugInfo(source, 'test.s', 2);
+
+      // Find the temporary label
+      const loopLabel = entries.find(e => e.label?.startsWith('Loop2_'));
+      expect(loopLabel).toBeTruthy();
+
+      // The label should be at address 2 (after lda #$00 which is 2 bytes)
+      const loopAddress = loopLabel?.address;
+      expect(loopAddress).toBeTruthy();
+
+      // Count how many entries have this same address
+      const entriesAtSameAddress = entries.filter(e => e.address === loopAddress);
+
+      // Should only be ONE entry at this address, not multiple
+      expect(entriesAtSameAddress.length).toBe(1);
+
+      // And that one entry should have the label
+      expect(entriesAtSameAddress[0].label).toBe(loopLabel!.label);
+    });
+  });
 });

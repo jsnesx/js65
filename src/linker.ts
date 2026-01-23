@@ -25,8 +25,9 @@ export interface Export {
   //segment?: string;
 }
 
+export type MesenLabelFormatType = "NesMemory"|"NesPrgRom"|"NesInternalRam"|"NesSaveRam"|"NesWorkRam";
 export interface MesenLabelFormat {
-  type: "NesMemory"|"NesPrgRom"|"NesInternalRam"|"NesSaveRam"|"NesWorkRam",
+  type: MesenLabelFormatType,
   address: string,
   label: string,
   comment: string,
@@ -160,12 +161,81 @@ export class Linker {
     return comment;
   }
 
+  private static getLabelTypeAndAddress(cpuAddr: number): {
+    type: MesenLabelFormatType,
+    address: number
+  } {
+    const labelType = (cpuAddr < 0x2000) ? "NesInternalRam" :
+        (cpuAddr < 0x6000) ? "NesMemory" :
+        (cpuAddr < 0x8000) ? "NesSaveRam" :
+        "NesPrgRom";
+
+    let address = cpuAddr;
+    // HACKY: SRAM addresses need 0x6000 offset subtracted for MLB format
+    if (address >= 0x6000 && labelType === "NesSaveRam") {
+      address -= 0x6000;
+    }
+
+    return { type: labelType, address };
+  }
+
   getDebugInfo(sources?: SourceContents, debugLevel: number = 1) : string {
     if (!sources) return "";
 
     let data = "";
-    const labels: MesenLabelFormat[] = [];
+    const labelMap = new Map<string, MesenLabelFormat>();
     const seenLabels: Set<string> = new Set;
+
+    // Build a set of real label names from all chunk labelIndexes
+    // Labels NOT in this set are anonymous/temp labels with lower priority
+    const realLabels = new Set<string>();
+    for (const c of this._link.chunks || []) {
+      if (c.labelIndex) {
+        for (const [labelName, _] of c.labelIndex) {
+          if (labelName.startsWith('@')) {
+            // The de-anonymized version will be in debugSymbols with a _<IDX> suffix
+            // We'll mark all labels starting with the base name as real
+            const baseName = labelName.substring(1);
+            // Find matching de-anonymized labels in debugSymbols
+            const symbolsToCheck = this._link.debugSymbols || this._link.symbols || [];
+            for (const s of symbolsToCheck) {
+              if (s.expr?.sym && s.expr.sym.startsWith(baseName + '_')) {
+                realLabels.add(s.expr.sym);
+              }
+            }
+          } else {
+            // Regular label - add as-is
+            realLabels.add(labelName);
+          }
+        }
+      }
+    }
+
+    // Anonymous/temp labels are those NOT in realLabels set
+    const isAnonTempLabel = (name: string) => !realLabels.has(name);
+
+    // Helper function to add or merge an entry into the labelMap
+    const addLabel = (entry: MesenLabelFormat, isAnonTemp: boolean = false) => {
+      const key = `${entry.type}:${entry.address}`;
+      const existing = labelMap.get(key);
+
+      if (existing) {
+        const existingIsAnonTemp = isAnonTempLabel(existing.label);
+
+        // Merge: prefer real labels over anonymous/temp labels
+        if (entry.label && !isAnonTemp && existingIsAnonTemp) {
+          // Replace anonymous/temp label with real label
+          existing.label = entry.label;
+        }
+        // Always merge comments if existing doesn't have one
+        if (entry.comment && !existing.comment) {
+          existing.comment = entry.comment;
+        }
+      } else {
+        // New entry
+        labelMap.set(key, entry);
+      }
+    };
 
     // Calculate PRG ROM base offset from the minimum segment file offset
     // Find the earliest file offset where the ORG address is at least > $4000
@@ -194,10 +264,30 @@ export class Linker {
     const symbolsToProcess = this._link.debugSymbols || this._link.symbols || [];
     for (const s of symbolsToProcess) {
       if (s.expr?.op !== 'num') continue;
-      if (!s.expr.sym) continue; // Skip anonymous symbols
-
-      // Skip symbols that are already in chunks (they'll be added with their source comments)
+      if (!s.expr.sym) continue;
       if (chunkLabels.has(s.expr.sym)) continue;
+
+      // Resolve chunk-relative expressions to actual addresses
+      let labelType: MesenLabelFormatType;
+      let addr: number;
+
+      const meta = s.expr.meta;
+      const chunk = (meta?.chunk != null && typeof meta.chunk === 'number' && this._link.chunks)
+        ? this._link.chunks[meta.chunk]
+        : undefined;
+
+      if (chunk?.segment?.isRam || !chunk) {
+        // For chunks that are not output to the final ROM, use a heuristic to determine address
+        const result = Linker.getLabelTypeAndAddress(s.expr.num ?? 0);
+        labelType = result.type;
+        addr = result.address;
+      } else {
+        // For chunks that are output, use the resolved address instead
+        const offsetInChunk: number = s.expr.num! - ((meta?.rel) ? 0 : (chunk.org ?? 0));
+        const fileOffset = (chunk.offset ?? 0) + offsetInChunk;
+        addr = fileOffset - prgBaseOffset;
+        labelType = "NesPrgRom";
+      }
 
       // Generate comment from source info if available
       let comment = "";
@@ -206,21 +296,73 @@ export class Linker {
         const sourceLines = sources.data.get(file)?.split('\n');
         comment = Linker.getComment(sourceLines, line, debugLevel, s.expr.source);
       }
-      const labelType = (s.expr.num! < 0x2000) ? "NesInternalRam" :
-          (s.expr.num! < 0x6000) ? "NesMemory" :
-          (s.expr.num! < 0x8000) ? "NesSaveRam" :
-          "NesPrgRom";
-      let addr = s.expr.num ?? 0;
-      if (addr >= 0x6000 && labelType === "NesSaveRam") {
-        addr -= 0x6000;
-      }
-      labels.push({
+      const isAnonTemp = isAnonTempLabel(s.expr.sym!);
+      addLabel({
         type: labelType,
         address: `${addr.toString(16)}`,
-        label: s.expr.sym,
+        label: s.expr.sym!,
         comment
-      });
+      }, isAnonTemp);
+      seenLabels.add(s.expr.sym!);
     }
+
+    // Pass 2: Process labels from overlapping chunks only
+    for (const c of this._link.chunks || []) {
+      // Only process overlapping chunks here - they're skipped in Pass 3
+      if (!c.overlaps) continue;
+
+      const isRamChunk = c.segment?.isRam ?? false;
+
+      if (!c.labelIndex) continue;
+
+      for (const [labelName, offsetInChunk] of c.labelIndex) {
+        // Skip if already emitted in standalone symbols pass
+        if (seenLabels.has(labelName)) continue;
+
+        let labelType: MesenLabelFormatType;
+        let addr: number;
+
+        // Calculate address based on chunk type
+        if (isRamChunk) {
+          // RAM chunk - use org + offset to get CPU address
+          const cpuAddr = (c.org ?? 0) + offsetInChunk;
+          const result = Linker.getLabelTypeAndAddress(cpuAddr);
+          labelType = result.type;
+          addr = result.address;
+        } else {
+          // ROM chunk - use file offset
+          if (c.offset == null) {
+            // Skip relocatable chunks without placement for now
+            // They'll be picked up in Pass 3 if they have output bytes
+            continue;
+          }
+          const fileOffset = c.offset + offsetInChunk;
+          addr = fileOffset - prgBaseOffset;
+          labelType = "NesPrgRom";
+        }
+
+        // Get source info from sourceMap if available
+        let comment = "";
+        const srcInfo = c.sourceMap?.get(offsetInChunk);
+        if (srcInfo) {
+          const {file, line} = srcInfo;
+          const sourceLines = sources.data.get(file)?.split('\n');
+          comment = Linker.getComment(sourceLines, line - 1, debugLevel, srcInfo);
+        }
+
+        // Labels from chunk labelIndex are real labels, not anonymous/temp
+        addLabel({
+          type: labelType,
+          address: addr.toString(16),
+          label: labelName,
+          comment
+        }, false);
+
+        seenLabels.add(labelName);
+      }
+    }
+
+    // Pass 3: Process source-mapped ranges by iterating output bytes
     for (const c of this._link.chunks || []) {
       if (c.overlaps) continue;
       const isRamChunk = c.segment?.isRam ?? false;
@@ -279,22 +421,24 @@ export class Linker {
             addrEnd -= 0x6000;
           }
 
-          labels.push({
+          // Labels from chunk labelIndex (via rev map) are real labels
+          addLabel({
             type: labelType,
             address: formatAddr(addrStart, addrEnd),
             label: n,
             comment: comment,
-          });
+          }, false);
         } else {
           // Calculate the PRG ROM offset (file offset minus the PRG base offset/header)
           const prgRomOffsetStart = c.offset! + rangeStart - prgBaseOffset;
           const prgRomOffsetEnd = c.offset! + rangeEnd - prgBaseOffset;
-          labels.push({
+          // Labels from chunk labelIndex (via rev map) are real labels
+          addLabel({
             type: "NesPrgRom",
             address: formatAddr(prgRomOffsetStart, prgRomOffsetEnd),
             label: n,
             comment: comment,
-          });
+          }, false);
         }
 
         rangeStart = -1;
@@ -329,7 +473,8 @@ export class Linker {
       flushRange();
     }
 
-    for (const label of labels) {
+    // Generate final output from the merged labelMap
+    for (const label of labelMap.values()) {
       data += `${label.type}:${label.address}:${label.label}:${label.comment}\n`;
     }
     return data;
