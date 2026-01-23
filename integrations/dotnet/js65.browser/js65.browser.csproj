@@ -14,6 +14,9 @@
 
   <ItemGroup>
     <WasmExtraFilesToDeploy Include="$(ProjectDir)/../../../build/libassembler.js" TargetPath="js65/libassembler.js" />
+    <WasmExtraFilesToDeploy Include="$(ProjectDir)/interop.js" TargetPath="js65/interop.js" />
+    <Content Include="$(ProjectDir)/../../../build/libassembler.js" Link="js65/libassembler.js" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(ProjectDir)/interop.js" Link="js65/interop.js" CopyToOutputDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.JSInterop" Version="8.0.11" />
     <None Include="../js65/README.md" Pack="true" PackagePath="" />
     <None Include="../js65/LICENSE" Pack="true" PackagePath="" />

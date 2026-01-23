@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!--  Licensed to the .NET Foundation under one or more agreements. -->
+<!-- The .NET Foundation licenses this file to you under the MIT license. -->
+<html>
+
+<head>
+  <title>js65 Browser Example</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preload" id="webassembly" />
+  <script type="importmap"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    h1 {
+      color: #333;
+    }
+    button {
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      cursor: pointer;
+      background: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 4px;
+    }
+    button:hover {
+      background: #0052a3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    #output {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      min-height: 100px;
+    }
+    #status {
+      margin-top: 0.5rem;
+      color: #666;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>js65 Browser Example</h1>
+  <p>
+    This example demonstrates using js65 assembler in a .NET WASM browser environment.
+    Click the button below to run the assembler on a sample ROM patch.
+  </p>
+  <p>
+    <button id="runAssembler">Run Assembler</button>
+  </p>
+  <p id="status">Ready</p>
+  <div id="output"></div>
+  <script type='module' src="./main.js"></script>
+</body>
+
+</html>

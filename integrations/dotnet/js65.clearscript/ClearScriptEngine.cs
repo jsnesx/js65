@@ -27,9 +27,9 @@ public class ClearScriptEngine : Assembler, IDisposable
         _engine = new V8ScriptEngine(debugFlags);
 
         _engine.DocumentSettings.AccessFlags = DocumentAccessFlags.EnableAllLoading;
-        
+
         // Load the js65 code from the embedded resources
-        var libassembler = ReadResource(Assembly.Load("js65"), "js65.libassembler.js");
+        var libassembler = ReadResource(typeof(ClearScriptEngine).Assembly, "js65.libassembler.js");
         _engine.DocumentSettings.AddSystemDocument("@system/libassembler", ModuleCategory.Standard,libassembler);
 
         // Setup the filesystem callbacks
