@@ -9,7 +9,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\js65\js65.csproj" />
+      <ProjectReference Include="..\js65.clearscript\js65.clearscript.csproj" />
       <PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
       <PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
       <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
