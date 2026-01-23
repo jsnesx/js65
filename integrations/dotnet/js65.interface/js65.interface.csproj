@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <PackageId>js65.interface</PackageId>
+    <RootNamespace>js65</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../js65/README.md" Pack="true" PackagePath="" />
+    <None Include="../js65/LICENSE" Pack="true" PackagePath="" />
+    <PackageReference Include="NuGetizer" Version="1.4.6">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>
