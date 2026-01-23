@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../js65.interface/js65.interface.csproj" />
+    <ProjectReference Include="../js65.interop/js65.interop.csproj" />
   </ItemGroup>
 
   <ItemGroup>

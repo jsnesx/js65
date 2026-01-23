@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   pull_request:
 
 concurrency:
@@ -12,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  integration:
+  test:
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
@@ -28,36 +30,72 @@ jobs:
         with:
           bun-version-file: ".bun-version"
       - name: Setup repo and install deps
-        run: |
-          bun install
+        run: bun install
       - name: Run Test Cases
-        run: |
-          bun test
+        run: bun test
       - name: Build Bun release
-        run: |
-          bun run exe
+        run: bun run exe
       - name: Build integration library
+        run: bun run lib
+      - name: Build desktop packages
         run: |
-          bun run lib
-      - name: Build example integrations
+          dotnet build -c Release integrations/dotnet/js65.interop/js65.interop.csproj
+          dotnet build -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj
+      - name: Run example project (desktop)
         run: |
-          dotnet build -c Release
-      - name: Run example project
-        run: |
+          dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0
+          dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0browser
           ./integrations/dotnet/example/bin/Release/net8.0/example
-      - name: Pack nuget
-        run: |
-          dotnet pack -c Release --no-build --output build/
-
       - name: Upload bun artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}-bun
           path: |
             build/js65*
-      - name: Upload nuget artifact
+
+  package:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install WASM workload
+        run: dotnet workload install wasm-tools
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Setup repo and install deps
+        run: bun install
+      - name: Build integration library
+        run: bun run lib
+      - name: Pack NuGet packages
+        run: |
+          dotnet pack -c Release integrations/dotnet/js65.interop/js65.interop.csproj --output build/nuget/
+          dotnet pack -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj --output build/nuget/
+          dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/
+      - name: Upload NuGet artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-nuget
-          path: |
-            build/*.nupkg
+          name: nuget-packages
+          path: build/nuget/*.nupkg
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: nuget/
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish to NuGet.org
+        run: dotnet nuget push nuget/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
