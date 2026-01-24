@@ -966,7 +966,6 @@ Main:
   rts
 `;
       const entries = await assembleAndGetDebugInfo(source);
-      console.log("entries", entries);
 
       const main = entries.find(e => e.label === 'Main');
       expect(main).toBeTruthy();

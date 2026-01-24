@@ -1253,7 +1253,166 @@ describe('Assembler', function() {
     });
   });
 
-  // TODO - test all the error cases...
+  describe('sized syms', function() {
+    it('should use a zp value when the size of the assignment is known', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('foo', 5);
+      await a.instruction([ident('lda'), ident('foo')]);
+      expect(strip(a.module())).toEqual({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa5, 5),
+        }],
+        symbols: [],
+      });
+    });
+    // it('should produce an error when the assignment is negative', async function() {
+    //   const a = new Assembler(Cpu.P02);
+    //   a.assign('foo', -5);
+    //   await a.instruction([ident('lda'), ident('foo')]);
+    //   try {
+    //     await a.instruction([ident('lda'), ident('foo')]);
+    //     expect("").toEqual("Test failed, didn't throw an error.");
+    //   } catch (err: any) {
+    //     expect(err.message).toEqual("-5 not in range 0-255");
+    //   }
+    // });
+    it('should use a zp value for negative zero', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('foo', -0);
+      await a.instruction([ident('lda'), ident('foo')]);
+      expect(strip(a.module())).toEqual({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa5, 0),
+        }],
+        symbols: [],
+      });
+    });
+    it('should use an abs value because foo is resolved to the scope instead', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('foo', 5);
+      a.scope();
+      a.assign('foo', 5000);
+      await a.instruction([ident('lda'), ident('foo')]);
+      a.endScope();
+      expect(strip(a.module())).toEqual({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xad, 5000 & 0xff, 5000 >> 8),
+        }],
+        symbols: [],
+      });
+    });
+    // it('should error since foo is resolved as size 1 when outputting the byte, but when resolved later its 2 bytes', async function() {
+    //   const a = new Assembler(Cpu.P02);
+    //   a.assign('foo', 5);
+    //   a.scope();
+    //   await a.instruction([ident('lda'), ident('foo')]);
+    //   a.assign('foo', 5000);
+    //   a.endScope();
+    //   try {
+    //     a.module();
+    //     expect("").toEqual("Test failed, didn't throw an error.");
+    //   } catch (err: any) {
+    //     console.log(err.message);
+    //     expect(err.message).toEqual("5000 doesn't fit in one byte");
+    //   }
+    // });
+    it('should use an abs value because foo is sized to 2 and the following foo value fits that size', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('foo', 5000);
+      a.scope();
+      await a.instruction([ident('lda'), ident('foo')]);
+      a.assign('foo', 5);
+      a.endScope();
+      // We make a sized substitution for this and set that we'll sub in 5 later, which is good enough (TM)
+      expect(strip(a.module())).toEqual({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xad, 0xff, 0xff),
+          subs: [{
+            expr: { num: 0, op: "sym", },
+            offset: 1, size: 2,
+          }],
+        }],
+        symbols: [{
+          expr: {
+            meta: { size: 1 },
+            num: 5, op: "num"},
+        }],
+      });
+    });
+    it('should use an abs value because the symbol is undefined, so it is sized to 2 until the symbol is defined', async function() {
+      const a = new Assembler(Cpu.P02);
+      await a.instruction([ident('lda'), ident('foo')]);
+      a.assign('foo', 5);
+      // We make a sized substitution for this and set that we'll sub in 5 later.
+      // This should also throw a warning that we didn't use ZP addressing for foo
+      expect(strip(a.module())).toEqual({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xad, 0xff, 0xff),
+          subs: [{
+            expr: { num: 0, op: "sym", },
+            offset: 1, size: 2,
+          }],
+        }],
+        symbols: [{
+          expr: {
+            meta: { size: 1 },
+            num: 5, op: "num"},
+        }],
+      });
+    });
+    it('should use an abs value because the symbol is undefined and it ends up using the global foo anyway', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.scope();
+      await a.instruction([ident('lda'), ident('foo')]);
+      a.endScope();
+      a.assign('foo', 5);
+      // This does NOT throw a warning in ca65 for ... reasons?
+      expect(strip(a.module())).toEqual({
+        segments: [],
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xad, 0xff, 0xff),
+          subs: [{
+            expr: { num: 0, op: "sym", },
+            offset: 1, size: 2,
+          }],
+        }],
+        symbols: [{
+          expr: {
+            meta: { size: 1 },
+            num: 5, op: "num"},
+        }],
+      });
+    });
+    it('should error due to duplicate scope', async function() {
+      const a = new Assembler(Cpu.P02);
+      try {
+        a.scope("foo");
+        a.endScope();
+        a.scope("foo");
+        a.endScope();
+        expect("").toEqual("Test failed, didn't throw an error.");
+      } catch (err: any) {
+        expect(err.message).toEqual("Cannot re-enter scope foo");
+      }
+    });
+  });
 });
 
 function strip(o: Module): Module {
