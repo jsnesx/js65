@@ -1,0 +1,17 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Js65BrowserPackagePath>$(MSBuildThisFileDirectory)..\contentFiles\any\any\</Js65BrowserPackagePath>
+  </PropertyGroup>
+
+  <!-- For WASM browser projects, add files to WasmExtraFilesToDeploy -->
+  <ItemGroup Condition="'$(UsingMicrosoftNETSdkWebAssembly)' == 'true' OR '$(RuntimeIdentifier)' == 'browser-wasm'">
+    <WasmExtraFilesToDeploy Include="$(Js65BrowserPackagePath)js65\libassembler.js" TargetPath="js65/libassembler.js" />
+    <WasmExtraFilesToDeploy Include="$(Js65BrowserPackagePath)js65\interop.js" TargetPath="js65/interop.js" />
+  </ItemGroup>
+
+  <!-- Also copy to output directory for general use -->
+  <ItemGroup>
+    <Content Include="$(Js65BrowserPackagePath)js65\libassembler.js" Link="js65\libassembler.js" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(Js65BrowserPackagePath)js65\interop.js" Link="js65\interop.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
