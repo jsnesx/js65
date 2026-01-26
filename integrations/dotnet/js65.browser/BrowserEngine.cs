@@ -29,14 +29,55 @@ internal class BrowserLinkerOptions
     public int DebugLevel { get; set; }
 }
 
+// Browser-specific source info for JSON deserialization
+internal class BrowserSourceInfo
+{
+    [JsonPropertyName("ident")]
+    public string? Ident { get; set; }
+
+    [JsonPropertyName("file")]
+    public string File { get; set; } = "";
+
+    [JsonPropertyName("line")]
+    public int Line { get; set; }
+
+    [JsonPropertyName("column")]
+    public int Column { get; set; }
+
+    [JsonPropertyName("parent")]
+    public BrowserSourceInfo? Parent { get; set; }
+}
+
+// Browser-specific assembler message for JSON deserialization
+internal class BrowserAssemblerMessage
+{
+    [JsonPropertyName("level")]
+    public string Level { get; set; } = "error";
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = "";
+
+    [JsonPropertyName("source")]
+    public BrowserSourceInfo? Source { get; set; }
+
+    [JsonPropertyName("stack")]
+    public string? Stack { get; set; }
+}
+
 // Browser-specific result class that matches the JS output (base64 strings)
 internal class BrowserCompileResult
 {
+    [JsonPropertyName("success")]
+    public bool Success { get; set; }
+
     [JsonPropertyName("romdata")]
     public string Romdata { get; set; } = "";
 
     [JsonPropertyName("debugfile")]
     public string Debugfile { get; set; } = "";
+
+    [JsonPropertyName("messages")]
+    public BrowserAssemblerMessage[] Messages { get; set; } = [];
 }
 
 [JsonSourceGenerationOptions(WriteIndented = false)]
@@ -46,6 +87,9 @@ internal class BrowserCompileResult
 [JsonSerializable(typeof(BrowserAssemblerOptions))]
 [JsonSerializable(typeof(BrowserLinkerOptions))]
 [JsonSerializable(typeof(BrowserCompileResult))]
+[JsonSerializable(typeof(BrowserSourceInfo))]
+[JsonSerializable(typeof(BrowserAssemblerMessage))]
+[JsonSerializable(typeof(BrowserAssemblerMessage[]))]
 internal partial class AssmeblerContext : JsonSerializerContext;
 
 /// <summary>
@@ -120,7 +164,7 @@ public partial class BrowserJsEngine : Assembler
         _interopModule = JSHost.ImportAsync("js65.interop.js", "../js65/interop.js");
     }
 
-    public override async Task<Js65CompileResult?> Apply(byte[] rom)
+    public override async Task<Js65CompileResult> Apply(byte[] rom)
     {
         // Import required modules
         _ = await _module;
@@ -166,13 +210,42 @@ public partial class BrowserJsEngine : Assembler
         var browserResult = JsonSerializer.Deserialize(Convert.FromBase64String(output), AssmeblerContext.Default.BrowserCompileResult);
         if (browserResult == null)
         {
-            return null;
+            return new Js65CompileResult
+            {
+                success = false
+            };
         }
 
         return new Js65CompileResult
         {
+            success = browserResult.Success,
             romdata = Convert.FromBase64String(browserResult.Romdata),
-            debugfile = browserResult.Debugfile
+            debugfile = browserResult.Debugfile,
+            messages = ConvertMessages(browserResult.Messages)
+        };
+    }
+
+    private static Js65AssemblerMessage[] ConvertMessages(BrowserAssemblerMessage[] browserMessages)
+    {
+        return browserMessages.Select(m => new Js65AssemblerMessage
+        {
+            level = m.Level,
+            message = m.Message,
+            source = ConvertSourceInfo(m.Source),
+            stack = m.Stack
+        }).ToArray();
+    }
+
+    private static Js65SourceInfo? ConvertSourceInfo(BrowserSourceInfo? source)
+    {
+        if (source == null) return null;
+        return new Js65SourceInfo
+        {
+            ident = source.Ident,
+            file = source.File,
+            line = source.Line,
+            column = source.Column,
+            parent = ConvertSourceInfo(source.Parent)
         };
     }
 
