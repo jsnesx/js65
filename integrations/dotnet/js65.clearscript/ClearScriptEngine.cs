@@ -1,6 +1,8 @@
 ﻿
 using System.Reflection;
 using System.Runtime.Versioning;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using js65;
 using Microsoft.ClearScript;
 using Microsoft.ClearScript.JavaScript;
@@ -39,7 +41,7 @@ public class ClearScriptEngine : Assembler, IDisposable
         Callbacks.OnFileReadBinary = LoadBinaryFileCallback;
     }
     
-    public override async Task<Js65CompileResult?> Apply(byte[] rom)
+    public override async Task<Js65CompileResult> Apply(byte[] rom)
     {
         var data = (ITypedArray<byte>) _engine.Evaluate($"new Uint8Array({rom.Length});");
         data.WriteBytes(rom, 0, data.Length, 0);
@@ -48,6 +50,8 @@ public class ClearScriptEngine : Assembler, IDisposable
         _engine.AddHostObject("FileCallbacks", Callbacks);
         _engine.Script.romdata = data;
         _engine.Script.debugFile = "";
+        _engine.Script.compileSuccess = true;
+        _engine.Script.compileMessages = "[]";
         _engine.Script.modulesJson = SerializeModulesToJson();
         await Task.Run(() => {
             _engine.Execute(new DocumentInfo { Category = ModuleCategory.Standard },  /* language=javascript */ """
@@ -78,30 +82,33 @@ const callbacks = {
     readBinary: FileCallbacks.OnFileReadBinary
 };
 (async () => {
-    try {
-        let src = null;
-        if (assemblerOpts.generateDebugInfo) {
-            src = new SourceContents();
-        }
-        await compileActions(modules, assemblerOpts, linkerOpts, 'binary', callbacks, src).then(result => {
-            for (let i = 0; i < result.data.length; i++) {
-                romdata[i] = result.data[i];
-            }
-            debugFile = result.debugInfo || "";
-        });
-    } catch (e) {
-        console.log("Error?", e);
+    let src = null;
+    if (assemblerOpts.generateDebugInfo) {
+        src = new SourceContents();
     }
+    await compileActions(modules, assemblerOpts, linkerOpts, 'binary', callbacks, src).then(result => {
+        for (let i = 0; i < result.data.length; i++) {
+            romdata[i] = result.data[i];
+        }
+        debugFile = result.debugInfo || "";
+        compileSuccess = result.success;
+        compileMessages = JSON.stringify(result.messages || []);
+    });
 })();
 """);
         });
         var outdata = new byte[rom.Length];
         data.ReadBytes(0, (ulong)outdata.Length, outdata, 0);
         var debugFileContents = (string)_engine.Script.debugFile;
+        var success = (bool)_engine.Script.compileSuccess;
+        var messagesJson = (string)_engine.Script.compileMessages;
+        var messages = JsonSerializer.Deserialize(messagesJson, Js65JsonContext.Default.Js65AssemblerMessageArray) ?? [];
         return new Js65CompileResult
         {
+            success = success,
             romdata = outdata,
-            debugfile = debugFileContents
+            debugfile = debugFileContents,
+            messages = messages
         };
     }
 
