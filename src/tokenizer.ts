@@ -9,6 +9,7 @@ import {Buffer} from './buffer.ts';
 import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
+import { ErrorCollector } from './assembler.ts';
 
 export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
@@ -16,7 +17,8 @@ export class Tokenizer implements Tokens.Source {
   constructor(str: string,
               readonly file = 'input.s',
               readonly opts: Options = {},
-              readonly sourceContents?: SourceContents) {
+              readonly sourceContents?: SourceContents,
+              readonly errorCollector?: ErrorCollector) {
     this.buffer = new Buffer(str);
     this.sourceContents?.data?.set(file, str);
   }
@@ -36,20 +38,30 @@ export class Tokenizer implements Tokens.Source {
           stack[depth++].push(tok);
           stack.push([]);
         } else if (Tokens.eq(tok, Tokens.RC)) {
-          if (!depth) throw new Error(`Missing open curly: ${Tokens.nameAt(tok)}`);
-          const inner = stack.pop()!;
-          const source = stack[--depth].pop()!.source;
-          const token: Token = {token: 'grp', inner};
-          if (source) token.source = source;
-          stack[depth].push(token);
+          if (!depth) {
+            // Missing open curly - record error and skip the close brace
+            this.errorCollector?.add('error', `Missing open curly`, tok.source);
+          } else {
+            const inner = stack.pop()!;
+            const source = stack[--depth].pop()!.source;
+            const token: Token = {token: 'grp', inner};
+            if (source) token.source = source;
+            stack[depth].push(token);
+          }
         } else {
           stack[depth].push(tok);
         }
         tok = this.token();
       }
-      if (depth) {
+      // Auto-close any unclosed braces at EOL
+      while (depth > 0) {
         const open = stack[depth - 1].pop()!;
-        throw new Error(`Missing close curly: ${Tokens.nameAt(open)}`);
+        this.errorCollector?.add('error', `Missing close curly`, open.source);
+        const inner = stack.pop()!;
+        const source = open.source;
+        const token: Token = {token: 'grp', inner};
+        if (source) token.source = source;
+        stack[--depth].push(token);
       }
       resolve(stack[0].length ? stack[0] : undefined);
     });

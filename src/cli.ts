@@ -11,6 +11,7 @@ import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
 import { assemble, link, type AssemblyInput, type AssemblerOptions, type LinkerOptions, type OutputFormat, type FileCallbacks } from './libassembler.ts';
 import { SourceContents } from './tokenstream.ts';
+import * as Tokens from './token.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -179,7 +180,19 @@ export class Cli {
       if (args.compileonly) {
         DEBUG("stopping before linking cause --compileonly");
         // Assemble only, no linking
-        const modules = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
+        const { modules, messages } = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
+
+        // Print any messages
+        if (messages.length > 0) {
+          this.printMessages(messages);
+        }
+
+        // Check for errors
+        const hasErrors = messages.some(m => m.level === 'error');
+        if (hasErrors) {
+          this.callbacks.exit(1);
+          return;
+        }
 
         const module = JSON.stringify(modules[0], (k, v) => {
           if (k === "data" && typeof v === "object") {
@@ -207,8 +220,32 @@ export class Cli {
       const outputFormat: OutputFormat = args.patch === "ips" ? "ips" : "binary";
 
       // Assemble and link with debug info
-      const modules = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
-      const result = link(modules, linkerOpts, outputFormat, this.sourceContents);
+      const { modules, messages } = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
+
+      // Print any assembly messages
+      if (messages.length > 0) {
+        this.printMessages(messages);
+      }
+
+      // Check for assembly errors
+      const hasAssemblyErrors = messages.some(m => m.level === 'error');
+      if (hasAssemblyErrors) {
+        this.callbacks.exit(1);
+        return;
+      }
+
+      const result = link(modules, linkerOpts, outputFormat, this.sourceContents, messages);
+
+      // Print any additional link messages
+      const newMessages = result.messages.slice(messages.length);
+      if (newMessages.length > 0) {
+        this.printMessages(newMessages);
+      }
+
+      if (!result.success) {
+        this.callbacks.exit(1);
+        return;
+      }
 
       await this.callbacks.fsWriteBytes("", args.outfile, result.data);
 
@@ -278,6 +315,22 @@ export class Cli {
     }
     if (err.length > 1) {
       console.log(`js65: Multiple errors`);
+    }
+  }
+
+  printMessages(messages: Tokens.AssemblerMessage[]) {
+    for (const msg of messages) {
+      const levelPrefix = msg.level === 'error' ? 'Error' : msg.level === 'warning' ? 'Warning' : 'Info';
+      const location = msg.source ? Tokens.at({ source: msg.source }) : '';
+      console.log(`js65 ${levelPrefix}: ${msg.message}${location}`);
+    }
+    const errorCount = messages.filter(m => m.level === 'error').length;
+    const warningCount = messages.filter(m => m.level === 'warning').length;
+    if (errorCount > 0 || warningCount > 0) {
+      const parts = [];
+      if (errorCount > 0) parts.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
+      if (warningCount > 0) parts.push(`${warningCount} warning${warningCount !== 1 ? 's' : ''}`);
+      console.log(`js65: ${parts.join(', ')}`);
     }
   }
 

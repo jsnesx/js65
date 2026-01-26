@@ -9,7 +9,7 @@ import { Cpu } from './cpu.ts';
 import { type Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import * as mod from './module.ts';
-import { type Token } from './token.ts'
+import { type Token, type AssemblerMessage, type ErrorLevel } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { IntervalSet, assertNever } from './util.ts';
@@ -159,6 +159,47 @@ export interface RefExtractor {
   assign?(name: string, value: number): void;
 }
 
+export class RecoverableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RecoverableError';
+  }
+}
+
+export class ErrorCollector {
+  private messages: AssemblerMessage[] = [];
+
+  add(level: ErrorLevel, message: string, source?: Tokens.SourceInfo): void {
+    this.messages.push({
+      level,
+      message,
+      source,
+      stack: new Error().stack,
+    });
+  }
+
+  addFromException(err: Error, source?: Tokens.SourceInfo, level: ErrorLevel = 'error'): void {
+    this.messages.push({
+      level,
+      message: err.message,
+      source,
+      stack: err.stack,
+    });
+  }
+
+  getMessages(): readonly AssemblerMessage[] {
+    return this.messages;
+  }
+
+  hasErrors(): boolean {
+    return this.messages.some(m => m.level === 'error');
+  }
+
+  clear(): void {
+    this.messages = [];
+  }
+}
+
 export class Assembler {
 
   /** The currently-open segment(s). */
@@ -227,6 +268,9 @@ export class Assembler {
 
   /** Token for reporting errors. */
   private errorToken?: Token;
+
+  /** Collector for errors and messages */
+  readonly errorCollector = new ErrorCollector();
 
   /** Supports refExtractor. */
   private _exprMap?: WeakMap<Expr, Expr> = undefined;
@@ -417,9 +461,11 @@ export class Assembler {
 
   closeScopes() {
     this.cheapLocals.clear();
+    const collector = this.errorCollector;
+
     // Need to find any undeclared symbols in nested scopes and link
     // them to a parent scope symbol if possible.
-    function close(scope: Scope) {
+    const close = (scope: Scope) => {
       for (const child of scope.children.values()) {
         close(child);
       }
@@ -430,7 +476,10 @@ export class Assembler {
         if (sym.expr || sym.id == null) continue;
         if (scope.parent) {
           // TODO - record where it was referenced?
-          if (sym.scoped) throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
+          if (sym.scoped) {
+            collector.add('error', `Symbol '${name}' undefined`, sym.ref?.source);
+            continue;
+          }
           const parentSym = scope.parent.symbols.get(name);
           if (!parentSym) {
             // just alias it directly in the parent scope
@@ -443,25 +492,28 @@ export class Assembler {
             sym.expr = parentSym.expr;
           } else {
             // must have either id or expr...?
-            throw new Error(`Impossible: ${name}`);
+            collector.add('error', `Internal error: symbol '${name}' has neither id nor expr`, sym.ref?.source);
           }
         }
         // handle global scope separately...
       }
-    }
+    };
 
     // test case: ref a name in two child scopes, define it in grandparent
 
     if (this.currentScope.parent) {
       // TODO - record where it was opened?
-      throw new Error(`Scope never closed`);
+      collector.add('error', `Scope never closed`);
     }
     close(this.currentScope);
 
     for (const [name, global] of this.globals) {
       const sym = this.currentScope.symbols.get(name);
       if (global === 'export') {
-        if (!sym?.expr) throw new Error(`Symbol '${name}' undefined`);
+        if (!sym?.expr) {
+          collector.add('error', `Exported symbol '${name}' undefined`, sym?.ref?.source);
+          continue;
+        }
         if (sym.id == null) {
           sym.id = this.symbols.length;
           this.symbols.push(sym);
@@ -470,7 +522,10 @@ export class Assembler {
       } else if (global === 'import') {
         if (!sym) continue; // okay to import but not use.
         // TODO - record both positions?
-        if (sym.expr) throw new Error(`Already defined: ${name}`);
+        if (sym.expr) {
+          collector.add('error', `Symbol '${name}' already defined`, sym.ref?.source);
+          continue;
+        }
         sym.expr = {op: 'im', sym: name};
       } else {
         assertNever(global);
@@ -478,8 +533,9 @@ export class Assembler {
     }
 
     for (const [name, sym] of this.currentScope.symbols) {
-      if (!sym.expr) 
-        throw new Error(`Symbol '${name}' undefined: ${JSON.stringify(sym)}`);
+      if (!sym.expr) {
+        collector.add('error', `Symbol '${name}' undefined`, sym.ref?.source);
+      }
     }
   }
 
@@ -496,7 +552,11 @@ export class Assembler {
     }
     const symbols: mod.Symbol[] = [];
     for (const symbol of this.symbols) {
-      if (symbol.expr == null) throw new Error(`Symbol undefined`);
+      if (symbol.expr == null) {
+        // Symbol was referenced but never defined - already recorded in closeScopes
+        // Skip it to allow module generation to continue
+        continue;
+      }
       const out: mod.Symbol = {expr: symbol.expr};
       if (symbol.export != null) out.export = symbol.export;
       symbols.push(out);
@@ -572,12 +632,22 @@ export class Assembler {
       return;
     }
     this._source = tokens[0].source;
-    if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
-      this.label(tokens[0]);
-    } else if (tokens[0].token === 'cs') {
-      this.directive(tokens);
-    } else {
-      await this.instruction(tokens);
+
+    try {
+      if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
+        this.label(tokens[0]);
+      } else if (tokens[0].token === 'cs') {
+        this.directive(tokens);
+      } else {
+        await this.instruction(tokens);
+      }
+    } catch (err) {
+      if (err instanceof RecoverableError) {
+        // Error already recorded, continue to next line
+        return;
+      }
+      // Re-throw unrecoverable errors
+      throw err;
     }
   }
 
@@ -769,9 +839,7 @@ export class Assembler {
     } else if (!mut && sym.expr) {
       const orig =
           sym.expr.source ? `\nOriginally defined${Tokens.at(sym.expr)}` : '';
-      const name = token ? Tokens.nameAt(token) :
-          ident + (this._source ? Tokens.at({source: this._source}) : '');
-      throw new Error(`Redefining symbol ${name}${orig}`);
+      this.fail(`Redefining symbol ${ident}${orig}`, token);
     }
     sym.expr = expr;
 
@@ -1202,15 +1270,18 @@ export class Assembler {
   }
 
   log(level: 'info'|'warn'|'error', line: Token[]) {
-    // TODO properly handle logging
     const str = Tokens.expectString(line[1], line[0]);
     Tokens.expectEol(line[2], 'a single string');
-    if (level === 'error')
-      throw new Error(str);
-    if (level === 'info')
-      console.log(str);
-    else
-      console.warn(str);
+    const source = line[0].source;
+
+    // Map 'warn' to 'warning' for ErrorLevel
+    const errorLevel: ErrorLevel = level === 'warn' ? 'warning' : level;
+    this.errorCollector.add(errorLevel, str, source);
+
+    if (level === 'error') {
+      // For .error directive, record and throw to stop processing this line
+      throw new RecoverableError(str);
+    }
   }
 
   // Utility methods for processing arguments
@@ -1396,13 +1467,30 @@ export class Assembler {
 
   // Diagnostics
 
+  getMessages(): readonly AssemblerMessage[] {
+    return this.errorCollector.getMessages();
+  }
+
+  hasErrors(): boolean {
+    return this.errorCollector.hasErrors();
+  }
+
   fail(msg: string, at?: {source?: Tokens.SourceInfo}): never {
     if (!at && this.errorToken) at = this.errorToken;
-    if (at?.source) throw new Error(msg + Tokens.at(at));
-    if (!this._source && this._chunk?.name) {
-      throw new Error(msg + `\n  in ${this._chunk.name}`);
+    const source = at?.source ?? this._source;
+
+    // Record the error
+    this.errorCollector.add('error', msg, source);
+
+    // Build the full error message for the exception
+    let fullMsg = msg;
+    if (source) {
+      fullMsg += Tokens.at({source});
+    } else if (!this._source && this._chunk?.name) {
+      fullMsg += `\n  in ${this._chunk.name}`;
     }
-    throw new Error(msg + Tokens.at({source: this._source}));
+
+    throw new RecoverableError(fullMsg);
   }
 
   writeNumber(data: number[], size: number, val?: number) {

@@ -30,23 +30,27 @@ FREE "PRG" [$8000, $10000)
 
 async function expectCompileError(source: string, errorMatch?: string | RegExp): Promise<Error> {
   const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-  try {
-    await compile([input], { lineContinuations: true }, {}, 'binary');
+  const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+
+  if (result.success) {
     throw new Error('Expected compilation to fail but it succeeded');
-  } catch (e) {
-    if (e instanceof Error && e.message === 'Expected compilation to fail but it succeeded') {
-      throw e;
-    }
-    if (errorMatch) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (typeof errorMatch === 'string') {
-        expect(msg).toContain(errorMatch);
-      } else {
-        expect(msg).toMatch(errorMatch);
-      }
-    }
-    return e as Error;
   }
+
+  // Get error messages for matching
+  const errorMessages = result.messages
+    .filter(m => m.level === 'error')
+    .map(m => m.message)
+    .join('\n');
+
+  if (errorMatch) {
+    if (typeof errorMatch === 'string') {
+      expect(errorMessages).toContain(errorMatch);
+    } else {
+      expect(errorMessages).toMatch(errorMatch);
+    }
+  }
+
+  return new Error(errorMessages);
 }
 
 describe('End to end test cases', function() {
@@ -319,6 +323,192 @@ TestLabel:
 
       expect(result.debugInfo).toBeTruthy();
       expect(result.debugInfo).toContain('TestLabel');
+    });
+  });
+
+  describe('Multi-error collection', function() {
+    it('should collect multiple assembly errors from different lines', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  lda UndefinedSymbol1
+  sta UndefinedSymbol2
+  jsr UndefinedSymbol3
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBeGreaterThanOrEqual(3);
+      expect(errors.some(e => e.message.includes('UndefinedSymbol1'))).toBe(true);
+      expect(errors.some(e => e.message.includes('UndefinedSymbol2'))).toBe(true);
+      expect(errors.some(e => e.message.includes('UndefinedSymbol3'))).toBe(true);
+    });
+
+    it('should collect multiple duplicate label errors', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+MyLabel:
+  nop
+MyLabel:
+  nop
+AnotherLabel:
+  nop
+AnotherLabel:
+  rts
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBeGreaterThanOrEqual(2);
+      expect(errors.some(e => e.message.includes('MyLabel'))).toBe(true);
+      expect(errors.some(e => e.message.includes('AnotherLabel'))).toBe(true);
+    });
+
+    it('should collect errors from multiple input files', async function() {
+      const file1: AssemblyInput = {
+        type: 'source',
+        name: 'file1.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  lda MissingFromFile1
+`
+      };
+
+      const file2: AssemblyInput = {
+        type: 'source',
+        name: 'file2.s',
+        code: `
+.segment "CODE"
+.org $8100
+  sta MissingFromFile2
+`
+      };
+
+      const result = await compile([file1, file2], { lineContinuations: true }, {}, 'binary');
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBeGreaterThanOrEqual(2);
+      expect(errors.some(e => e.message.includes('MissingFromFile1'))).toBe(true);
+      expect(errors.some(e => e.message.includes('MissingFromFile2'))).toBe(true);
+    });
+
+    it('should collect multiple unresolved import errors during linking', async function() {
+      const module1: AssemblyInput = {
+        type: 'source',
+        name: 'main.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import MissingFunc1
+.import MissingFunc2
+.import MissingFunc3
+.org $8000
+  jsr MissingFunc1
+  jsr MissingFunc2
+  jsr MissingFunc3
+`
+      };
+
+      const result = await compile([module1], { lineContinuations: true }, {}, 'binary');
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      // Should have at least one error about missing imports
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should include source location in error messages', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  nop
+  nop
+  lda UndefinedHere
+  nop
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'location_test.s' };
+      const result = await compile(
+        [input],
+        { lineContinuations: true, generateDebugInfo: true },
+        {},
+        'binary'
+      );
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBeGreaterThan(0);
+
+      // At least one error should have source info
+      const errorWithSource = errors.find(e => e.source !== undefined);
+      expect(errorWithSource).toBeDefined();
+      if (errorWithSource?.source) {
+        expect(errorWithSource.source.file).toBe('location_test.s');
+        expect(errorWithSource.source.line).toBeGreaterThan(0);
+      }
+    });
+
+    it('should continue after unbalanced brace errors', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.define MACRO1 { nop
+.define MACRO2 { nop }
+  lda UndefinedAfterBrace
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile(
+        [input],
+        { lineContinuations: true, generateDebugInfo: true },
+        {},
+        'binary'
+      );
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      // Should have error for unclosed brace AND error for undefined symbol
+      expect(errors.length).toBeGreaterThanOrEqual(2);
+      expect(errors.some(e => e.message.toLowerCase().includes('curly'))).toBe(true);
+      expect(errors.some(e => e.message.includes('UndefinedAfterBrace'))).toBe(true);
+    });
+
+    it('should handle mix of errors and successful compilation of valid parts', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+ValidLabel:
+  lda #$42
+  sta InvalidDestination
+  lda #$43
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.some(e => e.message.includes('InvalidDestination'))).toBe(true);
+    });
+
+    it('should collect errors from bad directives', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.notarealdirective
+.alsonotreal
+  nop
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBeGreaterThanOrEqual(2);
     });
   });
 });
