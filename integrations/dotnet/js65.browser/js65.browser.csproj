@@ -33,10 +33,11 @@
     <None Include="buildTargets\js65.browser.targets" Pack="true" PackagePath="buildTransitive\" />
   </ItemGroup>
 
-  <!-- NuGet package content: JS files in contentFiles for consuming projects -->
+  <!-- NuGet package content: JS files in assets folder.
+       `js65.browser.targets` is where we will tell the downstream project to deploy those files -->
   <ItemGroup>
-    <None Include="$(ProjectDir)/../../../build/libassembler.js" Pack="true" PackagePath="contentFiles\any\any\js65\" />
-    <None Include="$(ProjectDir)/interop.js" Pack="true" PackagePath="contentFiles\any\any\js65\" />
+    <None Include="$(ProjectDir)/../../../build/libassembler.js" Pack="true" PackagePath="assets\js65\" />
+    <None Include="$(ProjectDir)/interop.js" Pack="true" PackagePath="assets\js65\" />
   </ItemGroup>
 
   <!-- Package metadata -->

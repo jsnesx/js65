@@ -1,6 +1,6 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
-    <Js65BrowserPackagePath>$(MSBuildThisFileDirectory)..\contentFiles\any\any\</Js65BrowserPackagePath>
+    <Js65BrowserPackagePath>$(MSBuildThisFileDirectory)..\assets\</Js65BrowserPackagePath>
   </PropertyGroup>
 
   <!-- For WASM browser projects, add JS files to the deployed output -->
