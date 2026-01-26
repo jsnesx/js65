@@ -49,7 +49,18 @@ export const SourceInfoZ : z.ZodType<SourceInfo> = BaseSourceInfo.extend({
 //   column: number;
 //   parent?: SourceInfo; // macro-expansion stack...
 // }
-export type ErrorLevel = 'warning' | 'error' | 'ldwarning' | 'lderror';
+export type ErrorLevel = 'info' | 'warning' | 'error';
+
+export interface AssemblerMessage {
+  /** Severity of the message */
+  level: ErrorLevel;
+  /** Human-readable message */
+  message: string;
+  /** Source location where message originated */
+  source?: SourceInfo;
+  /** JS stack trace when captured */
+  stack?: string;
+}
 export type GroupTok = 'grp';
 export type StringTok = 'ident' | 'op' | 'cs' | 'str';
 export type NumberTok = 'num';

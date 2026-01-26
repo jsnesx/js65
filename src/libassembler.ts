@@ -14,7 +14,7 @@ import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, ModuleZ, type Segment } from "./module.ts";
 import type { Expr } from './expr.ts';
-import type { SourceInfo } from './token.ts';
+import type { SourceInfo, AssemblerMessage } from './token.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
@@ -67,21 +67,30 @@ export interface FileCallbacks {
 }
 
 /**
+ * Internal result type for assemble that includes collected messages
+ */
+interface AssembleResult {
+  modules: Module[];
+  messages: AssemblerMessage[];
+}
+
+/**
  * Assemble source files into Module objects
  *
  * @param inputs - Array of source code or modules to assemble
  * @param options - Assembler configuration
  * @param callbacks - File system callbacks for .include/.incbin
  * @param sourceContents - Optional SourceContents to store source for debug info
- * @returns Array of compiled Module objects
+ * @returns Array of compiled Module objects and any messages
  */
 export async function assemble(
   inputs: AssemblyInput[],
   options?: AssemblerOptions,
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents
-): Promise<Module[]> {
+): Promise<AssembleResult> {
   const modules: Module[] = [];
+  const allMessages: AssemblerMessage[] = [];
 
   for (const input of inputs) {
     if (input.type === 'module') {
@@ -123,27 +132,34 @@ export async function assemble(
     }
 
     // Tokenize and assemble source code
-    const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents);
+    const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
     toks.enter(tokenizer);
-    const pre = new Preprocessor(toks, asm);
+    const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
     await asm.tokens(pre);
 
     const module = asm.module();
     module.name = input.name;
     modules.push(module);
+
+    // Collect messages from this assembler
+    allMessages.push(...asm.getMessages());
   }
 
-  return modules;
+  return { modules, messages: allMessages };
 }
 
 /**
- * Result of linking operation
+ * Result of compilation/linking operation
  */
-export interface LinkResult {
-  /** Binary output or IPS patch */
+export interface CompileResult {
+  /** Whether compilation succeeded (no errors) */
+  success: boolean;
+  /** Binary output or IPS patch (empty if errors) */
   data: Uint8Array;
-  /** Debug information in MLB format (empty string if sourceContents not provided) */
+  /** Debug information in MLB format (empty string if sourceContents not provided or errors) */
   debugInfo: string;
+  /** All messages (errors, warnings, info) from compilation */
+  messages: AssemblerMessage[];
 }
 
 /**
@@ -153,45 +169,70 @@ export interface LinkResult {
  * @param options - Linker configuration
  * @param outputFormat - Output format ('binary' or 'ips')
  * @param sourceContents - Optional source contents for debug info generation
- * @returns Link result with binary data and debug info
+ * @param messages - Optional array of messages to include in result
+ * @returns Compile result with binary data, debug info, and messages
  */
 export function link(
   modules: Module[],
   options?: LinkerOptions,
   outputFormat: OutputFormat = 'binary',
-  sourceContents?: SourceContents
-): LinkResult {
-  const linker = new Linker({ target: options?.target });
+  sourceContents?: SourceContents,
+  messages: AssemblerMessage[] = []
+): CompileResult {
+  // Create a copy of messages so we can add to it
+  const allMessages = [...messages];
 
-  // Load base ROM if provided and not generating IPS
-  let data: Uint8Array | null = null;
-  if (outputFormat !== 'ips' && options?.baseRom) {
-    data = options.baseRom;
-    linker.base(data, options.baseRomOffset ?? 0);
+  try {
+    const linker = new Linker({ target: options?.target });
+
+    // Load base ROM if provided and not generating IPS
+    let data: Uint8Array | null = null;
+    if (outputFormat !== 'ips' && options?.baseRom) {
+      data = options.baseRom;
+      linker.base(data, options.baseRomOffset ?? 0);
+    }
+
+    for (const module of modules) {
+      linker.read(module);
+    }
+
+    const out = linker.link();
+
+    // Generate output based on format
+    let binaryData: Uint8Array;
+    if (outputFormat === 'ips') {
+      binaryData = out.toIpsPatch();
+    } else {
+      if (!data) data = new Uint8Array(out.length);
+      out.apply(data);
+      binaryData = data;
+    }
+
+    const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
+
+    const hasErrors = allMessages.some(m => m.level === 'error');
+
+    return {
+      success: !hasErrors,
+      data: binaryData,
+      debugInfo,
+      messages: allMessages
+    };
+  } catch (err) {
+    // Linker threw an error - add it to messages and return failure
+    allMessages.push({
+      level: 'error',
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined
+    });
+
+    return {
+      success: false,
+      data: new Uint8Array(0),
+      debugInfo: '',
+      messages: allMessages
+    };
   }
-
-  for (const module of modules) {
-    linker.read(module);
-  }
-
-  const out = linker.link();
-
-  // Generate output based on format
-  let binaryData: Uint8Array;
-  if (outputFormat === 'ips') {
-    binaryData = out.toIpsPatch();
-  } else {
-    if (!data) data = new Uint8Array(out.length);
-    out.apply(data);
-    binaryData = data;
-  }
-
-  const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
-
-  return {
-    data: binaryData,
-    debugInfo
-  };
 }
 
 /**
@@ -203,7 +244,7 @@ export function link(
  * @param outputFormat - Output format ('binary' or 'ips')
  * @param callbacks - File system callbacks
  * @param sourceContents - Optional source contents for debug info generation
- * @returns Link result with binary data and debug info
+ * @returns Compile result with binary data, debug info, and messages
  */
 export async function compile(
   inputs: AssemblyInput[],
@@ -212,9 +253,21 @@ export async function compile(
   outputFormat: OutputFormat = 'binary',
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents
-): Promise<LinkResult> {
-  const modules = await assemble(inputs, assemblerOpts, callbacks, sourceContents);
-  return link(modules, linkerOpts, outputFormat, sourceContents);
+): Promise<CompileResult> {
+  const { modules, messages } = await assemble(inputs, assemblerOpts, callbacks, sourceContents);
+
+  // If there were assembly errors, return early with partial result
+  const hasErrors = messages.some(m => m.level === 'error');
+  if (hasErrors) {
+    return {
+      success: false,
+      data: new Uint8Array(0),
+      debugInfo: '',
+      messages
+    };
+  }
+
+  return link(modules, linkerOpts, outputFormat, sourceContents, messages);
 }
 
 /**
@@ -251,15 +304,16 @@ export type AssemblyAction =
  * @param options - Assembler configuration
  * @param callbacks - File system callbacks for .include/.incbin in code actions
  * @param sourceContents - Optional SourceContents for debug info
- * @returns Array of compiled Module objects
+ * @returns Modules and any messages from assembly
  */
 export async function assembleActions(
   actionModules: AssemblyAction[][],
   options?: AssemblerOptions,
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents
-): Promise<Module[]> {
+): Promise<AssembleResult> {
   const modules: Module[] = [];
+  const allMessages: AssemblerMessage[] = [];
 
   // Helper to convert ActionSource to SourceInfo
   const toSourceInfo = (source?: ActionSource): SourceInfo | undefined => {
@@ -303,9 +357,9 @@ export async function assembleActions(
           if (module_name == original_module_name && action.name) {
             module_name = action.name;
           }
-          const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents);
+          const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
           toks.enter(tokenizer);
-          const pre = new Preprocessor(toks, asm);
+          const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
           await asm.tokens(pre);
           break;
         }
@@ -368,9 +422,12 @@ export async function assembleActions(
     const module = asm.module();
     module.name = module_name;
     modules.push(module);
+
+    // Collect messages from this assembler
+    allMessages.push(...asm.getMessages());
   }
 
-  return modules;
+  return { modules, messages: allMessages };
 }
 
 /**
@@ -382,7 +439,7 @@ export async function assembleActions(
  * @param outputFormat - Output format ('binary' or 'ips')
  * @param callbacks - File system callbacks
  * @param sourceContents - Optional source contents for debug info generation
- * @returns Link result with binary data and debug info
+ * @returns Compile result with binary data, debug info, and messages
  */
 export async function compileActions(
   actionModules: AssemblyAction[][],
@@ -391,9 +448,21 @@ export async function compileActions(
   outputFormat: OutputFormat = 'binary',
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents
-): Promise<LinkResult> {
-  const modules = await assembleActions(actionModules, assemblerOpts, callbacks, sourceContents);
-  return link(modules, linkerOpts, outputFormat, sourceContents);
+): Promise<CompileResult> {
+  const { modules, messages } = await assembleActions(actionModules, assemblerOpts, callbacks, sourceContents);
+
+  // If there were assembly errors, return early with partial result
+  const hasErrors = messages.some(m => m.level === 'error');
+  if (hasErrors) {
+    return {
+      success: false,
+      data: new Uint8Array(0),
+      debugInfo: '',
+      messages
+    };
+  }
+
+  return link(modules, linkerOpts, outputFormat, sourceContents, messages);
 }
 
 /**
@@ -465,8 +534,10 @@ export async function compileActionsBrowser(
 
   // Encode result as base64 JSON
   const resultJson = JSON.stringify({
+    success: result.success,
     romdata: base64.encode(result.data),
-    debugfile: result.debugInfo || ''
+    debugfile: result.debugInfo || '',
+    messages: result.messages
   });
 
   return base64.encode(new TextEncoder().encode(resultJson));

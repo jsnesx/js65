@@ -13,6 +13,7 @@ import {Macro} from './macro.ts';
 import type { Token } from './token.ts';
 import * as Tokens from './token.ts';
 import {TokenStream} from './tokenstream.ts';
+import { ErrorCollector, RecoverableError } from './assembler.ts';
 
 // TODO - figure out how to actually keep track of stack depth?
 //  - might need to insert a special token at the end of an expansion
@@ -71,8 +72,12 @@ export class Preprocessor implements Tokens.Source {
   // TODO - evaluate constants...
 
   constructor(readonly stream: TokenStream, readonly env: Env,
-              parent?: Preprocessor) {
+              parent?: Preprocessor,
+              readonly errorCollector?: ErrorCollector) {
     this.macros = parent ? parent.macros : new Map();
+    if (!errorCollector && parent?.errorCollector) {
+      this.errorCollector = parent.errorCollector;
+    }
   }
 
   
@@ -87,10 +92,19 @@ export class Preprocessor implements Tokens.Source {
 
   async next(): Promise<Token[] | undefined> {
     while (true) {
-      if (!this.sink) this.sink = await this.pump();
-      const {value, done} = await this.sink.next();
-      if (!done) return value;
-      this.sink = undefined;
+      try {
+        if (!this.sink) this.sink = await this.pump();
+        const {value, done} = await this.sink.next();
+        if (!done) return value;
+        this.sink = undefined;
+      } catch (err) {
+        if (err instanceof RecoverableError) {
+          // Error already recorded, continue to next line
+          this.sink = undefined;
+          continue;
+        }
+        throw err;
+      }
     }
   }
 
