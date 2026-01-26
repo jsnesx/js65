@@ -50,7 +50,7 @@ public class ClearScriptEngine : Assembler, IDisposable
         _engine.AddHostObject("FileCallbacks", Callbacks);
         _engine.Script.romdata = data;
         _engine.Script.debugFile = "";
-        _engine.Script.compileSuccess = true;
+        _engine.Script.compileSuccess = false;
         _engine.Script.compileMessages = "[]";
         _engine.Script.modulesJson = SerializeModulesToJson();
         await Task.Run(() => {
