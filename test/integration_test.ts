@@ -54,7 +54,7 @@ async function expectCompileError(source: string, errorMatch?: string | RegExp):
 }
 
 describe('End to end test cases', function() {
-  describe('Forward defined labels from macros', function() {
+  describe('Real world tests', function() {
     it('should not cause an infinite loop in symbol resolution', async function() {
       const source = `
 .macpack common

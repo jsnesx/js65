@@ -67,10 +67,14 @@ export interface FileCallbacks {
 }
 
 /**
- * Internal result type for assemble that includes collected messages
+ * Result type for assemble that includes collected messages
  */
-interface AssembleResult {
+export interface AssembleResult {
+  /** Whether assembly succeeded (no errors) */
+  success: boolean;
+  /** Compiled modules */
   modules: Module[];
+  /** All messages (errors, warnings, info) from assembly */
   messages: AssemblerMessage[];
 }
 
@@ -145,7 +149,8 @@ export async function assemble(
     allMessages.push(...asm.getMessages());
   }
 
-  return { modules, messages: allMessages };
+  const hasErrors = allMessages.some(m => m.level === 'error');
+  return { success: !hasErrors, modules, messages: allMessages };
 }
 
 /**
@@ -235,6 +240,39 @@ export function link(
   }
 }
 
+function linkAssembleResult(
+  result: AssembleResult,
+  linkerOpts?: LinkerOptions,
+  outputFormat: OutputFormat = 'binary',
+  sourceContents?: SourceContents
+): CompileResult {
+  if (!result.success) {
+    return {
+      success: false,
+      data: new Uint8Array(0),
+      debugInfo: '',
+      messages: result.messages
+    };
+  }
+  return link(result.modules, linkerOpts, outputFormat, sourceContents, result.messages);
+}
+
+/**
+ * Create a failure CompileResult from an exception
+ */
+function failureFromException(err: unknown): CompileResult {
+  return {
+    success: false,
+    data: new Uint8Array(0),
+    debugInfo: '',
+    messages: [{
+      level: 'error',
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined
+    }]
+  };
+}
+
 /**
  * Assemble + link
  *
@@ -254,20 +292,12 @@ export async function compile(
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents
 ): Promise<CompileResult> {
-  const { modules, messages } = await assemble(inputs, assemblerOpts, callbacks, sourceContents);
-
-  // If there were assembly errors, return early with partial result
-  const hasErrors = messages.some(m => m.level === 'error');
-  if (hasErrors) {
-    return {
-      success: false,
-      data: new Uint8Array(0),
-      debugInfo: '',
-      messages
-    };
+  try {
+    const result = await assemble(inputs, assemblerOpts, callbacks, sourceContents);
+    return linkAssembleResult(result, linkerOpts, outputFormat, sourceContents);
+  } catch (err) {
+    return failureFromException(err);
   }
-
-  return link(modules, linkerOpts, outputFormat, sourceContents, messages);
 }
 
 /**
@@ -427,7 +457,8 @@ export async function assembleActions(
     allMessages.push(...asm.getMessages());
   }
 
-  return { modules, messages: allMessages };
+  const hasErrors = allMessages.some(m => m.level === 'error');
+  return { success: !hasErrors, modules, messages: allMessages };
 }
 
 /**
@@ -449,20 +480,12 @@ export async function compileActions(
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents
 ): Promise<CompileResult> {
-  const { modules, messages } = await assembleActions(actionModules, assemblerOpts, callbacks, sourceContents);
-
-  // If there were assembly errors, return early with partial result
-  const hasErrors = messages.some(m => m.level === 'error');
-  if (hasErrors) {
-    return {
-      success: false,
-      data: new Uint8Array(0),
-      debugInfo: '',
-      messages
-    };
+  try {
+    const result = await assembleActions(actionModules, assemblerOpts, callbacks, sourceContents);
+    return linkAssembleResult(result, linkerOpts, outputFormat, sourceContents);
+  } catch (err) {
+    return failureFromException(err);
   }
-
-  return link(modules, linkerOpts, outputFormat, sourceContents, messages);
 }
 
 /**
@@ -489,56 +512,68 @@ export async function compileActionsBrowser(
 ): Promise<string> {
   const base64 = new Base64();
 
-  // Parse action modules JSON
-  const actionModules: AssemblyAction[][] = JSON.parse(modulesJson, (key, value) => {
-    // Deserialize base64-encoded byte/word arrays into number arrays
-    if ((key === 'bytes' || key === 'words') && typeof value === 'string') {
-      return base64.decode(value);
-    }
-    return value;
-  });
+  try {
+    // Parse action modules JSON
+    const actionModules: AssemblyAction[][] = JSON.parse(modulesJson, (key, value) => {
+      // Deserialize base64-encoded byte/word arrays into number arrays
+      if ((key === 'bytes' || key === 'words') && typeof value === 'string') {
+        return base64.decode(value);
+      }
+      return value;
+    });
 
-  // Parse assembler options
-  const assemblerOpts: AssemblerOptions = JSON.parse(assemblerOptsJson);
+    // Parse assembler options
+    const assemblerOpts: AssemblerOptions = JSON.parse(assemblerOptsJson);
 
-  // Parse linker options and decode base64 ROM
-  const linkerOptsRaw = JSON.parse(linkerOptsJson);
-  const linkerOpts: LinkerOptions = {
-    ...linkerOptsRaw,
-    baseRom: linkerOptsRaw.baseRom ? base64.decode(linkerOptsRaw.baseRom) : undefined
-  };
+    // Parse linker options and decode base64 ROM
+    const linkerOptsRaw = JSON.parse(linkerOptsJson);
+    const linkerOpts: LinkerOptions = {
+      ...linkerOptsRaw,
+      baseRom: linkerOptsRaw.baseRom ? base64.decode(linkerOptsRaw.baseRom) : undefined
+    };
 
-  // Create callbacks object
-  const callbacks: FileCallbacks = {
-    readText: async (basePath: string, filePath: string) => {
-      return readTextCallback(basePath, filePath);
-    },
-    readBinary: async (basePath: string, filePath: string) => {
-      const base64Content = readBinaryCallback(basePath, filePath);
-      return base64.decode(base64Content);
-    }
-  };
+    // Create callbacks object
+    const callbacks: FileCallbacks = {
+      readText: async (basePath: string, filePath: string) => {
+        return readTextCallback(basePath, filePath);
+      },
+      readBinary: async (basePath: string, filePath: string) => {
+        const base64Content = readBinaryCallback(basePath, filePath);
+        return base64.decode(base64Content);
+      }
+    };
 
-  // Create source contents if needed
-  const sourceContents = useSourceContents ? new SourceContents() : undefined;
+    // Create source contents if needed
+    const sourceContents = useSourceContents ? new SourceContents() : undefined;
 
-  // Call compileActions
-  const result = await compileActions(
-    actionModules,
-    assemblerOpts,
-    linkerOpts,
-    outputFormat,
-    callbacks,
-    sourceContents
-  );
+    // Call compileActions
+    const result = await compileActions(
+      actionModules,
+      assemblerOpts,
+      linkerOpts,
+      outputFormat,
+      callbacks,
+      sourceContents
+    );
 
-  // Encode result as base64 JSON
-  const resultJson = JSON.stringify({
-    success: result.success,
-    romdata: base64.encode(result.data),
-    debugfile: result.debugInfo || '',
-    messages: result.messages
-  });
+    // Encode result as base64 JSON
+    const resultJson = JSON.stringify({
+      success: result.success,
+      romdata: base64.encode(result.data),
+      debugfile: result.debugInfo || '',
+      messages: result.messages
+    });
 
-  return base64.encode(new TextEncoder().encode(resultJson));
+    return base64.encode(new TextEncoder().encode(resultJson));
+  } catch (err) {
+    // Return a failure result encoded in the same format
+    const failureResult = failureFromException(err);
+    const resultJson = JSON.stringify({
+      success: failureResult.success,
+      romdata: base64.encode(failureResult.data),
+      debugfile: failureResult.debugInfo,
+      messages: failureResult.messages
+    });
+    return base64.encode(new TextEncoder().encode(resultJson));
+  }
 }
