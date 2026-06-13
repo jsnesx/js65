@@ -5,10 +5,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { z } from 'zod';
-import { Base64 } from './base64.ts';
-import { ExprZ } from './expr.ts';
-import { SourceInfoZ } from './token.ts';
+import type { Expr } from './expr.ts';
+import type { SourceInfo } from './token.ts';
 
 
 // export interface Substitution {
@@ -17,86 +15,63 @@ import { SourceInfoZ } from './token.ts';
 //   expr: Expr;
 // }
 
-const SubstitutionZ = z.object({
+export interface Substitution {
   /** Offset into the chunk to substitute the expression into. */
-  offset: z.number(),
+  offset: number;
   /** Number of bytes to substitute. */
-  size: z.number(),
+  size: number;
   /** Expression to substitute. */
-  expr: ExprZ,
-});
-
-export type Substitution = z.infer<typeof SubstitutionZ>;
-// export type Module = z.infer<typeof Module>;
-
+  expr: Expr;
+}
 
 // Default is "allow"
-const OverwriteModeZ = z.enum(['forbid', 'allow', 'require']);
-export type OverwriteMode = z.infer<typeof OverwriteModeZ>;
+export type OverwriteMode = 'forbid' | 'allow' | 'require';
 
-// export interface Chunk<T extends number[]|Uint8Array|string> {
-//   name?: string;
-//   segments: readonly string[];
-//   org?: number;
-//   data: T;
-//   subs?: Substitution[];
-//   asserts?: Expr[];
-//   overwrite?: OverwriteMode;
-// }
-
-const BaseChunk = z.object({
+/** Fields shared by Chunk (Uint8Array data) and ChunkNum (number[] data). */
+interface BaseChunk {
   /** Human-readable identifier. */
-  name: z.string().optional(),
+  name?: string;
   /** Which segments this chunk may be located in. */
-  segments: z.array(z.string()),
+  segments: string[];
   /** Absolute address of the start of the chunk, if not relocatable. */
-  org: z.number().optional(),
+  org?: number;
   /** Substitutions to insert into the data. */
-  subs: z.optional(z.array(SubstitutionZ)),
+  subs?: Substitution[];
   /** Assertions within this chunk. Each expression must be nonzero. */
-  asserts: z.optional(z.array(ExprZ)),
+  asserts?: Expr[];
   /** How overwriting previously-written fixed-position data is handled. */
-  overwrite: z.optional(OverwriteModeZ), // NOTE: only set programmatically?
+  overwrite?: OverwriteMode; // NOTE: only set programmatically?
   /** Source infos for each byte in the chunk. */
-  sourceMap: z.optional(z.map(z.number(), SourceInfoZ)),
+  sourceMap?: Map<number, SourceInfo>;
   /** Labels within the chunk, mapped to byte offset. */
-  labelIndex: z.optional(z.map(z.string(), z.number())),
-});
+  labelIndex?: Map<string, number>;
+}
 
-export type ChunkNum = z.infer<typeof ChunkNumZ>;
-export type Chunk = z.infer<typeof ChunkZ>;
+/**
+ * Chunk whose data is a number array.
+ * NOTE: While building this is a number array.  When serialized to disk, it
+ * is a base64-encoded string.  When linking, it's a Uint8Array.
+ */
+export interface ChunkNum extends BaseChunk {
+  data: number[];
+}
 
-const ChunkNumZ = BaseChunk.extend({
-  /**
-   * Data for the chunk, either a Uint8Array or a Base64-encoded string.
-   * NOTE: While building this is a number array.  When serialized to disk, it
-   * is a base64-encoded string.  When linking, it's a Uint8Array.
-   */
-  data: z.array(z.number()),
-});
-
-const ChunkZ = BaseChunk.extend({
-  data: z.string().transform((s: string) => new Base64().decode(s))
-});
+/** Chunk whose data has been decoded to a Uint8Array (used while linking). */
+export interface Chunk extends BaseChunk {
+  data: Uint8Array;
+}
 
 
-// export interface Symbol {
-//   export?: string;
-//   expr?: Expr;
-// }
-
-const SymbolZ = z.object({
+export interface Symbol {
   /** Name to export this symbol as, for importing into other objects. */
-  export: z.string().optional(),
+  export?: string;
   // /** Index of the chunk this symbol is defined in. */
   // chunk?: number; // TODO - is this actually necessary?
   // /** Byte offset into the chunk for the definition. */
   // offset?: number;
   /** Value of the symbol. */
-  expr: ExprZ.optional(),
-});
-
-export type Symbol = z.infer<typeof SymbolZ>;
+  expr?: Expr;
+}
 
 // export interface Segment {
 //   name: string;
@@ -109,32 +84,30 @@ export type Symbol = z.infer<typeof SymbolZ>;
 //   free?: Array<readonly [number, number]>;
 // }
 
-const SegmentZ = z.object({
+export interface Segment {
   /** Name of the segment, as used in .segment directives. */
-  name: z.string(),
+  name: string;
   /** Bank for the segment. */
-  bank: z.number().optional(),
+  bank?: number;
   /** Segment size in bytes. */
-  size: z.number().optional(),
+  size?: number;
   /** Offset of the segment in the rom image. */
-  offset: z.number().optional(),
+  offset?: number;
   /** Memory location of the segment in the CPU. */
-  memory: z.number().optional(),
+  memory?: number;
   /** Address size. */
-  addressing: z.number().optional(),
+  addressing?: number;
   /** Address size. */
-  fill: z.number().optional(),
+  fill?: number;
   /** Output file for the segment. Use "%O" for the main output file, or a filename. Empty/undefined means no output. */
-  out: z.string().optional(),
+  out?: string;
   /** Name of the segment that this should be placed inside. */
-  overlay: z.string().optional(),
+  overlay?: string;
   /** True if this segment is the "default" segment to use if no segment is defined */
-  default: z.boolean().optional(),
+  default?: boolean;
   /** Unallocated ranges (org), half-open [a, b). */
-  free: z.array(z.array(z.number())).optional(),
-});
-
-export type Segment = z.infer<typeof SegmentZ>;
+  free?: number[][];
+}
 
 // deno-lint-ignore no-namespace
 export namespace Segment {
@@ -156,17 +129,15 @@ export namespace Segment {
 //   segments?: Segment[],
 // }
 
-export const ModuleZ = z.object({
+export interface Module {
   /** Filename if loaded from a file, otherwise a user provided name */
-  name: z.string().optional(),
+  name?: string;
   /** All chunks, in a determinstic (indexable) order. */
-  chunks: z.optional(z.array(ChunkZ)),
+  chunks?: Chunk[];
   /** All symbols, in a deterministic (indexable) order. */
-  symbols: z.optional(z.array(SymbolZ)),
+  symbols?: Symbol[];
   /** All segments.  Indexed by name, but we don't use a map. */
-  segments: z.optional(z.array(SegmentZ)),
+  segments?: Segment[];
   /** All symbols from all scopes for debug purposes. */
-  debugSymbols: z.optional(z.array(SymbolZ)),
-});
-
-export type Module = z.infer<typeof ModuleZ>;
+  debugSymbols?: Symbol[];
+}

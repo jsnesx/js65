@@ -12,7 +12,8 @@ import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
-import { type Module, ModuleZ, type Segment } from "./module.ts";
+import { type Module, type Segment } from "./module.ts";
+import { parseModule, parseActionModules } from "./validate_modules.ts";
 import type { Expr } from './expr.ts';
 import type { SourceInfo, AssemblerMessage } from './token.ts';
 
@@ -125,10 +126,10 @@ export async function assemble(
     // Try to parse as JSON Module first (for .o files)
     try {
       const obj = JSON.parse(input.code);
-      const parsedModule = await ModuleZ.safeParseAsync(obj);
-      if (parsedModule.success) {
+      const parsedModule = parseModule(obj);
+      if (parsedModule.ok) {
         // Successfully parsed as a module
-        modules.push(parsedModule.data);
+        modules.push(parsedModule.value);
         continue;
       }
     } catch (_err) {
@@ -514,13 +515,19 @@ export async function compileActionsBrowser(
 
   try {
     // Parse action modules JSON
-    const actionModules: AssemblyAction[][] = JSON.parse(modulesJson, (key, value) => {
+    const rawActionModules: unknown = JSON.parse(modulesJson, (key, value) => {
       // Deserialize base64-encoded byte/word arrays into number arrays
       if ((key === 'bytes' || key === 'words') && typeof value === 'string') {
         return base64.decode(value);
       }
       return value;
     });
+    // Validate the untrusted action JSON before assembling it.
+    const validated = parseActionModules(rawActionModules);
+    if (!validated.ok) {
+      throw new Error(`Invalid action module input: ${validated.error}`);
+    }
+    const actionModules: AssemblyAction[][] = validated.value;
 
     // Parse assembler options
     const assemblerOpts: AssemblerOptions = JSON.parse(assemblerOptsJson);
