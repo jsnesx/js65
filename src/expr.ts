@@ -5,7 +5,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { z } from 'zod';
 import {type Token} from './token.ts'
 import { Symbol } from './assembler.ts'
 import * as Tokens from './token.ts'
@@ -31,30 +30,28 @@ import * as Tokens from './token.ts'
 // }
 
 /** Extra information for 'num' values. */
-const MetaZ = z.object({
+export interface Meta {
   /** Whether this is relative to the start of the chunk. */
-  rel: z.boolean().optional(),
+  rel?: boolean;
   /** Relative chunk the value is defined in. */
-  chunk: z.number().optional(),
+  chunk?: number;
   /** Org value of chunk, if known. */
-  org: z.number().optional(),
+  org?: number;
   /** Bank value of chunk, if known. */
-  bank: z.number().optional(),
+  bank?: number;
   /** Offset value of chunk, if known. */
-  offset: z.number().optional(),
+  offset?: number;
   /** Size hint for number. */
-  size: z.number().optional(),
+  size?: number;
   /** Whether this is a branch offset (requires signed range checking). */
-  branch: z.boolean().optional(),
-});
+  branch?: boolean;
+}
 
-export type Meta = z.infer<typeof MetaZ>;
-
-const BaseExpr = z.object({
+export interface Expr {
   // TODO - what about different address types? bank hint/etc?
   //      - does bank hint need to get stored in the object file?
   //        - probably not...?
-  
+
   /**
    * operator (e.g. '+' or '.max') or 'sym', 'num', or 'im'
    * - sym: an offset into the symbols array (or the name in 'sym')
@@ -62,25 +59,17 @@ const BaseExpr = z.object({
    *  - im: an import from another object file (uses 'sym').
    *  - str: a byte array literal
    */
-  op: z.string(),
+  op: string;
   /** only used when op === 'num' */
-  num: z.number().optional(),
+  num?: number;
   /** only used when op === 'str' */
-  str: z.string().optional(),
-  meta: MetaZ.optional(),
+  str?: string;
+  meta?: Meta;
   /** only used when op === 'sym' */
-  sym: z.string().optional(),
-  source: Tokens.SourceInfoZ.optional(),
-});
-
-// Work around for the recursive Expr type
-export type Expr = z.infer<typeof BaseExpr> & {
+  sym?: string;
+  source?: Tokens.SourceInfo;
   args?: Expr[];
-};
-
-export const ExprZ : z.ZodType<Expr> = BaseExpr.extend({
-  args: z.lazy(() => ExprZ.array()).optional(),
-});
+}
 
 function jsSource(e: Expr): {source?: Tokens.SourceInfo} {
   return e.source ?
