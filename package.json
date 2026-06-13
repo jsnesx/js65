@@ -5,7 +5,10 @@
   "scripts": {
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65",
-    "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build"
+    "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build",
+    "quickjs-bundle": "bun build ./integrations/quickjs.ts --outfile ./build/quickjs.bundle.js --format esm --target node --external qjs:std --external qjs:os",
+    "quickjs-exe": "bun run quickjs-bundle && qjs -c ./build/quickjs.bundle.js -o ./build/js65-qjs",
+    "bench": "bun run bench/bench.ts"
   },
   "bin": {
     "js65": "target/release/bin/js65"
