@@ -63,7 +63,12 @@ interface Env {
 
 export class Preprocessor implements Tokens.Source {
   private readonly macros: Map<string, Define|Macro|string>;
-  private sink: AsyncGenerator<Token[]|undefined>|undefined;
+  // Output lines produced by pump() but not yet consumed by next(). A single
+  // source line can expand into several output lines (e.g. labels split off the
+  // front of an instruction), which is why its a list of lists.
+  // This replaces the AsyncGenerator which was a pain for any TS compiler project
+  // like hermes or perry
+  private outQueue: Token[][] = [];
 
   // builds up repeating tokens...
   private repeats: Array<[Token[][], number, number, string?]> = [];
@@ -92,15 +97,15 @@ export class Preprocessor implements Tokens.Source {
 
   async next(): Promise<Token[] | undefined> {
     while (true) {
+      // Drain any output already produced for a previous source line.
+      if (this.outQueue.length) return this.outQueue.shift();
       try {
-        if (!this.sink) this.sink = await this.pump();
-        const {value, done} = await this.sink.next();
-        if (!done) return value;
-        this.sink = undefined;
+        const more = await this.pump();
+        if (!more) return undefined; // EOF
       } catch (err) {
         if (err instanceof RecoverableError) {
-          // Error already recorded, continue to next line
-          this.sink = undefined;
+          // Error already recorded; abandon the rest of the current line but
+          // keep any output it produced before the error, then continue.
           continue;
         }
         throw err;
@@ -108,10 +113,11 @@ export class Preprocessor implements Tokens.Source {
     }
   }
 
-  // For use as a token source in the next stage.
-  async * pump(): AsyncGenerator<Token[]|undefined> {
+  // Read and process the next source line, pushing zero or more output lines
+  // onto `outQueue`. Returns false at EOF, true otherwise.
+  private async pump(): Promise<boolean> {
     const line = await this.readLine();
-    if (line == null) return void (yield line); // EOF
+    if (line == null) return false; // EOF
     while (line.length) {
       const front = line[0];
       switch (front.token) {
@@ -119,7 +125,7 @@ export class Preprocessor implements Tokens.Source {
           // Possibilities: (1) label, (2) instruction/assign, (3) macro
           // Labels get split out.  We don't distinguish assigns yet.
           if (Tokens.eq(line[1], Tokens.COLON)) {
-            yield line.splice(0, 2);
+            this.outQueue.push(line.splice(0, 2));
             break;
           }
           if (Tokens.eq(line[1], Tokens.ASSIGN)) {
@@ -127,12 +133,12 @@ export class Preprocessor implements Tokens.Source {
           } else if (Tokens.eq(line[1], Tokens.SET)) {
             this.env.setSym(line);
           }
-          if (!this.tryExpandMacro(line)) yield line;
-          return;
+          if (!this.tryExpandMacro(line)) this.outQueue.push(line);
+          return true;
 
         case 'cs':
-          if (!(await this.tryRunDirective(line))) yield line;
-          return;
+          if (!(await this.tryRunDirective(line))) this.outQueue.push(line);
+          return true;
 
         case 'op':
           // Probably an anonymous label...
@@ -146,10 +152,10 @@ export class Preprocessor implements Tokens.Source {
               label.push({token: 'op', str: ':'});
               line.splice(0, 1);
             }
-            yield label;
+            this.outQueue.push(label);
             break;
           } else if (front.str === ':') {
-            yield line.splice(0, 1);
+            this.outQueue.push(line.splice(0, 1));
             break;
           }
           /* fallthrough */
@@ -157,6 +163,7 @@ export class Preprocessor implements Tokens.Source {
           throw new Error(`Unexpected: ${Tokens.nameAt(line[0])}`);
       }
     }
+    return true;
   }
 
   // Expand a single line of tokens from the front of toks.
