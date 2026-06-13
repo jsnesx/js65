@@ -5,7 +5,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import {vsprintf} from 'sprintf-js';
+import {vsprintf} from './sprintf.ts';
 import {Define} from './define.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
