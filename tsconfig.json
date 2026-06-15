@@ -4,6 +4,7 @@
         "rootDir": "src/",
         "module": "es2022",
         "target": "es2020",
+        "types": ["bun", "node"],
     },
     "include": [
         "src/**/*.ts"

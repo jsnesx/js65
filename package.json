@@ -8,6 +8,7 @@
     "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build",
     "quickjs-bundle": "bun build ./integrations/quickjs.ts --outfile ./build/quickjs.bundle.js --format esm --target node --external qjs:std --external qjs:os",
     "quickjs-exe": "bun run quickjs-bundle && qjs -c ./build/quickjs.bundle.js -o ./build/js65-qjs",
+    "hermes-exe": "bun run integrations/hermes/hermes-build.ts",
     "bench": "bun run bench/bench.ts"
   },
   "bin": {
@@ -25,6 +26,7 @@
   "homepage": "https://github.com/jsnesx/js65#readme",
   "devDependencies": {
     "@types/bun": "^1.2.9",
+    "@types/node": "^25.9.3",
     "typescript": "^5.8.3",
     "typescript-language-server": "^2.3.0"
   },
