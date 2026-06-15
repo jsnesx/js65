@@ -30,7 +30,7 @@ const ext = process.platform === 'win32' ? '.exe' : '';
 const FRONTENDS: Array<{ label: string; path: string }> = [
   { label: 'bun', path: `build/js65${ext}` },
   { label: 'quickjs', path: `build/js65-qjs${ext}` },
-  { label: 'perry', path: `build/js65-perry${ext}` },
+  { label: 'hermes', path: `build/js65-hermes${ext}` },
 ];
 
 // --- tunables ------------------------------------------------------------
@@ -130,7 +130,7 @@ say(`frontends: ${frontends.map((f) => f.label).join(', ')}\n`);
 const results: Record<string, Record<string, Stats>> = {};
 for (const s of scenarios) {
   results[s.name] = {};
-  say(`• ${s.name} — ${s.desc}`);
+  say(`* ${s.name} - ${s.desc}`);
   const args = (label: string) => [`${DIR}/${s.name}.s`, '-o', `${DIR}/out-${s.name}-${label}.nes`];
   for (const f of frontends) {
     for (let i = 0; i < WARMUP; i++) timeRun(f.path, args(f.label));

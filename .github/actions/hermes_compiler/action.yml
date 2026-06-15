@@ -1,0 +1,69 @@
+name: 'Build Static Hermes toolchain'
+description: >-
+  Build the Static Hermes (shermes) compiler and its static VM libraries from
+  source with LTO, caching the outputs keyed on the pinned Hermes commit so
+  later runs skip the build. Works on Windows, macOS (arm), and Linux hosts.
+
+inputs:
+  hermes-ref:
+    description: >-
+      Hermes commit SHA, branch, or tag to build. Required (no default, so each
+      caller pins explicitly). Static Hermes currently lives on the unmerged
+      `static_h` branch, so use a SHA from that branch (or `static_h` itself).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout Hermes
+      uses: actions/checkout@v4
+      with:
+        repository: facebook/hermes
+        ref: ${{ inputs.hermes-ref }}
+        path: hermes
+    - name: Install Ninja
+      uses: seanmiddleditch/gha-setup-ninja@master
+    - name: Setup MSVC environment (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+    - name: Cache shermes build
+      id: shermes-cache
+      uses: actions/cache@v4
+      with:
+        # List of outputs that we care about for the build
+        path: |
+          hermes/build/bin
+          hermes/build/lib
+          hermes/build/tools/shermes
+          hermes/build/jsi
+          hermes/build/external/boost
+        key: shermes-${{ runner.os }}-${{ inputs.hermes-ref }}-lto-v2
+    - name: Build shermes (LTO)
+      if: steps.shermes-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        # Build the whole VM with clang/clang++ + ThinLTO so the bitcode in the
+        # static libs is consumable by the clang++ link in `bun run hermes-exe`.
+        # clang targets the MSVC ABI on Windows, matching the host link; the
+        # GNU driver (not clang-cl) is used everywhere so Hermes' GCC_COMPATIBLE
+        # path applies on all platforms (clang-cl mis-handles -fno-exceptions).
+        EXTRA=()
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          # clang targeting *-windows-msvc runs in MS-compat mode and does not
+          # define __GNUC__, tripping Hermes' -Werror=undef in vendored llvh
+          # headers. -Wno-undef must follow that flag, so set it per-config.
+          EXTRA+=("-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -Wno-undef"
+                  "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -Wno-undef")
+        fi
+        cmake -S hermes -B hermes/build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+          -DHERMES_ALLOW_BOOST_CONTEXT=1 \
+          -DHERMES_ENABLE_DEBUGGER=OFF \
+          -DHERMES_BUILD_SHARED_JSI=OFF \
+          -DHERMES_ENABLE_TEST_SUITE=OFF \
+          -DHERMES_ENABLE_NAPI=OFF \
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_CXX_COMPILER=clang++ \
+          "${EXTRA[@]}"
+        cmake --build hermes/build --target shermes hermesvm_a shermes_console_a jsi
