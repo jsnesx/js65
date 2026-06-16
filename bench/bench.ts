@@ -23,7 +23,8 @@
  *   how compile time grows with program size (ideally ~linear).
  *
  * Prereqs (build whichever you want to compare):
- *   bun run exe          -> build/js65(.exe)
+ *   bun run exe          -> build/js65-bun(.exe)
+ *   bun run hermes-exe   -> build/js65(.exe)   (the default js65 binary)
  *   bun run quickjs-exe  -> build/js65-qjs(.exe)
  *   (perry, etc.)        -> build/js65-perry(.exe)
  */
@@ -38,9 +39,9 @@ const ext = process.platform === 'win32' ? '.exe' : '';
 // line (e.g. `bun run bench -- quickjs`). quickjs is slow enough that running
 // it on every `bun run bench` is more annoying than useful.
 const FRONTENDS: Array<{ label: string; path: string; skipByDefault?: boolean }> = [
-  { label: 'bun', path: `build/js65${ext}` },
+  { label: 'bun', path: `build/js65-bun${ext}` },
   { label: 'quickjs', path: `build/js65-qjs${ext}`, skipByDefault: true },
-  { label: 'hermes', path: `build/js65-hermes${ext}` },
+  { label: 'hermes', path: `build/js65${ext}` },
 ];
 
 // Parameters pulled from the environment to tune the benchmarks
