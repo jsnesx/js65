@@ -8,11 +8,17 @@
  * Run:  bun run bench
  *   optionally restrict to some frontends:  bun run bench -- bun quickjs
  *   tune workload via env vars:
- *     BENCH_RUNS (default 5)      timed runs per (scenario, frontend)
- *     BENCH_WARMUP (default 1)    untimed warmup runs
- *     BENCH_LARGE (default 10000) instructions in the "large" scenario
- *     BENCH_MACROS (default 5000) macro invocations
- *     BENCH_PATCHES (default 500) .org/.reloc pairs (-> 2x link chunks)
+ *     BENCH_RUNS (default 5)        timed runs per (scenario, frontend)
+ *     BENCH_WARMUP (default 1)      untimed warmup runs
+ *     BENCH_SMALL (default 1000)    instructions in the "small" scenario
+ *     BENCH_LARGE (default 10000)   instructions in the "large" scenario
+ *     BENCH_XLARGE (default 50000)  instructions in the "xlarge" scenario
+ *     BENCH_MACROS (default 5000)   macro invocations
+ *     BENCH_PATCHES (default 500)   .org/.reloc pairs (-> 2x link chunks)
+ *
+ *   The small/large/xlarge scenarios share one workload generator at three
+ *   input sizes so their timings form a scaling curve: comparing them shows
+ *   how compile time grows with program size (ideally ~linear).
  *
  * Prereqs (build whichever you want to compare):
  *   bun run exe          -> build/js65(.exe)
@@ -41,7 +47,9 @@ const envInt = (name: string, dflt: number) => {
 };
 const RUNS = envInt('BENCH_RUNS', 5);
 const WARMUP = envInt('BENCH_WARMUP', 1);
+const SMALL = envInt('BENCH_SMALL', 1000);
 const LARGE = envInt('BENCH_LARGE', 10000);
+const XLARGE = envInt('BENCH_XLARGE', 50000);
 const MACROS = envInt('BENCH_MACROS', 5000);
 const PATCH_PAIRS = envInt('BENCH_PATCHES', 500);
 
@@ -84,7 +92,10 @@ const genTiny = () => '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $00
 interface Scenario { name: string; desc: string; source: string; }
 const scenarios: Scenario[] = [
   { name: 'startup', desc: 'trivial (startup overhead)', source: genTiny() },
+  // small/large/xlarge share genLarge so their times form a scaling curve.
+  { name: 'small', desc: `${SMALL} instructions`, source: genLarge(SMALL) },
   { name: 'large', desc: `${LARGE} instructions`, source: genLarge(LARGE) },
+  { name: 'xlarge', desc: `${XLARGE} instructions`, source: genLarge(XLARGE) },
   { name: 'macros', desc: `${MACROS} macro invocations`, source: genMacros(MACROS) },
   { name: 'patches', desc: `${2 * PATCH_PAIRS} link chunks (.org/.reloc)`, source: genPatches(PATCH_PAIRS) },
 ];
