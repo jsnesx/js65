@@ -182,6 +182,17 @@ export class Linker {
   getDebugInfo(sources?: SourceContents, debugLevel: number = 1) : string {
     if (!sources) return "";
 
+    // Splitting the full source into lines is O(file size); doing it once per
+    // label/range (as the comment lookups below otherwise would) makes debug
+    // info generation O(n^2) in the program size. Split each file at most once.
+    const sourceLinesCache = new Map<string, string[] | undefined>();
+    const getSourceLines = (file: string): string[] | undefined => {
+      if (sourceLinesCache.has(file)) return sourceLinesCache.get(file);
+      const lines = sources.data.get(file)?.split('\n');
+      sourceLinesCache.set(file, lines);
+      return lines;
+    };
+
     let data = "";
     const labelMap = new Map<string, MesenLabelFormat>();
     const seenLabels: Set<string> = new Set;
@@ -293,7 +304,7 @@ export class Linker {
       let comment = "";
       if (s.expr.source) {
         const {file, line} = s.expr.source;
-        const sourceLines = sources.data.get(file)?.split('\n');
+        const sourceLines = getSourceLines(file);
         comment = Linker.getComment(sourceLines, line, debugLevel, s.expr.source);
       }
       const isAnonTemp = isAnonTempLabel(s.expr.sym!);
@@ -346,7 +357,7 @@ export class Linker {
         const srcInfo = c.sourceMap?.get(offsetInChunk);
         if (srcInfo) {
           const {file, line} = srcInfo;
-          const sourceLines = sources.data.get(file)?.split('\n');
+          const sourceLines = getSourceLines(file);
           comment = Linker.getComment(sourceLines, line - 1, debugLevel, srcInfo);
         }
 
@@ -383,7 +394,7 @@ export class Linker {
 
         let {file, line} = rangeSrcInfo;
         line--;
-        const sourceLines = sources.data.get(file)?.split('\n');
+        const sourceLines = getSourceLines(file);
         const comment = Linker.getComment(sourceLines, line, debugLevel, rangeSrcInfo);
 
         // In debug level 0, skip entries with no comment and no label
