@@ -25,6 +25,26 @@ dotnet publish -r win-x64    # output contains only ClearScriptV8.win-x64.dll
 A portable, RID-less `dotnet publish` (or a plain `dotnet build`) instead bundles the native libs for *every*
 platform under `runtimes/`, which the runtime resolves at load time. That works, but produces a much larger output.
 
+### Hermes engine (alternative)
+
+`js65.hermes` is a drop-in alternative to `js65.clearscript` built on the Static Hermes JS engine. Instead
+of hosting a JS engine in-process, it ships a small native `js65-hermes` executable and drives it as a subprocess.
+
+```csharp
+Assembler asm = new HermesEngine();   // instead of new ClearScriptEngine();
+```
+
+Like the ClearScript native libs, the per-platform executables are shipped under `runtimes/{rid}/native/`,
+so publishing with an explicit runtime identifier includes only the executable for your target platform:
+
+```sh
+dotnet publish -r win-x64    # output contains only js65-hermes.exe (win-x64)
+```
+
+The example app accepts a `--hermes` flag to select this engine instead of ClearScript; CI runs it both ways
+to verify each engine works on the host platform. You only need to use either ClearScript or Hermes for a desktop
+platform, but if binary application size is a concern, then the hermes build is much smaller.
+
 ## Motivation
 
 Often when working on rom hacks for lesser known NES games or making a randomizer, you may not have a complete
