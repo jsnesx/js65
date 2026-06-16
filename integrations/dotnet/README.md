@@ -8,14 +8,22 @@ assembler through a higher level C# interface.
 
 When using the library in a desktop environment, you'll want to use the `ClearScript` based assembler.
 This library will include a stripped down V8 build along side of it that will run the core of the project.
-ClearScript itself relies on native V8 dlls, so in addition to adding this package, you'll want to conditionally add the `ClearScriptNative` packages for each platform.
-Make sure that the version matches the same version that `js65` uses.
+ClearScript itself relies on native V8 dlls that `js65.clearscript` references. As long as you publish for
+a specific runtime, then only the native runtimes for your target platform will be included in the final application.
 
 ```xml
-<PackageReference Include="Microsoft.ClearScript.V8.Native.linux-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Linux'))" />
-<PackageReference Include="Microsoft.ClearScript.V8.Native.osx-arm64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('OSX'))" />
-<PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.4.5" Condition="$([MSBuild]::IsOsPlatform('Windows'))" />
+<PackageReference Include="js65.clearscript" />
 ```
+
+The native libraries are large (~25–50 MB each), so publish with an explicit runtime identifier to ship only
+the binary for your target platform:
+
+```sh
+dotnet publish -r win-x64    # output contains only ClearScriptV8.win-x64.dll
+```
+
+A portable, RID-less `dotnet publish` (or a plain `dotnet build`) instead bundles the native libs for *every*
+platform under `runtimes/`, which the runtime resolves at load time. That works, but produces a much larger output.
 
 ## Motivation
 
@@ -39,3 +47,5 @@ that can spill between fixed and switchable banks, and really squeeze out every 
 ## TODO
 
 Write a full document explaining how to use it. Check out the example project on github in the meantime or open an issue.
+
+There is an example application with some comments on how to use the assembler.
