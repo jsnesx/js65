@@ -14,10 +14,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  hermes:
+    # Compile the native js65 frontend (Static Hermes build) on every desktop platform. This is now
+    # the default `js65` binary, and it is also bundled into the js65.hermes NuGet package
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-13
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout js65
+        uses: actions/checkout@v4
+      - name: Build Static Hermes toolchain
+        uses: ./.github/actions/hermes_compiler
+        with:
+          # Pin to a commit on Hermes' static_h branch for reproducible builds.
+          hermes-ref: ccc48ff6c0d7c0d9a54e5f42b56dc0df15439608
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Install deps
+        run: bun install
+      - name: Build js65 (hermes)
+        shell: bash
+        env:
+          HERMES_SRC: ${{ github.workspace }}/hermes
+          HERMES_BUILD: ${{ github.workspace }}/hermes/build
+          # Ninja is single-config, so there is no per-config output subdir.
+          HERMES_CONFIG: ''
+        run: bun run hermes-exe
+      - name: Stage binary with its RID
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ -f build/js65.exe ]; then
+            cp build/js65.exe "dist/js65-${{ matrix.rid }}.exe"
+          else
+            cp build/js65 "dist/js65-${{ matrix.rid }}"
+          fi
+      - name: Upload hermes binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  test:
+    # Build the TypeScript frontends, run the unit tests, and exercise the desktop example with BOTH
+    # the ClearScript and Hermes engines on the host platform. Needs the hermes job so the native
+    # js65 binary is available to drive the Hermes engine.
+    needs: hermes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-13
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -35,63 +101,45 @@ jobs:
         run: bun install
       - name: Run Test Cases
         run: bun test
-      - name: Build Bun release
+      - name: Build Bun release (js65-bun)
         run: bun run exe
       - name: Build integration library
         run: bun run lib
+      - name: Download native js65 (hermes) for this platform
+        uses: actions/download-artifact@v4
+        with:
+          name: hermes-${{ matrix.rid }}
+          path: hermes-bin
+      - name: Stage native js65 for the example
+        shell: bash
+        run: |
+          mkdir -p build
+          if [ -f "hermes-bin/js65-${{ matrix.rid }}.exe" ]; then
+            cp "hermes-bin/js65-${{ matrix.rid }}.exe" build/js65.exe
+          else
+            cp "hermes-bin/js65-${{ matrix.rid }}" build/js65
+            chmod +x build/js65
+          fi
       - name: Build desktop packages
         run: |
           dotnet build -c Release integrations/dotnet/js65.interop/js65.interop.csproj
           dotnet build -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj
-      - name: Run example project (desktop)
+          dotnet build -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj
+      - name: Run example project (ClearScript + Hermes engines)
         run: |
-          dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0
+          dotnet run -c Release --project integrations/dotnet/example/example.csproj -f net8.0
+          dotnet run -c Release --project integrations/dotnet/example/example.csproj -f net8.0 -- --hermes
           dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0-browser
       - name: Upload bun artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-bun
+          name: js65-bun-${{ matrix.rid }}
           path: |
-            build/js65*
-
-  hermes:
-    # Compile the native js65-hermes frontend on each platform via the
-    # composite action, which builds (and caches) Static Hermes with LTO.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout js65
-        uses: actions/checkout@v4
-      - name: Build Static Hermes toolchain
-        uses: ./.github/actions/hermes_compiler
-        with:
-          # Pin to a commit on Hermes' static_h branch for reproducible builds.
-          hermes-ref: ccc48ff6c0d7c0d9a54e5f42b56dc0df15439608
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: ".bun-version"
-      - name: Install deps
-        run: bun install
-      - name: Build js65-hermes
-        shell: bash
-        env:
-          HERMES_SRC: ${{ github.workspace }}/hermes
-          HERMES_BUILD: ${{ github.workspace }}/hermes/build
-          # Ninja is single-config, so there is no per-config output subdir.
-          HERMES_CONFIG: ''
-        run: bun run hermes-exe
-      - name: Upload hermes artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.os }}-hermes
-          path: build/js65-hermes*
+            build/js65-bun*
 
   package:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, hermes]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -108,11 +156,33 @@ jobs:
         run: bun install
       - name: Build integration library
         run: bun run lib
+      - name: Download all native js65 (hermes) binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hermes-*
+          path: hermes-bin
+          merge-multiple: true
+      - name: Stage native executables into js65.hermes/runtimes
+        shell: bash
+        run: |
+          for f in hermes-bin/js65-*; do
+            base=$(basename "$f")        # js65-win-x64.exe | js65-linux-x64
+            name=${base%.*}              # js65-win-x64    | js65-linux-x64 (no-op when no extension)
+            rid=${name#js65-}            # win-x64 | linux-x64 | osx-x64 | osx-arm64
+            ext=""
+            [[ "$base" == *.exe ]] && ext=".exe"
+            dest="integrations/dotnet/js65.hermes/runtimes/$rid/native"
+            mkdir -p "$dest"
+            cp "$f" "$dest/js65-hermes$ext"
+          done
+          echo "Staged native executables:"
+          find integrations/dotnet/js65.hermes/runtimes -type f
       - name: Pack NuGet packages
         run: |
           dotnet pack -c Release integrations/dotnet/js65.interop/js65.interop.csproj --output build/nuget/
           dotnet pack -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj --output build/nuget/
           dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/
+          dotnet pack -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj --output build/nuget/
       - name: Upload NuGet artifacts
         uses: actions/upload-artifact@v4
         with:

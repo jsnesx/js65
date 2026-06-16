@@ -4,7 +4,7 @@
   "main": "target/debug/js/patch.js",
   "scripts": {
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
-    "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65",
+    "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
     "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build",
     "quickjs-bundle": "bun build ./integrations/quickjs.ts --outfile ./build/quickjs.bundle.js --format esm --target node --external qjs:std --external qjs:os",
     "quickjs-exe": "bun run quickjs-bundle && qjs -c ./build/quickjs.bundle.js -o ./build/js65-qjs",

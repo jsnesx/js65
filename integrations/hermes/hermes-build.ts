@@ -4,7 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-// Build the Static Hermes js65 frontend (build/js65-hermes). Four steps:
+// Build the Static Hermes js65 frontend (build/js65, the default js65 binary). Four steps:
 //   1. bun-bundle integrations/hermes/hermes.ts -> one inlined script
 //   2. shermes -exported-unit js65 -c   -> the compiled unit object (no main)
 //   3. clang++ the C++ host (integrations/hermes/hermes_host.cpp)
@@ -41,7 +41,7 @@ const CLANG = env('CLANG', bin('clang'));
 const CLANGXX = env('CLANGXX', bin('clang++'));
 const SHERMES = env('SHERMES', `${cfg(`${HERMES_BUILD}/bin`)}/shermes${exe}`);
 
-const OUT = `build/js65-hermes${exe}`;
+const OUT = `build/js65${exe}`;
 
 // Hermes doesn't have a deployment option right now, so the best we can do is
 // just list out the locations for our include path from the source itself

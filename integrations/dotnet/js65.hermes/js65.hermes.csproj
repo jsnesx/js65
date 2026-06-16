@@ -8,12 +8,15 @@
     <RootNamespace>js65</RootNamespace>
   </PropertyGroup>
 
-  <!-- Name of the native executable for the host OS. -->
   <PropertyGroup>
+    <!-- Embedded name HermesEngine looks for. Deliberately not plain `js65`: the native exe sits next
+         to the consuming app, and a host app could itself be named `js65`. -->
     <_Js65HermesExeName Condition="$([MSBuild]::IsOsPlatform('Windows'))">js65-hermes.exe</_Js65HermesExeName>
     <_Js65HermesExeName Condition="'$(_Js65HermesExeName)' == ''">js65-hermes</_Js65HermesExeName>
-    <!-- Host executable produced by `bun run hermes-exe` (repo build/ folder). -->
-    <_Js65HermesLocalExe>$(MSBuildProjectDirectory)/../../../build/$(_Js65HermesExeName)</_Js65HermesLocalExe>
+    <!-- The default js65 binary produced by `bun run hermes-exe` is the Hermes build (repo build/ folder). -->
+    <_Js65HermesBuildName Condition="$([MSBuild]::IsOsPlatform('Windows'))">js65.exe</_Js65HermesBuildName>
+    <_Js65HermesBuildName Condition="'$(_Js65HermesBuildName)' == ''">js65</_Js65HermesBuildName>
+    <_Js65HermesLocalExe>$(MSBuildProjectDirectory)/../../../build/$(_Js65HermesBuildName)</_Js65HermesLocalExe>
   </PropertyGroup>
 
   <ItemGroup>
