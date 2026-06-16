@@ -9,7 +9,8 @@
     "quickjs-bundle": "bun build ./integrations/quickjs.ts --outfile ./build/quickjs.bundle.js --format esm --target node --external qjs:std --external qjs:os",
     "quickjs-exe": "bun run quickjs-bundle && qjs -c ./build/quickjs.bundle.js -o ./build/js65-qjs",
     "hermes-exe": "bun run integrations/hermes/hermes-build.ts",
-    "bench": "bun run bench/bench.ts"
+    "build": "bun run --no-exit-on-error --parallel exe hermes-exe quickjs-exe",
+    "bench": "bun run build && bun run bench/bench.ts"
   },
   "bin": {
     "js65": "target/release/bin/js65"

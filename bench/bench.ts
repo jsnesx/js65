@@ -7,6 +7,8 @@
  *
  * Run:  bun run bench
  *   optionally restrict to some frontends:  bun run bench -- bun quickjs
+ *   quickjs is skipped by default (too slow); name it explicitly to include
+ *   it:  bun run bench -- quickjs   (or  bun run bench -- bun quickjs hermes)
  *   tune workload via env vars:
  *     BENCH_RUNS (default 5)        timed runs per (scenario, frontend)
  *     BENCH_WARMUP (default 1)      untimed warmup runs
@@ -32,14 +34,16 @@ const DIR = 'build/bench';
 mkdirSync(DIR, { recursive: true });
 const ext = process.platform === 'win32' ? '.exe' : '';
 
-// --- frontends under test (extend this list) -----------------------------
-const FRONTENDS: Array<{ label: string; path: string }> = [
+// `skipByDefault` frontends are only run when named explicitly on the command
+// line (e.g. `bun run bench -- quickjs`). quickjs is slow enough that running
+// it on every `bun run bench` is more annoying than useful.
+const FRONTENDS: Array<{ label: string; path: string; skipByDefault?: boolean }> = [
   { label: 'bun', path: `build/js65${ext}` },
-  { label: 'quickjs', path: `build/js65-qjs${ext}` },
+  { label: 'quickjs', path: `build/js65-qjs${ext}`, skipByDefault: true },
   { label: 'hermes', path: `build/js65-hermes${ext}` },
 ];
 
-// --- tunables ------------------------------------------------------------
+// Parameters pulled from the environment to tune the benchmarks
 const envInt = (name: string, dflt: number) => {
   const v = process.env[name];
   const n = v ? parseInt(v, 10) : NaN;
@@ -53,7 +57,6 @@ const XLARGE = envInt('BENCH_XLARGE', 50000);
 const MACROS = envInt('BENCH_MACROS', 5000);
 const PATCH_PAIRS = envInt('BENCH_PATCHES', 500);
 
-// --- workload generators -------------------------------------------------
 const hex = (n: number) => (n & 0xff).toString(16).padStart(2, '0');
 
 function genLarge(count: number): string {
@@ -101,7 +104,7 @@ const scenarios: Scenario[] = [
 ];
 for (const s of scenarios) writeFileSync(`${DIR}/${s.name}.s`, s.source);
 
-// --- stats helpers -------------------------------------------------------
+
 interface Stats { min: number; max: number; avg: number; runs: number }
 function summarize(xs: number[]): Stats {
   const sum = xs.reduce((a, b) => a + b, 0);
@@ -111,12 +114,17 @@ const ms = (n: number) => `${n.toFixed(1)} ms`;
 // unbuffered write so progress shows live even when stdout is piped
 const say = (line = '') => process.stderr.write(line + '\n');
 
-// --- select frontends ----------------------------------------------------
 interface Frontend { label: string; path: string; size: number }
 const filter = Bun.argv.slice(2);
 const frontends: Frontend[] = [];
 for (const f of FRONTENDS) {
-  if (filter.length > 0 && !filter.includes(f.label)) continue;
+  if (filter.length > 0) {
+    // Explicit list given: run exactly those, even skip-by-default ones.
+    if (!filter.includes(f.label)) continue;
+  } else if (f.skipByDefault) {
+    say(`(skipping ${f.label} by default; run \`bun run bench -- ${f.label}\` to include it)`);
+    continue;
+  }
   if (!existsSync(f.path)) { say(`(skipping ${f.label}: ${f.path} not found)`); continue; }
   frontends.push({ ...f, size: statSync(f.path).size });
 }
@@ -134,7 +142,6 @@ function timeRun(bin: string, args: string[]): number {
   return t1 - t0;
 }
 
-// --- run -----------------------------------------------------------------
 say(`\njs65 frontend benchmark  (${RUNS} runs each, +${WARMUP} warmup; lower is better)`);
 say(`frontends: ${frontends.map((f) => f.label).join(', ')}\n`);
 
@@ -158,7 +165,7 @@ for (const s of scenarios) {
   say('');
 }
 
-// --- final comparison table ----------------------------------------------
+// Prints the final comparison table
 function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((h, c) => Math.max(h.length, ...rows.map((r) => r[c].length)));
   const fmtRow = (cells: string[]) => '| ' + cells.map((c, i) => c.padEnd(widths[i])).join(' | ') + ' |';
