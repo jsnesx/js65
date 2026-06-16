@@ -84,7 +84,11 @@ const g = globalThis as Record<string, unknown>;
 if (typeof g.TextEncoder === 'undefined') g.TextEncoder = Utf8Encoder;
 if (typeof g.TextDecoder === 'undefined') g.TextDecoder = Utf8Decoder;
 
-// --- path + filesystem helpers -------------------------------------------
+// Strip a leading UTF-8 BOM from input source files. js65 internals aren't setup to handle that atm.
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 function resolvePath(base: string, file: string): string {
   if (!file || file === '.') return base || '.';
   // Absolute path (POSIX or Windows drive/UNC)?
@@ -97,7 +101,7 @@ function resolvePath(base: string, file: string): string {
 const cli = new Cli({
   fsReadString: async (path: string, filename: string): Promise<string> => {
     if (filename === Cli.STDIN) return __js65_stdinText();
-    return __js65_readText(resolvePath(path, filename));
+    return stripBom(__js65_readText(resolvePath(path, filename)));
   },
   fsReadBytes: async (path: string, filename: string): Promise<Uint8Array> => {
     return (filename === Cli.STDIN) ? __js65_stdinBytes() : __js65_readBytes(resolvePath(path, filename));
@@ -126,7 +130,7 @@ async function runJsonMode(): Promise<void> {
   const env = JSON.parse(__js65_stdinText());
 
   const readText = (basePath: string, filePath: string): string => {
-    return __js65_readText(resolvePath(basePath, filePath));
+    return stripBom(__js65_readText(resolvePath(basePath, filePath)));
   };
   const readBinary = (basePath: string, filePath: string): string => {
     return new Base64().encode(__js65_readBytes(resolvePath(basePath, filePath)));

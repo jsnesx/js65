@@ -30,12 +30,21 @@ vanillaRom[0x10 + 0x1e000 + 5] = 0x60; // rts
 
 // The assembler is a C# container for the command list that will be passed to the assembler.
 // You can have as many of these as you want, and apply them to the rom in whatever order you want.
-var asm = new ClearScriptEngine {
-  Options = {
-    includePaths = ["./"],
-    lineContinuations = true,
-  },
-};
+//
+// js65 ships two desktop engines. Pass `--hermes` to drive the standalone Static Hermes executable
+// otherwise the in-process ClearScript/V8 engine is used. You only need to use one or the other
+// in your application. Hermes is about 5x smaller but also 5x slower. So which one you use is up to you.
+var useHermes = args.Contains("--hermes");
+Console.WriteLine($"Using {(useHermes ? "Hermes" : "ClearScript")} engine");
+
+// Both engines derive from Assembler, so the rest of the demo is engine-agnostic. The Hermes engine
+// shells out to a native process, so file includes resolve against its working directory; point it at
+// the output folder where example.s is copied (mirrors how ClearScript resolves relative to the exe).
+Assembler asm = useHermes
+  ? new HermesEngine(workingDirectory: AppContext.BaseDirectory)
+  : new ClearScriptEngine();
+asm.Options.includePaths = ["./"];
+asm.Options.lineContinuations = true;
 
 
 // Lets pretend the game is using the MMC5 mapper with 16kb banking
@@ -174,6 +183,16 @@ asm.Module().Code("""
 
 var result = await asm.Apply(vanillaRom.ToArray());
 
+// The assembler sends the result with warning/error messages and a boolean `success` to let you know if the romdata is valid.
+foreach (var msg in result.messages)
+  Console.WriteLine($"  [{msg.level}] {msg.message}");
+if (!result.success || result.romdata.Length < vanillaRom.Count)
+{
+  Console.Error.WriteLine($"Assembly failed (success={result.success}, romdata={result.romdata.Length} bytes)");
+  return 1;
+}
+
 Console.WriteLine("Test patch to call the new armor subtract function");
 Console.WriteLine($"sbc,x instruction should be patched to jsr ($20): ${result.romdata[0x10 + 0x0005]:x2}");
 Console.WriteLine($"included file should write constant ($89) at address $8089: ${result.romdata[0x10 + 0x0089]:x2}");
+return 0;

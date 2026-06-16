@@ -13,6 +13,11 @@ import * as os from 'qjs:os';
 
 declare const scriptArgs: string[];
 
+// Strip a leading UTF-8 BOM from source files, js65 internals aren't setup to handle that atm.
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 function resolvePath(base: string, file: string): string {
   if (!file || file === '.') return base || '.';
   // Absolute path (POSIX or Windows drive/UNC)?
@@ -79,7 +84,7 @@ const cli = new Cli({
     if (filename === Cli.STDIN) return std.in.readAsString();
     const data = std.loadFile(resolvePath(path, filename));
     if (data === null) throw new Error(`Could not read file: ${resolvePath(path, filename)}`);
-    return data;
+    return stripBom(data);
   },
   fsReadBytes: async (path: string, filename: string): Promise<Uint8Array> => {
     return (filename === Cli.STDIN) ? readAllStdinBytes() : readFileBytes(resolvePath(path, filename));
@@ -107,7 +112,7 @@ async function runJsonMode(): Promise<void> {
   const readText = (basePath: string, filePath: string): string => {
     const s = std.loadFile(resolvePath(basePath, filePath));
     if (s === null) throw new Error(`Could not read file: ${resolvePath(basePath, filePath)}`);
-    return s;
+    return stripBom(s);
   };
   const readBinary = (basePath: string, filePath: string): string => {
     return new Base64().encode(readFileBytes(resolvePath(basePath, filePath)));

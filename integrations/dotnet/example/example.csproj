@@ -6,7 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <!-- Only the browser target is WASM; the desktop net8.0 target builds for the host RID so it can
+         run either desktop engine (ClearScript in-process, or the native Hermes subprocess). -->
+    <RuntimeIdentifier Condition="'$(TargetFramework)' == 'net8.0-browser'">browser-wasm</RuntimeIdentifier>
     <AllowUnsafeBlocks Condition="'$(TargetFramework)' == 'net8.0-browser'">true</AllowUnsafeBlocks>
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
   </PropertyGroup>
@@ -15,6 +17,7 @@
        no per-platform native PackageReferences needed here anymore. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <ProjectReference Include="..\js65.clearscript\js65.clearscript.csproj" />
+    <ProjectReference Include="..\js65.hermes\js65.hermes.csproj" />
   </ItemGroup>
 
   <!-- Browser-only references -->
