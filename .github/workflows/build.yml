@@ -30,7 +30,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout js65
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Build Static Hermes toolchain
         uses: ./.github/actions/hermes_compiler
         with:
@@ -64,7 +64,7 @@ jobs:
             cp build/js65 "dist/js65-${{ matrix.rid }}"
           fi
       - name: Upload hermes binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hermes-${{ matrix.rid }}
           path: dist/*
@@ -88,9 +88,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
       - name: Install WASM workload
@@ -107,7 +107,7 @@ jobs:
       - name: Build integration library
         run: bun run lib
       - name: Download native js65 (hermes) for this platform
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: hermes-${{ matrix.rid }}
           path: hermes-bin
@@ -132,7 +132,7 @@ jobs:
           dotnet run -c Release --project integrations/dotnet/example/example.csproj -f net8.0 -- --hermes
           dotnet build -c Release integrations/dotnet/example/example.csproj -f net8.0-browser
       - name: Upload bun artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: js65-bun-${{ matrix.rid }}
           path: |
@@ -143,9 +143,9 @@ jobs:
     needs: [test, hermes]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
       - name: Install WASM workload
@@ -158,7 +158,7 @@ jobs:
       - name: Build integration library
         run: bun run lib
       - name: Download all native js65 (hermes) binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: hermes-*
           path: hermes-bin
@@ -185,7 +185,7 @@ jobs:
           dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/
           dotnet pack -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj --output build/nuget/
       - name: Upload NuGet artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nuget-packages
           path: build/nuget/*.nupkg
@@ -204,12 +204,12 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
       - name: Download NuGet packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: nuget/
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
       - name: NuGet push
