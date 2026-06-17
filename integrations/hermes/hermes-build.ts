@@ -20,6 +20,7 @@ import { existsSync, readdirSync } from 'fs';
 
 const isWin = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
+const isMac = process.platform === 'darwin';
 const exe = isWin ? '.exe' : '';
 const env = (k: string, d: string) => process.env[k] ?? d;
 
@@ -63,10 +64,13 @@ const LIBDIRS = [
 ];
 
 
-// winmm: Hermes timers. icuuc/icuin: Windows 10 built-in ICU that hermesvm
-// references for Unicode (Hermes links these into its own executables via
-// hermes_link_icu; we link the static libs directly, so we add them here).
-const PLATFORM_LIBS = isWin ? ['winmm', 'icuuc', 'icuin'] : isLinux ? ['dl', 'pthread'] : [];
+// List of platform libraries we need to include in the link for hermes
+// just found through trial error.
+const PLATFORM_LIBS = isWin
+  ? ['winmm', 'icuuc', 'icuin']
+  : isLinux
+    ? ['dl', 'pthread', 'icui18n', 'icuuc', 'icudata']
+    : [];
 const LIBS = ['hermesvm_a', 'shermes_console_a', 'jsi', 'boost_context', ...PLATFORM_LIBS];
 
 // Match the CRT/STL the Hermes libs were built with. On Windows the prebuilt
@@ -75,11 +79,10 @@ const CRT = isWin ? ['-fms-runtime-lib=dll'] : [];
 
 // Build our own objects as LTO bitcode too, so the final link can optimize
 // across them and the Hermes VM/JSI libraries. CMake's
-// INTERPROCEDURAL_OPTIMIZATION emits ThinLTO for clang, so match that mode;
-// it composes with the libs' bitcode (and degrades to a no-op against the
-// plain native libs of a non-LTO Hermes build). LTO needs an LTO-capable
-// linker, so use lld for the final link.
+// INTERPROCEDURAL_OPTIMIZATION emits ThinLTO for clang, so match that mode
+// Mac's default linker already supports LTO so we don't need to specify lld
 const LTO = ['-flto=thin'];
+const LINKER = isMac ? [] : ['-fuse-ld=lld'];
 
 // boost_context lives under external/boost/<version>/libs/context; the version
 // is pinned by the Hermes build, so locate it rather than hard-code it. Fail
@@ -142,7 +145,7 @@ run('clang++ host', CLANGXX, [
 
 // 4. link
 run('link', CLANGXX, [
-  ...CRT, ...LTO, '-fuse-ld=lld',
+  ...CRT, ...LTO, ...LINKER,
   'build/hermes.unit.o', 'build/hermes_host.o', '-o', OUT,
   ...LIBDIRS.map((d) => `-L${d}`),
   ...LIBS.map((l) => `-l${l}`),
