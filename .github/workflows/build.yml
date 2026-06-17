@@ -38,6 +38,11 @@ jobs:
         with:
           # Pin to a commit on Hermes' static_h branch for reproducible builds.
           hermes-ref: ccc48ff6c0d7c0d9a54e5f42b56dc0df15439608
+      - name: Install ICU dev libraries (Linux)
+        # hermesvm references system ICU for Unicode; the final clang++ link
+        # needs the -dev .so symlinks (the runtime package ships only .so.NN).
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libicu-dev
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
@@ -80,8 +85,6 @@ jobs:
             rid: win-x64
           - os: ubuntu-latest
             rid: linux-x64
-          - os: macos-13
-            rid: osx-x64
           - os: macos-latest
             rid: osx-arm64
     runs-on: ${{ matrix.os }}
