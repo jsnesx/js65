@@ -41,12 +41,11 @@ runs:
     - name: Build shermes (LTO)
       if: steps.shermes-cache.outputs.cache-hit != 'true'
       shell: bash
+      # We use GNU clang across all platforms (even windows)
+      # because in my testing, clang produces much much faster shermes code.
+      # I'm guessing its because computed goto in clang makes for much faster
+      # interpreters, so its just always gonna be better than msvc builds.
       run: |
-        # Build the whole VM with clang/clang++ + ThinLTO so the bitcode in the
-        # static libs is consumable by the clang++ link in `bun run hermes-exe`.
-        # clang targets the MSVC ABI on Windows, matching the host link; the
-        # GNU driver (not clang-cl) is used everywhere so Hermes' GCC_COMPATIBLE
-        # path applies on all platforms (clang-cl mis-handles -fno-exceptions).
         EXTRA=()
         if [ "$RUNNER_OS" = "Windows" ]; then
           # clang targeting *-windows-msvc runs in MS-compat mode and does not
@@ -66,4 +65,4 @@ runs:
           -DCMAKE_C_COMPILER=clang \
           -DCMAKE_CXX_COMPILER=clang++ \
           "${EXTRA[@]}"
-        cmake --build hermes/build --target shermes hermesvm_a shermes_console_a jsi
+        cmake --build hermes/build --parallel --target shermes hermesvm_a shermes_console_a jsi

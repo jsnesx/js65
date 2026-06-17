@@ -73,6 +73,11 @@ const PLATFORM_LIBS = isWin
     : [];
 const LIBS = ['hermesvm_a', 'shermes_console_a', 'jsi', 'boost_context', ...PLATFORM_LIBS];
 
+// On macOS, hermesvm uses CoreFoundation (CFLocale/CFString/CFDateFormatter)
+// for Unicode instead of ICU, so link the framework. Frameworks aren't -l libs;
+// they need their own -framework flag.
+const MAC_FRAMEWORKS = isMac ? ['-framework', 'CoreFoundation'] : [];
+
 // Match the CRT/STL the Hermes libs were built with. On Windows the prebuilt
 // libs use the dynamic CRT (/MD); elsewhere the default STL already matches.
 const CRT = isWin ? ['-fms-runtime-lib=dll'] : [];
@@ -149,6 +154,7 @@ run('link', CLANGXX, [
   'build/hermes.unit.o', 'build/hermes_host.o', '-o', OUT,
   ...LIBDIRS.map((d) => `-L${d}`),
   ...LIBS.map((l) => `-l${l}`),
+  ...MAC_FRAMEWORKS,
 ]);
 
 process.stderr.write(`\nBuilt ${OUT}\n`);
