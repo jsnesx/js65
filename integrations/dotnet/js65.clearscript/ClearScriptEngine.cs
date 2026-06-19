@@ -56,7 +56,8 @@ public class ClearScriptEngine : Assembler, IDisposable
     public override async Task<Js65CompileResult> Apply(byte[] rom, CancellationToken ct = default)
     {
         _engine.AddHostTypes(typeof(Task), typeof(Console), typeof(JavaScriptExtensions), typeof(Js65Callbacks), typeof(Js65Options));
-        _engine.AddHostObject("FileCallbacks", Callbacks);
+        // Clearscript doesn't handle null objects, so just default if its missing.
+        _engine.AddHostObject("FileCallbacks", Callbacks ?? new Js65Callbacks());
         // The JS polls hostCancel.IsCancellationRequested; a boxed CancellationToken still
         // reflects cancellation because the struct references the underlying token source.
         _engine.AddHostObject("hostCancel", ct);
