@@ -35,7 +35,7 @@ runs:
           hermes/build/tools/shermes
           hermes/build/jsi
           hermes/build/external/boost
-        key: shermes-${{ runner.os }}-${{ inputs.hermes-ref }}-lto-v2
+        key: shermes-${{ runner.os }}-${{ inputs.hermes-ref }}-lto-pic-v3
     - name: Build shermes (LTO)
       if: steps.shermes-cache.outputs.cache-hit != 'true'
       shell: bash
@@ -55,6 +55,7 @@ runs:
         cmake -S hermes -B hermes/build -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DHERMES_ALLOW_BOOST_CONTEXT=1 \
           -DHERMES_ENABLE_DEBUGGER=OFF \
           -DHERMES_BUILD_SHARED_JSI=OFF \

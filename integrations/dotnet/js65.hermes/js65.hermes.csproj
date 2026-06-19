@@ -9,14 +9,12 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Embedded name HermesEngine looks for. Deliberately not plain `js65`: the native exe sits next
-         to the consuming app, and a host app could itself be named `js65`. -->
-    <_Js65HermesExeName Condition="$([MSBuild]::IsOsPlatform('Windows'))">js65-hermes.exe</_Js65HermesExeName>
-    <_Js65HermesExeName Condition="'$(_Js65HermesExeName)' == ''">js65-hermes</_Js65HermesExeName>
-    <!-- The default js65 binary produced by `bun run hermes-exe` is the Hermes build (repo build/ folder). -->
-    <_Js65HermesBuildName Condition="$([MSBuild]::IsOsPlatform('Windows'))">js65.exe</_Js65HermesBuildName>
-    <_Js65HermesBuildName Condition="'$(_Js65HermesBuildName)' == ''">js65</_Js65HermesBuildName>
-    <_Js65HermesLocalExe>$(MSBuildProjectDirectory)/../../../build/$(_Js65HermesBuildName)</_Js65HermesLocalExe>
+    <!-- Per-platform shared library produced by `bun run hermes-exe`, loaded in-process by
+         HermesEngine via P/Invoke. The name matches what HermesEngine.NativeFileName() looks for. -->
+    <_Js65LibName Condition="$([MSBuild]::IsOsPlatform('Windows'))">js65.dll</_Js65LibName>
+    <_Js65LibName Condition="$([MSBuild]::IsOsPlatform('OSX'))">libjs65.dylib</_Js65LibName>
+    <_Js65LibName Condition="'$(_Js65LibName)' == ''">libjs65.so</_Js65LibName>
+    <_Js65LocalLib>$(MSBuildProjectDirectory)/../../../build/$(_Js65LibName)</_Js65LocalLib>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,15 +22,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Package layout: every platform's executable lives under runtimes/{rid}/native/. NuGet's
+    <!-- Package layout: every platform's shared library lives under runtimes/{rid}/native/. NuGet's
          RID asset selection then deploys only the consumer's target platform at publish time,
          exactly like the ClearScript native V8 packages. CI populates runtimes/{rid}/native/ with
          the per-platform builds before `dotnet pack`; the folder is git-ignored (see .gitignore). -->
     <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)" />
-    <!-- Local build / ProjectReference: copy the host executable produced by `bun run hermes-exe`
-         next to the output (flattened), so HermesEngine can find and launch it without publishing. -->
-    <None Include="$(_Js65HermesLocalExe)" Condition="Exists('$(_Js65HermesLocalExe)')"
-          Pack="false" Link="$(_Js65HermesExeName)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Local build / ProjectReference: copy the shared library produced by `bun run hermes-exe`
+         next to the output (keeping its platform name), so HermesEngine can load it without publishing. -->
+    <None Include="$(_Js65LocalLib)" Condition="Exists('$(_Js65LocalLib)')"
+          Pack="false" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

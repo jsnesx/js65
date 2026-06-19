@@ -9,8 +9,7 @@ import { Cpu } from './cpu.ts';
 import { clean, smudge } from './smudge.ts';
 import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
-import { assemble, link, type AssemblyInput, type AssemblerOptions, type LinkerOptions, type OutputFormat, type FileCallbacks } from './libassembler.ts';
-import { SourceContents } from './tokenstream.ts';
+import { compile, findOutput, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
 
 export interface CompileOptions {
@@ -37,12 +36,15 @@ class Arguments {
   op: ((src: string, cpu: Cpu, prg: Uint8Array) => string) | undefined = undefined;
   rom = "";
   files : string[] = [];
-  target = '';
-  debugLevel = 0; // -1 = disabled, 0 = comments/labels only, 1 = full source
   dbgfile = "";
   compileonly = false;
-  includePaths : string[] = [];
   patch : "ips" | "" = "";
+  options: Js65Options = {
+    includePaths: [],
+    lineContinuations: true,
+    debugLevel: 0, // -1 = disabled, 0 = comments/labels only, 1 = full source
+    generateDebugInfo: true,
+  };
 }
 
 const DEBUG_PRINT = false;
@@ -57,8 +59,6 @@ export class Cli {
   public static readonly STDIN : string = "//stdin";
   public static readonly STDOUT : string = "//stdout";
 
-  sourceContents: SourceContents = new SourceContents();
-
   constructor(readonly callbacks: Callbacks) {
     this.callbacks = callbacks;
   }
@@ -68,7 +68,6 @@ export class Cli {
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (arg === '-h' || arg === '--help') {
-        DEBUG("test help");
         this.usage(0);
       } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
         if (out.outfile) this.usage();
@@ -77,13 +76,17 @@ export class Cli {
         if (out.dbgfile) this.usage();
         out.dbgfile = args[++i];
       } else if (arg === '-g' || arg === '-g0') {
-        out.debugLevel = 0; // Comments and labels only
+        out.options.debugLevel = 0; // Comments and labels only
+        out.options.generateDebugInfo = true;
       } else if (arg === '-g1') {
-        out.debugLevel = 1; // Full source code
+        out.options.debugLevel = 1; // Full source code
+        out.options.generateDebugInfo = true;
       } else if (arg === '--no-debuginfo') {
-        out.debugLevel = -1; // Disable debug info generation
+        out.options.debugLevel = -1; // Disable debug info generation
+        out.options.generateDebugInfo = false;
       } else if (arg === '-c' || arg === '--compileonly') {
         out.compileonly = true;
+        out.options.outputFormat = 'object';
       } else if (arg.startsWith('--output=')) {
         if (out.outfile) this.usage();
         out.outfile = arg.substring('--output='.length);
@@ -98,17 +101,18 @@ export class Cli {
       } else if (arg.startsWith('--rom=')) {
         out.rom = arg.substring('--rom='.length);
       } else if (arg === '-I' || arg === '--include-dir') {
-        out.includePaths.push(args[++i]);
+        out.options.includePaths!.push(args[++i]);
       } else if (arg === '--ips') {
         out.patch = "ips";
+        out.options.outputFormat = 'ips';
       } else if (arg.startsWith('-I')) {
-        out.includePaths.push(arg.substring('-I'.length));
+        out.options.includePaths!.push(arg.substring('-I'.length));
       } else if (arg.startsWith('--include-dir')) {
-        out.includePaths.push(arg.substring('--include-dir'.length));
+        out.options.includePaths!.push(arg.substring('--include-dir'.length));
       } else if (arg === '--target') {
-        out.target = args[++i];
+        out.options.target = args[++i];
       } else if (arg.startsWith('--target=')) {
-        out.target = arg.substring('--target='.length);
+        out.options.target = arg.substring('--target='.length);
       } else {
         out.files.push(arg);
       }
@@ -117,11 +121,8 @@ export class Cli {
   }
 
   public async run(argv: string[]) {
-    DEBUG(`run: argv ${argv}`);
-
     const args = this.parseArgs(argv);
 
-    DEBUG(`parsed args: ${JSON.stringify(args)}`);
     if (args.files.length === 0) {
       return this.usage(1, [new Error("No input files provided")]);
     }
@@ -148,7 +149,6 @@ export class Cli {
 
         args.outfile = `${filename}${ext}`;
     }
-    DEBUG(`outfile: ${args.outfile}`);
 
     try {
       if (args.op !== undefined) {
@@ -162,84 +162,29 @@ export class Cli {
         inputs.push({ type: 'source', code, name: file });
       }
 
-      // Prepare options
-      const assemblerOpts: AssemblerOptions = {
-        includePaths: args.files[0] ? [
-          args.files[0].substring(0, args.files[0].lastIndexOf("/")),
-          ...args.includePaths
-        ] : args.includePaths,
-        lineContinuations: true,
-        generateDebugInfo: args.debugLevel >= 0,
-      };
+      // Seed the include path with the first file's directory
+      args.options.includePaths = args.files[0] ? [
+        args.files[0].substring(0, args.files[0].lastIndexOf("/")),
+        ...(args.options.includePaths ?? [])
+      ] : (args.options.includePaths ?? []);
+
+      // Load base ROM if specified
+      let baseRom: Uint8Array | undefined;
+      if (args.rom) {
+        let romData = await this.callbacks.fsReadBytes("", args.rom);
+        if (typeof romData === "string") romData = new Base64().decode(romData);
+        baseRom = romData;
+      }
 
       const callbacks: FileCallbacks = {
         readText: this.callbacks.fsReadString,
         readBinary: this.callbacks.fsReadBytes
       };
 
-      if (args.compileonly) {
-        DEBUG("stopping before linking cause --compileonly");
-        // Assemble only, no linking
-        const { modules, messages } = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
+      const result = await compile(inputs, args.options, callbacks, baseRom);
 
-        // Print any messages
-        if (messages.length > 0) {
-          this.printMessages(messages);
-        }
-
-        // Check for errors
-        const hasErrors = messages.some(m => m.level === 'error');
-        if (hasErrors) {
-          this.callbacks.exit(1);
-          return;
-        }
-
-        const module = JSON.stringify(modules[0], (k, v) => {
-          if (k === "data" && typeof v === "object") {
-            // v == Uint8Array
-            return v.toString('base64');
-          }
-          return v;
-        }, "  ");
-        await this.callbacks.fsWriteString("", args.outfile, module);
-        return;
-      }
-
-      const linkerOpts: LinkerOptions = {
-        target: args.target,
-        debugLevel: args.debugLevel
-      };
-
-      // Load base ROM if specified
-      if (args.rom) {
-        let romData = await this.callbacks.fsReadBytes("", args.rom);
-        if (typeof romData === "string") romData = new Base64().decode(romData);
-        linkerOpts.baseRom = romData;
-      }
-
-      const outputFormat: OutputFormat = args.patch === "ips" ? "ips" : "binary";
-
-      // Assemble and link with debug info
-      const { modules, messages } = await assemble(inputs, assemblerOpts, callbacks, this.sourceContents);
-
-      // Print any assembly messages
-      if (messages.length > 0) {
-        this.printMessages(messages);
-      }
-
-      // Check for assembly errors
-      const hasAssemblyErrors = messages.some(m => m.level === 'error');
-      if (hasAssemblyErrors) {
-        this.callbacks.exit(1);
-        return;
-      }
-
-      const result = link(modules, linkerOpts, outputFormat, this.sourceContents, messages);
-
-      // Print any additional link messages
-      const newMessages = result.messages.slice(messages.length);
-      if (newMessages.length > 0) {
-        this.printMessages(newMessages);
+      if (result.messages.length > 0) {
+        this.printMessages(result.messages);
       }
 
       if (!result.success) {
@@ -247,11 +192,14 @@ export class Cli {
         return;
       }
 
-      await this.callbacks.fsWriteBytes("", args.outfile, result.data);
+      // The linked ROM / first artifact goes to outfile for now
+      const primary = result.outputs.find(o => o.type !== 'debug') ?? result.outputs[0];
+      await this.callbacks.fsWriteBytes("", args.outfile, primary.data);
 
       // Write debug info if requested
-      if (args.dbgfile && result.debugInfo) {
-        await this.callbacks.fsWriteString("", args.dbgfile, result.debugInfo);
+      const debug = findOutput(result, 'debug');
+      if (args.dbgfile && debug) {
+        await this.callbacks.fsWriteBytes("", args.dbgfile, debug.data);
       }
     } catch (e) {
       this.printerrors(e);
@@ -260,28 +208,19 @@ export class Cli {
   }
 
   async smudge(args: Arguments) {
-    DEBUG(`op ${args.op}`);
     if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
-    DEBUG("test8");
     const src = await this.callbacks.fsReadString("",args.files[0]);
     // if (err) this.usage(3, [err]);
-    DEBUG("test9");
     let fullRom: Uint8Array|undefined = undefined;
     if (args.rom) {
-      DEBUG("test10");
       let inbytes = await this.callbacks.fsReadBytes("",args.rom);
       fullRom = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
       // if (err) this.usage(4, [err]);
     } else {
-      DEBUG("test11");
       const match = /smudge sha1 ([0-9a-f]{40})/.exec(src!);
-      DEBUG("test12");
       if (match === undefined) this.usage(1, [new Error('no sha1 tag, must specify rom')]);
-      DEBUG("test13");
       const shaTag = match![1];
-      DEBUG("test14");
       await this.callbacks.fsWalk('.', async(filename) => {
-        DEBUG("test callback");
         if (/\.nes$/.test(filename)) {
           let inbytes = await this.callbacks.fsReadBytes("",filename);
           inbytes = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
@@ -298,11 +237,9 @@ export class Cli {
         return false;
       }
       );
-      DEBUG("test15");
       if (!fullRom) this.usage(1, [new Error(`could not find rom with sha ${shaTag}`)]);
     }
 
-    DEBUG("test16");
     // TODO - read the header properly
     const prg = fullRom!.subarray(0x10, 0x40010);
     await this.callbacks.fsWriteString("", args.outfile, args.op!(src!, Cpu.P02, prg));

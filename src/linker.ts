@@ -78,12 +78,12 @@ export class Linker {
     return this;
   }
 
-  link(): SparseByteArray {
+  link(signal?: { readonly aborted: boolean }): SparseByteArray {
     const target = Targets.get(this.opts.target?.toLowerCase())
     if (target) {
       target.segments.forEach( seg => this._link.addRawSegment(seg) );
     }
-    return this._link.link();
+    return this._link.link(signal);
   }
 
   report(verbose = false) {
@@ -971,7 +971,7 @@ class Link {
     throw new Error(`Unable to fully resolve expr${at}`);
   }
 
-  link(): SparseByteArray {
+  link(signal?: { readonly aborted: boolean }): SparseByteArray {
     // Build up the LinkSegment objects
     for (const [name, segments] of this.rawSegments) {
       let s = segments[0];
@@ -1044,6 +1044,7 @@ class Link {
 
     let count = this.resolvedChunks.length + 2 * this.unresolvedChunks.size;
     while (count) {
+      if (signal?.aborted) throw new Error('Compilation cancelled');
       const c = this.resolvedChunks.pop();
       if (c) {
         this.placeChunk(c);

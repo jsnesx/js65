@@ -31,17 +31,15 @@ vanillaRom[0x10 + 0x1e000 + 5] = 0x60; // rts
 // The assembler is a C# container for the command list that will be passed to the assembler.
 // You can have as many of these as you want, and apply them to the rom in whatever order you want.
 //
-// js65 ships two desktop engines. Pass `--hermes` to drive the standalone Static Hermes executable
+// js65 ships two desktop engines. Pass `--hermes` to use the in-process Static Hermes shared library
 // otherwise the in-process ClearScript/V8 engine is used. You only need to use one or the other
 // in your application. Hermes is about 5x smaller but also 5x slower. So which one you use is up to you.
 var useHermes = args.Contains("--hermes");
 Console.WriteLine($"Using {(useHermes ? "Hermes" : "ClearScript")} engine");
 
-// Both engines derive from Assembler, so the rest of the demo is engine-agnostic. The Hermes engine
-// shells out to a native process, so file includes resolve against its working directory; point it at
-// the output folder where example.s is copied (mirrors how ClearScript resolves relative to the exe).
+// Both engines derive from Assembler, so the rest of the demo is engine-agnostic.
 Assembler asm = useHermes
-  ? new HermesEngine(workingDirectory: AppContext.BaseDirectory)
+  ? new HermesEngine()
   : new ClearScriptEngine();
 asm.Options.includePaths = ["./"];
 asm.Options.lineContinuations = true;
@@ -195,4 +193,73 @@ if (!result.success || result.romdata.Length < vanillaRom.Count)
 Console.WriteLine("Test patch to call the new armor subtract function");
 Console.WriteLine($"sbc,x instruction should be patched to jsr ($20): ${result.romdata[0x10 + 0x0005]:x2}");
 Console.WriteLine($"included file should write constant ($89) at address $8089: ${result.romdata[0x10 + 0x0089]:x2}");
+
+// Second mini-example demonstrating how to use Callbacks
+// Both desktop engines resolve .include / .incbin through Js65Callbacks.
+// The default load file callbacks will read from disk, but you can override them to load from where you want.
+// In this example, we serve one straight from memory with nothing on disk. Pass
+// useFileSystemCallbacks: false to opt out of the default disk loader, then supply your own.
+Console.WriteLine();
+Console.WriteLine("Custom callback demo: serving an include from memory");
+Assembler memAsm = useHermes
+  ? new HermesEngine(useFileSystemCallbacks: false)
+  : new ClearScriptEngine(useFileSystemCallbacks: false);
+memAsm.Options.includePaths = ["./"];
+memAsm.Callbacks = new Js65Callbacks
+{
+  OnFileReadText = (_, relPath) => relPath.EndsWith("constants.inc")
+    ? "CUSTOM_CONSTANT = $42\n"
+    : throw new FileNotFoundException(relPath),
+  OnFileReadBinary = (_, relPath) => throw new FileNotFoundException(relPath),
+};
+memAsm.Module().Code("""
+.segment "HEADER" :bank $00 :size $0010 :mem $0000 :off $00000
+.segment "PRG0"   :bank $00 :size $4000 :mem $8000 :off $00010
+.segment "CHR"    :size $20000 :off $20010 :out
+""", "header.s");
+memAsm.Module().Code("""
+.include "constants.inc"
+.segment "PRG0"
+.org $8050
+.byte CUSTOM_CONSTANT
+""", "patch.s");
+
+var memResult = await memAsm.Apply(vanillaRom.ToArray());
+foreach (var msg in memResult.messages)
+  Console.WriteLine($"  [{msg.level}] {msg.message}");
+Console.WriteLine($"in-memory constant ($42) written at $8050: ${memResult.romdata[0x10 + 0x0050]:x2}");
+if (!memResult.success || memResult.romdata[0x10 + 0x0050] != 0x42)
+{
+  Console.Error.WriteLine("Custom callback demo failed");
+  return 1;
+}
+
+// Cancellation demo: cancellation is cooperative inside the assembler.
+// Here we cancel up front; in practice you'd cancel a long compile
+// from another thread (or via CancellationTokenSource(timeout)).
+Console.WriteLine();
+Console.WriteLine("Cancellation demo: applying with an already-cancelled token");
+Assembler cancelAsm = useHermes
+  ? new HermesEngine(useFileSystemCallbacks: false)
+  : new ClearScriptEngine(useFileSystemCallbacks: false);
+cancelAsm.Options.lineContinuations = true;
+cancelAsm.Module().Code("""
+.segment "HEADER" :bank $00 :size $0010 :mem $0000 :off $00000
+.segment "PRG0"   :bank $00 :size $4000 :mem $8000 :off $00010
+.segment "CHR"    :size $20000 :off $20010 :out
+.org $8000
+lda #$01
+""", "cancel.s");
+using var cts = new CancellationTokenSource();
+cts.Cancel();
+try
+{
+  await cancelAsm.Apply(vanillaRom.ToArray(), cts.Token);
+  Console.Error.WriteLine("Cancellation demo failed: expected OperationCanceledException");
+  return 1;
+}
+catch (OperationCanceledException)
+{
+  Console.WriteLine("Apply correctly threw OperationCanceledException for a cancelled token");
+}
 return 0;

@@ -651,16 +651,14 @@ export class Assembler {
     }
   }
 
-  // Assemble from a token source
-  async tokens(source: Tokens.Source) {
+  // Assemble from a token source. The optional signal is polled once per line so a long
+  // assembly can be cancelled cooperatively; an aborted signal throws, which the caller
+  // (compile) turns into an ordinary failure result.
+  async tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }) {
     let line;
     while ((line = await source.next())) {
-      // console.log(`running line:`);
-      // console.log(`${JSON.stringify(line)}`);
+      if (signal?.aborted) throw new Error('Compilation cancelled');
       await this.line(line);
-      // console.log(`checking output:`);
-      // console.log(`${JSON.stringify(this.currentScope.global.symbols)}`);
-      // console.log(`\n\n`);
     }
   }
 

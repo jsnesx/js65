@@ -11,20 +11,35 @@
 // A UTF-8 TextEncoder/TextDecoder polyfill is provided since Hermes ships none.
 
 import { Cli } from '../../src/cli.ts';
-import { Base64, compileActionsBrowser } from '../../src/libassembler.ts';
+import { compileRequest } from '../../src/libassembler.ts';
 
-// Host functions installed by hermes_host.cpp.
+// Host functions installed by the C++ host (hermes_core.cpp + the active entry).
 declare const __js65_args: () => string[];
-declare const __js65_readText: (fullpath: string) => string;
-declare const __js65_readBytes: (fullpath: string) => Uint8Array;
+// Reads take the include base and requested file separately so the host resolves them:
+// the CLI joins them and reads disk; the shared library forwards to the caller's pointers.
+declare const __js65_cbReadText: (basePath: string, relPath: string) => string;
+declare const __js65_cbReadBinary: (basePath: string, relPath: string) => Uint8Array;
 declare const __js65_writeText: (fullpath: string, data: string) => void;
 declare const __js65_writeBytes: (fullpath: string, data: Uint8Array) => void;
+declare const __js65_listFiles: (dir: string) => string[];
+declare const __js65_exit: (code: number) => void;
+// CLI-only I/O.
 declare const __js65_stdinText: () => string;
 declare const __js65_stdinBytes: () => Uint8Array;
 declare const __js65_stdoutText: (data: string) => void;
 declare const __js65_stdoutBytes: (data: Uint8Array) => void;
-declare const __js65_listFiles: (dir: string) => string[];
-declare const __js65_exit: (code: number) => void;
+// Shared-library result building: the host assembles a typed Js65Result struct from these
+// calls rather than parsing a serialized string. __js65_resultAddMessage returns the new
+// message's index; source frames are pushed innermost-first up the include/macro stack.
+declare const __js65_request: () => string;
+declare const __js65_baseRom: () => Uint8Array;
+// Polled by the assembler core; reads the host-owned cancel flag set from another thread.
+declare const __js65_cancelled: () => boolean;
+declare const __js65_resultBegin: (success: boolean) => void;
+declare const __js65_resultAddOutput: (name: string, data: Uint8Array, type: string) => void;
+declare const __js65_resultAddMessage: (level: string, message: string, stack: string | null) => number;
+declare const __js65_resultAddSourceFrame: (
+  messageIndex: number, ident: string | null, file: string, line: number, column: number) => void;
 
 // --- UTF-8 TextEncoder / TextDecoder polyfill ----------------------------
 class Utf8Encoder {
@@ -101,10 +116,10 @@ function resolvePath(base: string, file: string): string {
 const cli = new Cli({
   fsReadString: async (path: string, filename: string): Promise<string> => {
     if (filename === Cli.STDIN) return __js65_stdinText();
-    return stripBom(__js65_readText(resolvePath(path, filename)));
+    return stripBom(__js65_cbReadText(path, filename));
   },
   fsReadBytes: async (path: string, filename: string): Promise<Uint8Array> => {
-    return (filename === Cli.STDIN) ? __js65_stdinBytes() : __js65_readBytes(resolvePath(path, filename));
+    return (filename === Cli.STDIN) ? __js65_stdinBytes() : __js65_cbReadBinary(path, filename);
   },
   fsWriteString: async (path: string, filename: string, data: string): Promise<void> => {
     if (filename === Cli.STDOUT) { __js65_stdoutText(data); return; }
@@ -123,35 +138,39 @@ const cli = new Cli({
   exit: (code: number) => __js65_exit(code),
 });
 
-// `--json` mode: read one request envelope from stdin, forward it to the
-// existing compileActionsBrowser, and write the base64 result to stdout. This
-// backs the js65.desktop subprocess engine.
-async function runJsonMode(): Promise<void> {
-  const env = JSON.parse(__js65_stdinText());
-
-  const readText = (basePath: string, filePath: string): string => {
-    return stripBom(__js65_readText(resolvePath(basePath, filePath)));
-  };
-  const readBinary = (basePath: string, filePath: string): string => {
-    return new Base64().encode(__js65_readBytes(resolvePath(basePath, filePath)));
+// `--lib` mode: backs the in-process .NET js65.hermes engine. The result is handed to the
+// host as a typed struct (built via the __js65_result* calls) rather than a serialized
+// string, so the ABI in js65.h stays explicit.
+async function runLibraryMode(): Promise<void> {
+  const callbacks = {
+    readText: async (basePath: string, filePath: string): Promise<string> =>
+      stripBom(__js65_cbReadText(basePath, filePath)),
+    readBinary: async (basePath: string, filePath: string): Promise<Uint8Array> =>
+      __js65_cbReadBinary(basePath, filePath),
   };
 
-  const result = await compileActionsBrowser(
-    JSON.stringify(env.modules ?? []),
-    JSON.stringify(env.assemblerOpts ?? {}),
-    JSON.stringify(env.linkerOpts ?? {}),
-    env.outputFormat ?? 'binary',
-    readText,
-    readBinary,
-    env.useSourceContents ?? false,
-  );
+  // Bare CancelSignal that polls the host cancel flag (Hermes ships no AbortController). The
+  // core reads .aborted at per-line / per-chunk boundaries; another thread flips the flag.
+  const signal = { get aborted() { return __js65_cancelled(); } };
 
-  __js65_stdoutText(result);
+  const baseRom = __js65_baseRom();
+  const result = await compileRequest(__js65_request(), callbacks, baseRom.length ? baseRom : undefined, signal);
+
+  __js65_resultBegin(result.success);
+  for (const output of result.outputs) {
+    __js65_resultAddOutput(output.name, output.data, output.type);
+  }
+  for (const m of result.messages) {
+    const index = __js65_resultAddMessage(m.level, m.message, m.stack ?? null);
+    for (let s = m.source; s; s = s.parent) {
+      __js65_resultAddSourceFrame(index, s.ident ?? null, s.file, s.line, s.column);
+    }
+  }
 }
 
 async function main(args: string[]) {
-  if (args.includes('--json')) {
-    await runJsonMode();
+  if (args.includes('--lib')) {
+    await runLibraryMode();
     return;
   }
   await cli.run(args);
