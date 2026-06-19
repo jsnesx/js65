@@ -59,7 +59,7 @@ jobs:
           HERMES_CONFIG: ''
         run: bun run hermes-exe
       - name: Run Test Cases
-        run: bun test
+        run: bun test ${{ github.workspace }}/test
       - name: Build Bun release (js65-bun)
         run: bun run exe
       - name: Build integration library
