@@ -9,6 +9,9 @@
     <!-- Only the browser target is WASM; the desktop net8.0 target builds for the host RID so it can
          run either desktop engine (ClearScript in-process, or the native Hermes subprocess). -->
     <RuntimeIdentifier Condition="'$(TargetFramework)' == 'net8.0-browser'">browser-wasm</RuntimeIdentifier>
+    <!-- On a 64-bit Windows host the SDK defaults an Exe's PlatformTarget to x64, which is
+         incompatible with the browser-wasm RID so set it to AnyCPU here-->
+    <PlatformTarget Condition="'$(TargetFramework)' == 'net8.0-browser'">AnyCPU</PlatformTarget>
     <AllowUnsafeBlocks Condition="'$(TargetFramework)' == 'net8.0-browser'">true</AllowUnsafeBlocks>
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
   </PropertyGroup>
