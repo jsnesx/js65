@@ -15,8 +15,8 @@ concurrency:
 
 jobs:
   hermes:
-    # Compile the native js65 frontend (Static Hermes build) on every desktop platform. This is now
-    # the default `js65` binary, and it is also bundled into the js65.hermes NuGet package
+    # Compile the native js65 frontend (Static Hermes build) on every desktop platform. This produces
+    # both the default `js65` CLI binary and the shared library bundled into the js65.hermes NuGet package
     strategy:
       fail-fast: false
       matrix:
@@ -54,16 +54,22 @@ jobs:
           # Ninja is single-config, so there is no per-config output subdir.
           HERMES_CONFIG: ''
         run: bun run hermes-exe
-      - name: Stage binary with its RID
+      - name: Stage binaries with their RID
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p dist "dist/lib/${{ matrix.rid }}"
+          # CLI executable.
           if [ -f build/js65.exe ]; then
             cp build/js65.exe "dist/js65-${{ matrix.rid }}.exe"
           else
             cp build/js65 "dist/js65-${{ matrix.rid }}"
           fi
-      - name: Upload hermes binary
+          # Shared library consumed in-process by the js65.hermes engine. Keep the
+          # platform filename (js65.dll | libjs65.so | libjs65.dylib) under a per-RID dir.
+          cp build/js65.dll "dist/lib/${{ matrix.rid }}/" 2>/dev/null || true
+          cp build/libjs65.so "dist/lib/${{ matrix.rid }}/" 2>/dev/null || true
+          cp build/libjs65.dylib "dist/lib/${{ matrix.rid }}/" 2>/dev/null || true
+      - name: Upload hermes binaries
         uses: actions/upload-artifact@v7
         with:
           name: hermes-${{ matrix.rid }}
@@ -111,16 +117,13 @@ jobs:
         with:
           name: hermes-${{ matrix.rid }}
           path: hermes-bin
-      - name: Stage native js65 for the example
+      - name: Stage native js65 shared library for the example
         shell: bash
         run: |
+          # The Hermes engine loads the shared library in-process; js65.hermes.csproj copies
+          # build/{js65.dll|libjs65.so|libjs65.dylib} next to the example output.
           mkdir -p build
-          if [ -f "hermes-bin/js65-${{ matrix.rid }}.exe" ]; then
-            cp "hermes-bin/js65-${{ matrix.rid }}.exe" build/js65.exe
-          else
-            cp "hermes-bin/js65-${{ matrix.rid }}" build/js65
-            chmod +x build/js65
-          fi
+          cp hermes-bin/lib/${{ matrix.rid }}/* build/
       - name: Build desktop packages
         run: |
           dotnet build -c Release integrations/dotnet/js65.interop/js65.interop.csproj
@@ -163,20 +166,18 @@ jobs:
           pattern: hermes-*
           path: hermes-bin
           merge-multiple: true
-      - name: Stage native executables into js65.hermes/runtimes
+      - name: Stage native shared libraries into js65.hermes/runtimes
         shell: bash
         run: |
-          for f in hermes-bin/js65-*; do
-            base=$(basename "$f")        # js65-win-x64.exe | js65-linux-x64
-            name=${base%.*}              # js65-win-x64    | js65-linux-x64 (no-op when no extension)
-            rid=${name#js65-}            # win-x64 | linux-x64 | osx-arm64
-            ext=""
-            [[ "$base" == *.exe ]] && ext=".exe"
+          # Each platform's shared library was staged under dist/lib/{rid}/{platform name};
+          # drop them into the NuGet RID layout keeping their platform filenames.
+          for d in hermes-bin/lib/*/; do
+            rid=$(basename "$d")         # win-x64 | linux-x64 | osx-arm64
             dest="integrations/dotnet/js65.hermes/runtimes/$rid/native"
             mkdir -p "$dest"
-            cp "$f" "$dest/js65-hermes$ext"
+            cp "$d"/* "$dest/"
           done
-          echo "Staged native executables:"
+          echo "Staged native shared libraries:"
           find integrations/dotnet/js65.hermes/runtimes -type f
       - name: Pack NuGet packages
         run: |

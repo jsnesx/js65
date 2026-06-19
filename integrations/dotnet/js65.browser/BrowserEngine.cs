@@ -5,30 +5,6 @@ using System.Text.Json.Serialization;
 
 namespace js65;
 
-internal class BrowserAssemblerOptions
-{
-    [JsonPropertyName("includePaths")]
-    public string[] IncludePaths { get; set; } = [];
-
-    [JsonPropertyName("lineContinuations")]
-    public bool LineContinuations { get; set; }
-
-    [JsonPropertyName("numberSeparators")]
-    public bool NumberSeparators { get; set; }
-
-    [JsonPropertyName("generateDebugInfo")]
-    public bool GenerateDebugInfo { get; set; }
-}
-
-internal class BrowserLinkerOptions
-{
-    [JsonPropertyName("baseRom")]
-    public string BaseRom { get; set; } = "";
-
-    [JsonPropertyName("debugLevel")]
-    public int DebugLevel { get; set; }
-}
-
 // Browser-specific source info for JSON deserialization
 internal class BrowserSourceInfo
 {
@@ -64,17 +40,29 @@ internal class BrowserAssemblerMessage
     public string? Stack { get; set; }
 }
 
-// Browser-specific result class that matches the JS output (base64 strings)
+// Browser-specific output file for JSON deserialization (data is base64-encoded: the
+// result is an async JSImport return, where binary can only marshal as a boxed number
+// array, so a base64 blob is the pragmatic transport).
+internal class BrowserOutputFile
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "binary";
+
+    [JsonPropertyName("data")]
+    public string Data { get; set; } = "";
+}
+
+// Browser-specific result class that matches compileBrowser's JSON output (base64 strings).
 internal class BrowserCompileResult
 {
     [JsonPropertyName("success")]
     public bool Success { get; set; }
 
-    [JsonPropertyName("romdata")]
-    public string Romdata { get; set; } = "";
-
-    [JsonPropertyName("debugfile")]
-    public string Debugfile { get; set; } = "";
+    [JsonPropertyName("outputs")]
+    public BrowserOutputFile[] Outputs { get; set; } = [];
 
     [JsonPropertyName("messages")]
     public BrowserAssemblerMessage[] Messages { get; set; } = [];
@@ -84,8 +72,7 @@ internal class BrowserCompileResult
 [JsonSerializable(typeof(Js65Options))]
 [JsonSerializable(typeof(Js65Callbacks))]
 [JsonSerializable(typeof(Js65CompileResult))]
-[JsonSerializable(typeof(BrowserAssemblerOptions))]
-[JsonSerializable(typeof(BrowserLinkerOptions))]
+[JsonSerializable(typeof(BrowserOutputFile))]
 [JsonSerializable(typeof(BrowserCompileResult))]
 [JsonSerializable(typeof(BrowserSourceInfo))]
 [JsonSerializable(typeof(BrowserAssemblerMessage))]
@@ -119,18 +106,24 @@ public class JsFileCallbackConfig
 [SupportedOSPlatform("browser")]
 public partial class BrowserJsEngine : Assembler
 {
-    [JSImport("compileActionsBrowser", "js65.interop.libassembler.js")]
+    // Calls libassembler's compileBrowser. We have this strange entrypoint because of the JsInterop
+    // restrictions which prevent us from marshalling a raw list of bytes, so we work around it
+    // by stringifying pretty much everything.
+    [JSImport("compileBrowser", "js65.interop.libassembler.js")]
     [return: JSMarshalAs<JSType.Promise<JSType.String>>]
-    private static partial Task<string> CompileActionsBrowser(
-        string modulesJson,
-        string assemblerOptsJson,
-        string linkerOptsJson,
-        string outputFormat,
+    private static partial Task<string> CompileBrowser(
+        string requestJson,
         [JSMarshalAs<JSType.Function<JSType.String,JSType.String,JSType.String>>]
         Func<string, string, string> textCallback,
         [JSMarshalAs<JSType.Function<JSType.String,JSType.String,JSType.String>>]
         Func<string, string, string> binaryCallback,
-        bool useSourceContents
+        [JSMarshalAs<JSType.Array<JSType.Number>>]
+        byte[] baseRom,
+        // Polled by the core for cooperative cancellation. Best-effort under single-threaded
+        // WASM: the token only flips while .NET runs, so cancellation is observed at the
+        // file-callback await boundaries rather than mid pure-compute.
+        [JSMarshalAs<JSType.Function<JSType.Boolean>>]
+        Func<bool> shouldCancel
     );
 
     // Interop helper for dynamic module imports
@@ -164,7 +157,7 @@ public partial class BrowserJsEngine : Assembler
         _interopModule = JSHost.ImportAsync("js65.interop.js", "../js65/interop.js");
     }
 
-    public override async Task<Js65CompileResult> Apply(byte[] rom)
+    public override async Task<Js65CompileResult> Apply(byte[] rom, CancellationToken ct = default)
     {
         // Import required modules
         _ = await _module;
@@ -176,37 +169,22 @@ public partial class BrowserJsEngine : Assembler
             _fileCallbackModule = await ImportModule(_fileCallbackConfig.ModulePath);
         }
 
-        var modulesJson = SerializeModulesToJson();
+        var requestJson = BuildRequest();
 
-        // Construct assembler options
-        var assemblerOpts = new BrowserAssemblerOptions
-        {
-            IncludePaths = Options.includePaths.ToArray(),
-            LineContinuations = Options.lineContinuations,
-            NumberSeparators = Options.numberSeperators,
-            GenerateDebugInfo = Options.generateDebugInfo
-        };
-        var assemblerOptsJson = JsonSerializer.Serialize(assemblerOpts, AssmeblerContext.Default.BrowserAssemblerOptions);
-
-        // Construct linker options
-        var linkerOpts = new BrowserLinkerOptions
-        {
-            BaseRom = Convert.ToBase64String(rom),
-            DebugLevel = Options.debugLevel
-        };
-        var linkerOptsJson = JsonSerializer.Serialize(linkerOpts, AssmeblerContext.Default.BrowserLinkerOptions);
-
-        var output = await CompileActionsBrowser(
-            modulesJson,
-            assemblerOptsJson,
-            linkerOptsJson,
-            "binary",
+        // The base ROM crosses as a proper binary byte[] param; the result returns as a
+        // base64-encoded JSON string (see CompileBrowser for why these two differ).
+        var output = await CompileBrowser(
+            requestJson,
             LoadTextFileCallback,
             LoadBinaryFileCallback,
-            Options.generateDebugInfo
+            rom,
+            () => ct.IsCancellationRequested
         );
 
-        // Deserialize to browser-specific format (base64 strings) and convert to Js65CompileResult
+        // A cancelled compile returns a clean failure result; surface the .NET cancellation
+        // signal to the caller instead.
+        ct.ThrowIfCancellationRequested();
+
         var browserResult = JsonSerializer.Deserialize(Convert.FromBase64String(output), AssmeblerContext.Default.BrowserCompileResult);
         if (browserResult == null)
         {
@@ -219,8 +197,12 @@ public partial class BrowserJsEngine : Assembler
         return new Js65CompileResult
         {
             success = browserResult.Success,
-            romdata = Convert.FromBase64String(browserResult.Romdata),
-            debugfile = browserResult.Debugfile,
+            outputs = browserResult.Outputs.Select(o => new Js65OutputFile
+            {
+                name = o.Name,
+                type = o.Type,
+                data = Convert.FromBase64String(o.Data),
+            }).ToArray(),
             messages = ConvertMessages(browserResult.Messages)
         };
     }
@@ -267,6 +249,8 @@ public partial class BrowserJsEngine : Assembler
         return "";
     }
 
+    // Returns base64: this is a JSImport delegate callback, and .NET WASM cannot marshal
+    // arrays through callbacks, so include bytes have to cross as a string.
     private string LoadBinaryFileCallback(string basePath, string filePath)
     {
         // C# callbacks take precedence
@@ -275,7 +259,7 @@ public partial class BrowserJsEngine : Assembler
             return Convert.ToBase64String(Callbacks.OnFileReadBinary.Invoke(basePath, filePath));
         }
 
-        // Fall back to JS module callback if configured
+        // Fall back to JS module callback if configured (also returns base64).
         if (_fileCallbackModule != null && _fileCallbackConfig != null)
         {
             var fullPath = CombinePath(basePath, filePath);

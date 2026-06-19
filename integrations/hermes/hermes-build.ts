@@ -89,6 +89,13 @@ const CRT = isWin ? ['-fms-runtime-lib=dll'] : [];
 const LTO = ['-flto=thin'];
 const LINKER = isMac ? [] : ['-fuse-ld=lld'];
 
+// The shared library link (-shared) needs position-independent code; the same PIC
+// objects link fine into the executable, so build PIC once and reuse for both. On
+// Windows PIC is the default / not a concept, so these are no-ops. Hidden visibility
+// keeps everything but the JS65_EXPORT-marked C ABI out of the .so/.dylib symbol table.
+const PIC = isWin ? [] : ['-fPIC'];
+const VISIBILITY = isWin ? [] : ['-fvisibility=hidden'];
+
 // boost_context lives under external/boost/<version>/libs/context; the version
 // is pinned by the Hermes build, so locate it rather than hard-code it. Fail
 // loudly if it can't be found so the error is actionable, instead of guessing a
@@ -138,23 +145,37 @@ run('shermes unit', SHERMES, [
   '-exported-unit', 'js65', '-c',
   `-Wc,-I${HERMES_BUILD}/lib/config`, `-Wc,-I${HERMES_SRC}/include`,
   ...LTO.map((f) => `-Wc,${f}`),
+  ...PIC.map((f) => `-Wc,${f}`),
   '-o', 'build/hermes.unit.o', 'build/hermes.bundle.js',
 ], { CC: CLANG });
 
-// 3. compile the C++ host (basically the code that acts as a small OS runtime for the CLI)
-run('clang++ host', CLANGXX, [
-  '-c', '-std=c++17', '-O2', ...CRT, ...LTO,
-  ...INC.map((i) => `-I${i}`),
-  'integrations/hermes/hermes_host.cpp', '-o', 'build/hermes_host.o',
-]);
+// 3. compile the C++ host sources. hermes_core.cpp is the shared runtime/bindings core;
+// hermes_host.cpp is the CLI entry (main + stdin/stdout); hermes_lib.cpp is the shared
+// library entry (the js65_compile C ABI). All share one set of flags.
+const compile = (src: string, obj: string) =>
+  run(`clang++ ${src}`, CLANGXX, [
+    '-c', '-std=c++17', '-O2', ...CRT, ...LTO, ...PIC, ...VISIBILITY,
+    ...INC.map((i) => `-I${i}`),
+    `integrations/hermes/${src}`, '-o', `build/${obj}`,
+  ]);
+compile('hermes_core.cpp', 'hermes_core.o');
+compile('hermes_host.cpp', 'hermes_host.o');
+compile('hermes_lib.cpp', 'hermes_lib.o');
 
-// 4. link
-run('link', CLANGXX, [
-  ...CRT, ...LTO, ...LINKER,
-  'build/hermes.unit.o', 'build/hermes_host.o', '-o', OUT,
-  ...LIBDIRS.map((d) => `-L${d}`),
-  ...LIBS.map((l) => `-l${l}`),
-  ...MAC_FRAMEWORKS,
-]);
+// 4. link the unit + core + an entry object against the static Hermes VM libs.
+const link = (out: string, entryObj: string, extra: string[]) =>
+  run(`link ${out}`, CLANGXX, [
+    ...CRT, ...LTO, ...LINKER, ...extra,
+    'build/hermes.unit.o', 'build/hermes_core.o', `build/${entryObj}`, '-o', out,
+    ...LIBDIRS.map((d) => `-L${d}`),
+    ...LIBS.map((l) => `-l${l}`),
+    ...MAC_FRAMEWORKS,
+  ]);
 
-process.stderr.write(`\nBuilt ${OUT}\n`);
+// The CLI executable...
+link(OUT, 'hermes_host.o', []);
+// ...and the shared library used by the in-process .NET js65.hermes engine.
+const DLL = `build/${isWin ? 'js65.dll' : isMac ? 'libjs65.dylib' : 'libjs65.so'}`;
+link(DLL, 'hermes_lib.o', ['-shared']);
+
+process.stderr.write(`\nBuilt ${OUT}\nBuilt ${DLL}\n`);

@@ -17,7 +17,7 @@ import { Base64 } from './base64.ts';
 import type { Chunk, Module, OverwriteMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { SourceInfo } from './token.ts';
-import type { ActionSource, AssemblyAction } from './libassembler.ts';
+import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
 
 export type Validated<T> =
   | { ok: true; value: T }
@@ -112,8 +112,6 @@ function validateExpr(v: unknown, path: string): Expr {
   }
   return out;
 }
-
-// --- Module pieces ---------------------------------------------------------
 
 function validateSubstitution(v: unknown, path: string): Substitution {
   if (!isObject(v)) fail(path, 'expected object');
@@ -262,9 +260,8 @@ function validateActionSource(v: unknown, path: string): ActionSource {
   };
 }
 
-// `bytes`/`words` arrive either as a Uint8Array (the base64 handler in
-// compileActionsBrowser already decoded a base64 string) or as a literal array
-// of numbers / `{op:'sym', sym}` references.
+// `bytes`/`words` arrive either as a Uint8Array (a JSON reviver already decoded
+// a base64 string) or as a literal array of numbers / `{op:'sym', sym}` references.
 function validateByteList(v: unknown, path: string): Array<number | { op: 'sym'; sym: string }> {
   if (v instanceof Uint8Array) return Array.from(v);
   const arr = reqArray(v, path);
@@ -335,7 +332,7 @@ function validateAction(v: unknown, path: string): AssemblyAction {
 
 /**
  * Validate a parsed-JSON object as `AssemblyAction[][]` (the programmatic
- * action lists fed by the desktop/subprocess and browser paths).
+ * action lists fed by integration libraries).
  */
 export function parseActionModules(obj: unknown): Validated<AssemblyAction[][]> {
   try {
@@ -345,6 +342,82 @@ export function parseActionModules(obj: unknown): Validated<AssemblyAction[][]> 
       return actions.map((a, j) => validateAction(a, `modules[${i}][${j}]`));
     });
     return { ok: true, value };
+  } catch (err) {
+    if (err instanceof ValidationError) return { ok: false, error: err.message };
+    throw err;
+  }
+}
+
+function validateInput(v: unknown, path: string): AssemblyInput {
+  if (!isObject(v)) fail(path, 'expected object');
+  const type = reqString(v.type, `${path}.type`);
+  switch (type) {
+    case 'source':
+      return {
+        type: 'source',
+        code: reqString(v.code, `${path}.code`),
+        name: reqString(v.name, `${path}.name`),
+      };
+    case 'module': {
+      const mod = parseModule(v.module);
+      if (!mod.ok) fail(`${path}.module`, mod.error);
+      return { type: 'module', module: mod.value };
+    }
+    case 'actions': {
+      const actions = reqArray(v.actions, `${path}.actions`)
+        .map((a, i) => validateAction(a, `${path}.actions[${i}]`));
+      const name = optString(v.name, `${path}.name`);
+      return name !== undefined ? { type: 'actions', actions, name } : { type: 'actions', actions };
+    }
+    default:
+      fail(`${path}.type`, `unknown input type "${type}"`);
+  }
+}
+
+/**
+ * Validate a parsed-JSON array as `AssemblyInput[]` to make sure each action is fine
+ */
+export function parseInputs(arr: unknown): AssemblyInput[] {
+  const inputs = reqArray(arr, 'inputs');
+  return inputs.map((v, i) => validateInput(v, `inputs[${i}]`));
+}
+
+const OUTPUT_FORMATS = new Set<string>(['binary', 'ips', 'object']);
+
+function validateOptions(v: unknown, path: string): Js65Options {
+  if (v === undefined) return {};
+  if (!isObject(v)) fail(path, 'expected object');
+  const out: Js65Options = {};
+  if (v.includePaths !== undefined) {
+    out.includePaths = reqArray(v.includePaths, `${path}.includePaths`)
+      .map((s, i) => reqString(s, `${path}.includePaths[${i}]`));
+  }
+  const lineContinuations = optBoolean(v.lineContinuations, `${path}.lineContinuations`);
+  if (lineContinuations !== undefined) out.lineContinuations = lineContinuations;
+  const numberSeparators = optBoolean(v.numberSeparators, `${path}.numberSeparators`);
+  if (numberSeparators !== undefined) out.numberSeparators = numberSeparators;
+  const generateDebugInfo = optBoolean(v.generateDebugInfo, `${path}.generateDebugInfo`);
+  if (generateDebugInfo !== undefined) out.generateDebugInfo = generateDebugInfo;
+  const debugLevel = optNumber(v.debugLevel, `${path}.debugLevel`);
+  if (debugLevel !== undefined) out.debugLevel = debugLevel;
+  const target = optString(v.target, `${path}.target`);
+  if (target !== undefined) out.target = target;
+  const baseRomOffset = optNumber(v.baseRomOffset, `${path}.baseRomOffset`);
+  if (baseRomOffset !== undefined) out.baseRomOffset = baseRomOffset;
+  if (v.outputFormat !== undefined) {
+    const fmt = reqString(v.outputFormat, `${path}.outputFormat`);
+    if (!OUTPUT_FORMATS.has(fmt)) fail(`${path}.outputFormat`, 'expected one of binary|ips|object');
+    out.outputFormat = fmt as OutputFormat;
+  }
+  return out;
+}
+
+export function parseRequest(obj: unknown): Validated<Js65Request> {
+  try {
+    if (!isObject(obj)) fail('request', 'expected object');
+    const inputs = parseInputs(obj.inputs);
+    const options = validateOptions(obj.options, 'request.options');
+    return { ok: true, value: { inputs, options } };
   } catch (err) {
     if (err instanceof ValidationError) return { ok: false, error: err.message };
     throw err;

@@ -8,13 +8,12 @@
 import {describe, it, expect} from 'bun:test';
 import {MesenLabelFormat} from '../src/linker.ts';
 import {compile} from '../src/libassembler.ts';
-import {SourceContents} from '../src/tokenstream.ts';
 
 async function assembleAndGetDebugInfo(source: string, filename: string = 'test.s', debugLevel: number = 0): Promise<MesenLabelFormat[]> {
-  const sourceContents = new SourceContents();
   const opts = {
     lineContinuations: true,
-    generateDebugInfo: true
+    generateDebugInfo: true,
+    debugLevel
   };
 
   const initsrc = { type: 'source' as const, name: 'init.s', code: `
@@ -29,13 +28,11 @@ FREE "FIXED" [$c000, $10000)
 
   const modulesrc = { type: 'source' as const, name: filename, code: source };
 
-  const linkerOpts = {
-    debugLevel: debugLevel
-  };
-  const res = await compile([initsrc, modulesrc], opts, linkerOpts, 'binary', undefined, sourceContents);
-  // console.log("debinfo\n", res.debugInfo);
+  const res = await compile([initsrc, modulesrc], opts);
+  const debug = res.outputs.find(o => o.type === 'debug');
+  const debugInfo = debug ? new TextDecoder().decode(debug.data) : '';
 
-  const mlb = parseMlb(res.debugInfo);
+  const mlb = parseMlb(debugInfo);
   // console.log("mlb ", mlb);
   return mlb;
 }

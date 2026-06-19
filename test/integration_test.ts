@@ -6,13 +6,12 @@
  */
 
 import {describe, it, expect} from 'bun:test';
-import {compile, type AssemblyInput} from '../src/libassembler.ts';
-import {SourceContents} from '../src/tokenstream.ts';
+import {compile, compileRequest, type AssemblyInput} from '../src/libassembler.ts';
 
 async function compileSource(source: string, filename: string = 'test.s'): Promise<Uint8Array> {
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
-  const result = await compile([input], { lineContinuations: true }, {}, 'binary');
-  return result.data;
+  const result = await compile([input], { lineContinuations: true });
+  return result.outputs[0].data;
 }
 
 async function compileWithBaseRom(source: string, baseRom: Uint8Array, filename: string = 'test.s'): Promise<Uint8Array> {
@@ -24,13 +23,13 @@ async function compileWithBaseRom(source: string, baseRom: Uint8Array, filename:
 FREE "PRG" [$8000, $10000)
 `};
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
-  const result = await compile([initsrc, input], { lineContinuations: true }, { baseRom }, 'binary');
-  return result.data;
+  const result = await compile([initsrc, input], { lineContinuations: true }, undefined, baseRom);
+  return result.outputs[0].data;
 }
 
 async function expectCompileError(source: string, errorMatch?: string | RegExp): Promise<Error> {
   const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-  const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+  const result = await compile([input], { lineContinuations: true });
 
   if (result.success) {
     throw new Error('Expected compilation to fail but it succeeded');
@@ -54,6 +53,62 @@ async function expectCompileError(source: string, errorMatch?: string | RegExp):
 }
 
 describe('End to end test cases', function() {
+  describe('compileRequest data handling', function() {
+    it('returns a failure result (not a throw) for malformed JSON', async function() {
+      const result = await compileRequest('{ not valid json');
+      expect(result.success).toBe(false);
+      expect(result.outputs).toEqual([]);
+      expect(result.messages.some(m => m.level === 'error')).toBe(true);
+    });
+
+    it('returns a failure result (not a throw) for an invalid request shape', async function() {
+      const result = await compileRequest(JSON.stringify({ inputs: 'not-an-array' }));
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => m.level === 'error' && /Invalid compile request/.test(m.message))).toBe(true);
+    });
+
+    it('compiles well-formed data', async function() {
+      const req = JSON.stringify({
+        inputs: [{ type: 'source', name: 'test.s', code: '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\nlda #$42\n' }],
+        options: { lineContinuations: true },
+      });
+      const result = await compileRequest(req);
+      expect(result.success).toBe(true);
+      expect(result.outputs.find(o => o.type === 'binary')).toBeTruthy();
+    });
+  });
+
+  describe('cancellation', function() {
+    it('returns a cancelled failure result (not a throw) when the signal is already aborted', async function() {
+      const input: AssemblyInput = { type: 'source', name: 'test.s', code: '.org $8000\nlda #$42\n' };
+      const result = await compile([input], { lineContinuations: true }, undefined, undefined, { aborted: true });
+      expect(result.success).toBe(false);
+      expect(result.outputs).toEqual([]);
+      expect(result.messages.some(m => m.level === 'error' && /cancelled/i.test(m.message))).toBe(true);
+    });
+
+    it('cancels mid-assembly at the per-line boundary', async function() {
+      // Stay un-aborted long enough to clear compile()'s top check and assemble()'s per-input
+      // check, then trip inside the per-line tokens() loop.
+      let polls = 0;
+      const signal = { get aborted() { return polls++ > 1; } };
+      const input: AssemblyInput = { type: 'source', name: 'test.s', code: 'lda #$01\nlda #$02\nlda #$03\nlda #$04\n' };
+      const result = await compile([input], { lineContinuations: true }, undefined, undefined, signal);
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => /cancelled/i.test(m.message))).toBe(true);
+    });
+
+    it('compileRequest forwards the cancel signal', async function() {
+      const req = JSON.stringify({
+        inputs: [{ type: 'source', name: 'test.s', code: '.org $8000\nlda #$42\n' }],
+        options: { lineContinuations: true },
+      });
+      const result = await compileRequest(req, undefined, undefined, { aborted: true });
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => /cancelled/i.test(m.message))).toBe(true);
+    });
+  });
+
   describe('Real world tests', function() {
     it('should not cause an infinite loop in symbol resolution', async function() {
       const source = `
@@ -238,13 +293,14 @@ HelperRoutine:
 `
       };
 
-      const result = await compile([mainModule, helperModule], { lineContinuations: true }, {}, 'binary');
-      expect(result.data).toBeTruthy();
+      const result = await compile([mainModule, helperModule], { lineContinuations: true });
+      const data = result.outputs[0].data;
+      expect(data).toBeTruthy();
 
       // Main should have JSR to $8100
-      expect(result.data[0]).toBe(0x20); // JSR
-      expect(result.data[1]).toBe(0x00); // low byte of $8100
-      expect(result.data[2]).toBe(0x81); // high byte of $8100
+      expect(data[0]).toBe(0x20); // JSR
+      expect(data[1]).toBe(0x00); // low byte of $8100
+      expect(data[2]).toBe(0x81); // high byte of $8100
     });
 
     it('should handle circular imports between modules', async function() {
@@ -276,8 +332,8 @@ FuncB:
 `
       };
 
-      const result = await compile([moduleA, moduleB], { lineContinuations: true }, {}, 'binary');
-      expect(result.data).toBeTruthy();
+      const result = await compile([moduleA, moduleB], { lineContinuations: true });
+      expect(result.outputs[0].data).toBeTruthy();
     });
   });
 
@@ -289,20 +345,20 @@ FuncB:
   lda #$42
 `;
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-      const result = await compile([input], { lineContinuations: true }, {}, 'ips');
+      const result = await compile([input], { lineContinuations: true, outputFormat: 'ips' });
+      const data = result.outputs[0].data;
 
       // IPS header is "PATCH"
-      expect(result.data[0]).toBe(0x50); // 'P'
-      expect(result.data[1]).toBe(0x41); // 'A'
-      expect(result.data[2]).toBe(0x54); // 'T'
-      expect(result.data[3]).toBe(0x43); // 'C'
-      expect(result.data[4]).toBe(0x48); // 'H'
+      expect(data[0]).toBe(0x50); // 'P'
+      expect(data[1]).toBe(0x41); // 'A'
+      expect(data[2]).toBe(0x54); // 'T'
+      expect(data[3]).toBe(0x43); // 'C'
+      expect(data[4]).toBe(0x48); // 'H'
     });
   });
 
   describe('Debug info generation', function() {
     it('should generate debug info when requested', async function() {
-      const sourceContents = new SourceContents();
       const source = `
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
@@ -314,15 +370,14 @@ TestLabel:
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
       const result = await compile(
         [input],
-        { lineContinuations: true, generateDebugInfo: true },
-        { debugLevel: 0 },
-        'binary',
-        undefined,
-        sourceContents
+        { lineContinuations: true, generateDebugInfo: true, debugLevel: 0 }
       );
 
-      expect(result.debugInfo).toBeTruthy();
-      expect(result.debugInfo).toContain('TestLabel');
+      const debug = result.outputs.find(o => o.type === 'debug');
+      expect(debug).toBeTruthy();
+      const debugText = new TextDecoder().decode(debug!.data);
+      expect(debugText).toBeTruthy();
+      expect(debugText).toContain('TestLabel');
     });
   });
 
@@ -336,7 +391,7 @@ TestLabel:
   jsr UndefinedSymbol3
 `;
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+      const result = await compile([input], { lineContinuations: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
@@ -360,7 +415,7 @@ AnotherLabel:
   rts
 `;
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+      const result = await compile([input], { lineContinuations: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
@@ -390,7 +445,7 @@ AnotherLabel:
 `
       };
 
-      const result = await compile([file1, file2], { lineContinuations: true }, {}, 'binary');
+      const result = await compile([file1, file2], { lineContinuations: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
@@ -415,7 +470,7 @@ AnotherLabel:
 `
       };
 
-      const result = await compile([module1], { lineContinuations: true }, {}, 'binary');
+      const result = await compile([module1], { lineContinuations: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
@@ -435,9 +490,7 @@ AnotherLabel:
       const input: AssemblyInput = { type: 'source', code: source, name: 'location_test.s' };
       const result = await compile(
         [input],
-        { lineContinuations: true, generateDebugInfo: true },
-        {},
-        'binary'
+        { lineContinuations: true, generateDebugInfo: true }
       );
 
       expect(result.success).toBe(false);
@@ -464,9 +517,7 @@ AnotherLabel:
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
       const result = await compile(
         [input],
-        { lineContinuations: true, generateDebugInfo: true },
-        {},
-        'binary'
+        { lineContinuations: true, generateDebugInfo: true }
       );
 
       expect(result.success).toBe(false);
@@ -487,7 +538,7 @@ ValidLabel:
   lda #$43
 `;
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+      const result = await compile([input], { lineContinuations: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
@@ -504,7 +555,7 @@ ValidLabel:
   nop
 `;
       const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
-      const result = await compile([input], { lineContinuations: true }, {}, 'binary');
+      const result = await compile([input], { lineContinuations: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
