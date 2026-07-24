@@ -44,6 +44,13 @@ export async function main(args: string[]) {
   await cli.run(args);
 }
 
-(async () => {
-  await main(Bun.argv.slice(2));
-})();
+// Jank workaround for a bun problem. With the original async await, bun will terminate
+// when a missing include happened because that promise failed, and it would exit 0
+// So instead of that, we try to gracefully exit as best we can. But to do that we need
+// to keep it alive by setting some timer so there's "something" running
+const keepAlive = setInterval(() => {}, 1 << 30);
+main(Bun.argv.slice(2))
+  .then(() => process.exit(process.exitCode ?? 0),
+        // run() already printed the diagnostic before rethrowing.
+        () => process.exit(1))
+  .finally(() => clearInterval(keepAlive));

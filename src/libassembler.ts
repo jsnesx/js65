@@ -194,139 +194,156 @@ export async function assemble(
     generateDebugInfo: options?.generateDebugInfo
   };
 
-  for (let i = 0; i < inputs.length; i++) {
-    throwIfCancelled(signal);
-    const input = inputs[i];
+  // Reference to the currently processing assembler. If the current file
+  // errors out so horribly that it hits the outer try block, then we'd
+  // lose any error messages from the current assembler (since we aggregate
+  // errors at the end.) This is just a cheeky way to grab errors from that
+  // assembler if it does explode.
+  let currentAssembler: Assembler | undefined;
 
-    if (input.type === 'module') {
-      // Already compiled module, just add it
-      modules.push(input.module);
-      continue;
-    }
+  try {
+    for (let i = 0; i < inputs.length; i++) {
+      throwIfCancelled(signal);
+      const input = inputs[i];
 
-    if (input.type === 'actions') {
-      const asm = new Assembler(Cpu.P02, asmOpts);
-      let module_name = input.name ?? `module_${i}`;
-      const original_module_name = module_name;
-
-      for (const action of input.actions) {
-        // Set source info for debug purposes before processing each action
-        asm.setSource(toSourceInfo(action.source));
-
-        switch (action.action) {
-          case 'code': {
-            // For code actions, we need to tokenize and process through the full pipeline
-            const toks = new TokenStream(
-              callbacks?.readText,
-              callbacks?.readBinary,
-              opts,
-              sourceContents
-            );
-            // Use the first name provided through a code action as the outer module name
-            if (module_name === original_module_name && action.name) {
-              module_name = action.name;
-            }
-            const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
-            toks.enter(tokenizer);
-            const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
-            await asm.tokens(pre, signal);
-            break;
-          }
-
-          case 'label':
-            asm.label(action.label);
-            break;
-
-          case 'byte':
-            asm.byte(...action.bytes);
-            break;
-
-          case 'word':
-            asm.word(...action.words);
-            break;
-
-          case 'org':
-            asm.org(action.addr, action.name);
-            break;
-
-          case 'segment':
-            asm.segment(...action.name);
-            break;
-
-          case 'reloc':
-            asm.reloc(action.name);
-            break;
-
-          case 'export':
-            asm.export(action.name);
-            break;
-
-          case 'assign': {
-            const value = typeof action.value === 'string'
-              ? parseInt(action.value, 10)
-              : action.value;
-            asm.assign(action.name, value);
-            break;
-          }
-
-          case 'set': {
-            const value = typeof action.value === 'string'
-              ? parseInt(action.value, 10)
-              : action.value;
-            asm.set(action.name, value);
-            break;
-          }
-
-          case 'free':
-            asm.free(action.size);
-            break;
-
-          default:
-            console.warn(`Unknown action type:`, action);
-        }
-      }
-
-      const module = asm.module();
-      module.name = module_name;
-      modules.push(module);
-      allMessages.push(...asm.getMessages());
-      continue;
-    }
-
-    // Process source code
-    const asm = new Assembler(Cpu.P02, asmOpts);
-    const toks = new TokenStream(
-      callbacks?.readText,
-      callbacks?.readBinary,
-      opts,
-      sourceContents
-    );
-
-    // Try to parse as JSON Module first (for .o files)
-    try {
-      const obj = JSON.parse(input.code);
-      const parsedModule = parseModule(obj);
-      if (parsedModule.ok) {
-        // Successfully parsed as a module
-        modules.push(parsedModule.value);
+      if (input.type === 'module') {
+        // Already compiled module, just add it
+        modules.push(input.module);
         continue;
       }
-    } catch (_err) {
-      // Not JSON or not a valid module, treat as source code
+
+      if (input.type === 'actions') {
+        const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
+        let module_name = input.name ?? `module_${i}`;
+        const original_module_name = module_name;
+
+        for (const action of input.actions) {
+          // Set source info for debug purposes before processing each action
+          asm.setSource(toSourceInfo(action.source));
+
+          switch (action.action) {
+            case 'code': {
+              // For code actions, we need to tokenize and process through the full pipeline
+              const toks = new TokenStream(
+                callbacks?.readText,
+                callbacks?.readBinary,
+                opts,
+                sourceContents
+              );
+              // Use the first name provided through a code action as the outer module name
+              if (module_name === original_module_name && action.name) {
+                module_name = action.name;
+              }
+              const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
+              toks.enter(tokenizer);
+              const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
+              await asm.tokens(pre, signal);
+              break;
+            }
+
+            case 'label':
+              asm.label(action.label);
+              break;
+
+            case 'byte':
+              asm.byte(...action.bytes);
+              break;
+
+            case 'word':
+              asm.word(...action.words);
+              break;
+
+            case 'org':
+              asm.org(action.addr, action.name);
+              break;
+
+            case 'segment':
+              asm.segment(...action.name);
+              break;
+
+            case 'reloc':
+              asm.reloc(action.name);
+              break;
+
+            case 'export':
+              asm.export(action.name);
+              break;
+
+            case 'assign': {
+              const value = typeof action.value === 'string'
+                ? parseInt(action.value, 10)
+                : action.value;
+              asm.assign(action.name, value);
+              break;
+            }
+
+            case 'set': {
+              const value = typeof action.value === 'string'
+                ? parseInt(action.value, 10)
+                : action.value;
+              asm.set(action.name, value);
+              break;
+            }
+
+            case 'free':
+              asm.free(action.size);
+              break;
+
+            default:
+              console.warn(`Unknown action type:`, action);
+          }
+        }
+
+        const module = asm.module();
+        module.name = module_name;
+        modules.push(module);
+        allMessages.push(...asm.getMessages());
+        currentAssembler = undefined;
+        continue;
+      }
+
+      // Process source code
+      const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
+      const toks = new TokenStream(
+        callbacks?.readText,
+        callbacks?.readBinary,
+        opts,
+        sourceContents
+      );
+
+      // Try to parse as JSON Module first (for .o files)
+      try {
+        const obj = JSON.parse(input.code);
+        const parsedModule = parseModule(obj);
+        if (parsedModule.ok) {
+          // Successfully parsed as a module
+          modules.push(parsedModule.value);
+          continue;
+        }
+      } catch (_err) {
+        // Not JSON or not a valid module, treat as source code
+      }
+
+      // Tokenize and assemble source code
+      const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
+      toks.enter(tokenizer);
+      const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
+      await asm.tokens(pre, signal);
+
+      const module = asm.module();
+      module.name = input.name;
+      modules.push(module);
+
+      // Collect messages from this assembler
+      allMessages.push(...asm.getMessages());
+      currentAssembler = undefined;
     }
-
-    // Tokenize and assemble source code
-    const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
-    toks.enter(tokenizer);
-    const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
-    await asm.tokens(pre, signal);
-
-    const module = asm.module();
-    module.name = input.name;
-    modules.push(module);
-
-    // Collect messages from this assembler
-    allMessages.push(...asm.getMessages());
+  } catch (err) {
+    // if we have currentAssembler, it means there was some unrecoverable error,
+    // so grab whatever messages we can scavenge
+    if (currentAssembler) allMessages.push(...currentAssembler.getMessages());
+    allMessages.push(messageFromException(err));
+    return { success: false, modules, messages: allMessages };
   }
 
   const hasErrors = allMessages.some(m => m.level === 'error');
@@ -442,13 +459,14 @@ export function findOutput(result: CompileResult, type: OutputType): OutputFile 
 }
 
 /**
- * Create a failure CompileResult from an exception
+ * Create a failure CompileResult from an exception. `collected` carries any diagnostics
+ * produced by the assembler that happened before an unrecoverable exception occured
  */
-function failureFromException(err: unknown): CompileResult {
+function failureFromException(err: unknown, collected: AssemblerMessage[] = []): CompileResult {
   return {
     success: false,
     outputs: [],
-    messages: [messageFromException(err)]
+    messages: [...collected, messageFromException(err)]
   };
 }
 
@@ -491,9 +509,7 @@ export function deserializeRequest(requestJson: string): Js65Request {
 
 /**
  * Canonical compile entrypoint: assembles and (unless outputFormat is 'object') links
- * the given typed inputs, returning the structured result. Never throws: failures come
- * back as a failure CompileResult. String-transport callers deserialize their JSON with
- * deserializeRequest() first, then call this with the typed inputs/options.
+ * the given typed inputs, returning the structured result. 
  *
  * @param inputs - sources / modules / action lists to assemble and link
  * @param options - flat options bag (text fields only; baseRom is the separate arg)
@@ -508,6 +524,9 @@ export async function compile(
   signal?: CancelSignal,
 ): Promise<CompileResult> {
   const base64 = new Base64();
+  // Diagnostics produced so far, so a throw later in the pipeline (serializing, linking)
+  // still reports the warnings/errors assembly already found.
+  let collected: AssemblerMessage[] = [];
   try {
     throwIfCancelled(signal);
     const asmOpts: AssemblerOptions = {
@@ -541,6 +560,7 @@ export async function compile(
     };
 
     const asm = await assemble(inputs, asmOpts, fileCallbacks, sourceContents, signal);
+    collected = [...asm.messages];
     if (!asm.success) {
       return { success: false, outputs: [], messages: asm.messages };
     }
@@ -567,7 +587,7 @@ export async function compile(
       messages: lr.messages,
     };
   } catch (err) {
-    return failureFromException(err);
+    return failureFromException(err, collected);
   }
 }
 

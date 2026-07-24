@@ -381,6 +381,52 @@ TestLabel:
     });
   });
 
+  describe('.include resolution', function() {
+    // Only 'inc/' has the file; 'missing/' is searched first so the loop has to fall through.
+    const callbacks = {
+      readText: async (base: string, file: string) => {
+        if (base !== 'inc') throw new Error(`ENOENT ${base}/${file}`);
+        return '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n';
+      },
+      readBinary: async () => { throw new Error('no binaries in this test'); },
+    };
+
+    it('reports a missing include as an error rather than succeeding silently', async function() {
+      const input: AssemblyInput = { type: 'source', code: '.include "nope.s"\n  nop\n', name: 'test.s' };
+      // generateDebugInfo is what makes the tokenizer stamp source info onto tokens, so it
+      // has to be on for the diagnostic to carry a location (the CLI turns it on by default).
+      const result = await compile([input],
+                                   { includePaths: ['missing'], generateDebugInfo: true },
+                                   callbacks);
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBe(1);
+      expect(errors[0].message).toContain('Could not find file nope.s');
+      // The diagnostic points at the .include line, not at the assembler as a whole.
+      expect(errors[0].source?.file).toBe('test.s');
+      expect(errors[0].source?.line).toBe(1);
+    });
+
+    it('falls through to later include directories', async function() {
+      const input: AssemblyInput = { type: 'source', code: '.include "found.s"\n  nop\n', name: 'test.s' };
+      const result = await compile([input], { includePaths: ['missing', 'inc'] }, callbacks);
+
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('keeps diagnostics collected before the failure', async function() {
+      const source = '.warning "earlier warning"\n.include "nope.s"\n';
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { includePaths: ['missing'] }, callbacks);
+
+      expect(result.success).toBe(false);
+      expect(result.messages.filter(m => m.level === 'warning').map(m => m.message))
+          .toEqual(['earlier warning']);
+    });
+  });
+
   describe('Multi-error collection', function() {
     it('should collect multiple assembly errors from different lines', async function() {
       const source = `
