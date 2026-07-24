@@ -27,11 +27,10 @@ export class Define {
   append(define: Define) {
     if (!this.canOverload()) {
       const prevDef = this.overloads[this.overloads.length - 1].definition;
-      const at = prevDef ? Tokens.at(prevDef) : '';
-      const prev = at.replace(/at/, 'previously defined at');
+      // The previous definition is a secondary location, so it stays in the message text.
+      const prev = prevDef ? Tokens.at(prevDef).replace('\n  at', '\n  previously defined at') : '';
       const nextDef = define.overloads[0].definition;
-      const next = nextDef ? Tokens.nameAt(nextDef) : '';
-      throw new Error(`Non-overloadable: ${next}${prev}`);
+      Tokens.fail(`Non-overloadable: ${Tokens.nameOf(nextDef)}${prev}`, nextDef);
     }
     this.overloads.push(...define.overloads);
   }
@@ -68,7 +67,7 @@ export class Define {
       // C-style param list
       const paramEnd = Tokens.findBalanced(macro, 2);
       if (paramEnd < 0) {
-        throw new Error(`Expected close paren ${Tokens.nameAt(macro[2])}`);
+        Tokens.fail(`Expected close paren ${Tokens.nameOf(macro[2])}`, macro[2]);
       }
       overload =
           new CStyleDefine(Tokens.identsFromCList(macro.slice(3, paramEnd)),

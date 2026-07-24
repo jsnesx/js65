@@ -155,8 +155,7 @@ export class TokenStream implements Tokens.Source {
   // }
   
   err(line: Token[]): never {
-    const msg = this.str(line);
-    throw new Error(msg + Tokens.at(line[0]));
+    Tokens.fail(this.str(line), line[0]);
   }
 
   str(line: Token[]): string {

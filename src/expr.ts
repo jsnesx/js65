@@ -305,7 +305,7 @@ export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symb
   const [expr, i] = parse(tokens, index, symbols);
   if (i < tokens.length) {
     parse(tokens, index, symbols);
-    throw new Error(`Garbage after expression: ${Tokens.nameAt(tokens[i])}`);
+    Tokens.fail(`Garbage after expression: ${Tokens.nameOf(tokens[i])}`, tokens[i]);
   } else if (!expr) {
     throw new Error(`No expression?`);
   }
@@ -325,7 +325,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
     const [op, [,, arity]] = ops.pop()!;
 //console.log('pop', op, arity);
     const args = exprs.splice(exprs.length - arity, arity);
-    if (args.length !== arity) throw new Error(`shunting parse failed? ${Tokens.nameAt(tokens[i])}`);
+    if (args.length !== arity) Tokens.fail(`shunting parse failed? ${Tokens.nameOf(tokens[i])}`, tokens[i]);
     exprs.push(fixSize({op, args}));
   }
 
@@ -344,15 +344,15 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
         } else if (front.token === 'cs') {
           const op = front.str;
           if (!FUNCTIONS.has(op)) {
-            throw new Error(`No such function: ${Tokens.nameAt(front)}`);
+            Tokens.fail(`No such function: ${Tokens.nameOf(front)}`, front);
           }
           const next = tokens[i + 1];
           if (next?.token !== 'lp') {
-            throw new Error(`Bad funcall: ${Tokens.nameAt(next ?? front)}`);
+            Tokens.fail(`Bad funcall: ${Tokens.nameOf(next ?? front)}`, next ?? front);
           }
           const close = Tokens.findBalanced(tokens, i + 1);
           if (close < 0) {
-            throw new Error(`Never closed: ${Tokens.nameAt(next)}`);
+            Tokens.fail(`Never closed: ${Tokens.nameOf(next)}`, next);
           }
           const args: Expr[] = [];
           for (const arg of Tokens.parseArgList(tokens, i + 2, close)) {
@@ -365,13 +365,13 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
           exprs.push({op: 'sym', sym: '*'});
           val = false;
         } else {
-          throw new Error(`Unknown prefix operator: ${Tokens.nameAt(front)}`);
+          Tokens.fail(`Unknown prefix operator: ${Tokens.nameOf(front)}`, front);
         }
       } else if (front.token === 'lp') {
         // find balanced parens
         const close = Tokens.findBalanced(tokens, i);
         if (close < 0) {
-          throw new Error(`No close paren: ${Tokens.nameAt(front)}`);
+          Tokens.fail(`No close paren: ${Tokens.nameOf(front)}`, front);
         } // return [undefined, -1];
         const e = parseOnly(tokens.slice(i + 1, close), 0, symbols);
         exprs.push(e);
@@ -395,7 +395,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
         val = false;
       } else {
         // bad token??
-        throw new Error(`Bad expression token: ${Tokens.nameAt(front)}`);
+        Tokens.fail(`Bad expression token: ${Tokens.nameOf(front)}`, front);
         // return [undefined, -1];
       }
     } else {
@@ -415,9 +415,8 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
           const cmp = compareOp(top[1], op);
           if (cmp < 0) break;
           if (cmp === 0) {
-            throw new Error(
-                `Mixing ${top[0]} and ${front.str} needs explicit parens.${
-                  Tokens.at(front)}`);
+            Tokens.fail(
+                `Mixing ${top[0]} and ${front.str} needs explicit parens.`, front);
           }
           popOp();
         }
@@ -435,7 +434,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
   while (ops.length) popOp();
 //console.log('post-pop:', exprs);
   if (!tokens[index]) throw new Error(`No token at ${index}:\n${tokens.map(t => '  ' + Tokens.nameAt(t) + '\n')}`);
-  if (exprs.length !== 1) throw new Error(`expression parse failed: nonunique result ${Tokens.nameAt(tokens[index])}`);
+  if (exprs.length !== 1) Tokens.fail(`expression parse failed: nonunique result ${Tokens.nameOf(tokens[index])}`, tokens[index]);
   if (!exprs[0].source && tokens[index].source)
     exprs[0].source = tokens[index].source;
   return [exprs[0], i];
