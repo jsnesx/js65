@@ -45,17 +45,19 @@ export class TokenStream implements Tokens.Source {
     readonly opts?: Options,
     readonly sourceContents?: SourceContents) {}
 
-  loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>) {
+  // Try each include directory in turn, returning the first that loads.
+  async loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>,
+                    at?: Token): Promise<T> {
     const paths = this.opts?.includePaths ?? ['./'];
     for (const base of paths) {
       try {
-        // console.log(`gonna try including base: ${base} path: ${path}`);
-        return action(base, path);
+        return await action(base, path);
       } catch (_e) {
-        // unable to load the files at that path.
+        // unable to load the file at that path, try the next include directory.
       }
     }
-    throw new Error(`Could not find file ${path} in include directories: ${paths.join(",")}`);
+    // Report against the .include/.incbin line so the diagnostic carries a source location.
+    Tokens.fail(`Could not find file ${path} in include directories: ${paths.join(",")}`, at);
   }
 
   async next(): Promise<Token[]|undefined> {
@@ -70,7 +72,7 @@ export class TokenStream implements Tokens.Source {
             const path = this.str(line);
             if (!this.readFile) this.err(line);
             // TODO - options?
-            const code = await this.loadFile<string>(path, this.readFile);
+            const code = await this.loadFile<string>(path, this.readFile, line[0]);
             this.enter(new Tokenizer(code, path, this.opts, this.sourceContents));
             continue;
           }
@@ -106,7 +108,7 @@ export class TokenStream implements Tokens.Source {
             // The data passed in from the call back can either be base64 encoded or a u8 array
             // but because the user can slice the input, its easier to decode to bytes, then slice
             // then reencode for now.
-            let inbytes = await this.loadFile<Uint8Array|string>(path, this.readFileBinary);
+            let inbytes = await this.loadFile<Uint8Array|string>(path, this.readFileBinary, line[0]);
             inbytes = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
   
             const end = length !== undefined ? offset + length : undefined;
