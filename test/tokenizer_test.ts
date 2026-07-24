@@ -16,6 +16,21 @@ import { TokenStream } from '../src/tokenstream.ts';
 
 const [_] = [util];
 
+// Validate that the error has the proper source info on it
+async function expectSourceError(promise: Promise<unknown>, message: RegExp,
+                                 line: number, column: number) {
+  let err: unknown;
+  try {
+    await promise;
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(Tokens.SourceError);
+  expect((err as Error).message).toMatch(message);
+  expect((err as Tokens.SourceError).source)
+      .toMatchObject({file: 'input.s', line, column});
+}
+
 //const MATCH = Symbol();
 
 async function tokenize(str: string, opts: Options = {}): Promise<Token[][]> {
@@ -240,31 +255,31 @@ describe('Tokenizer.line', function() {
     ]);
   });
 
-  it('should fail to parse a bad hex number', function() {
-    expect(tokenize('  adc $1g')).rejects.toThrow(/Bad hex number.*at input.s:1:6 near '\$1g'/s);
+  it('should fail to parse a bad hex number', async function() {
+    await expectSourceError(tokenize('  adc $1g'), /Bad hex number.*near '\$1g'/s, 1, 6);
   });
 
-  it('should fail to parse a bad decimal number', function() {
-    expect(tokenize('  12a')).rejects.toThrow(/Bad decimal.*at input.s:1:2 near '12a'/s);
+  it('should fail to parse a bad decimal number', async function() {
+    await expectSourceError(tokenize('  12a'), /Bad decimal.*near '12a'/s, 1, 2);
   });
 
-  it('should fail to parse a bad octal number', function() {
-    expect(tokenize('  018')).rejects.toThrow(/Bad octal.*at input.s:1:2 near '018'/s);
+  it('should fail to parse a bad octal number', async function() {
+    await expectSourceError(tokenize('  018'), /Bad octal.*near '018'/s, 1, 2);
   });
 
-  it('should fail to parse a bad binary number', function() {
-    expect(tokenize('  %012')).rejects.toThrow(/Bad binary.*at input.s:1:2 near '%012'/s);
+  it('should fail to parse a bad binary number', async function() {
+    await expectSourceError(tokenize('  %012'), /Bad binary.*near '%012'/s, 1, 2);
   });
 
-  it('should fail to parse a bad character', function() {
-    expect(tokenize('  `abc')).rejects.toThrow(/Syntax error.*at input.s:1:2/s);
+  it('should fail to parse a bad character', async function() {
+    await expectSourceError(tokenize('  `abc'), /Syntax error/s, 1, 2);
   });
 
   it('should fail to parse a bad string', function() {
     expect(tokenize('  "abc')).rejects.toThrow(/EOF while looking for "/);
   });
 
-  it('should not parse .2 as a directive', function() {
-    expect(tokenize(' .2')).rejects.toThrow(/Syntax error.*at input.s:1:1/s);
+  it('should not parse .2 as a directive', async function() {
+    await expectSourceError(tokenize(' .2'), /Syntax error/s, 1, 1);
   });
 });

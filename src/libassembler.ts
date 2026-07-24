@@ -15,7 +15,7 @@ import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest } from "./validate_modules.ts";
 import type { Expr } from './expr.ts';
-import type { SourceInfo, AssemblerMessage } from './token.ts';
+import { SourceError, type SourceInfo, type AssemblerMessage } from './token.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
@@ -407,11 +407,7 @@ export function link(
     };
   } catch (err) {
     // Linker threw an error - add it to messages and return failure
-    allMessages.push({
-      level: 'error',
-      message: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined
-    });
+    allMessages.push(messageFromException(err));
 
     return {
       success: false,
@@ -452,11 +448,16 @@ function failureFromException(err: unknown): CompileResult {
   return {
     success: false,
     outputs: [],
-    messages: [{
-      level: 'error',
-      message: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined
-    }]
+    messages: [messageFromException(err)]
+  };
+}
+
+function messageFromException(err: unknown): AssemblerMessage {
+  return {
+    level: 'error',
+    message: err instanceof Error ? err.message : String(err),
+    source: err instanceof SourceError ? err.source : undefined,
+    stack: err instanceof Error ? err.stack : undefined
   };
 }
 

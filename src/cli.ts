@@ -59,8 +59,21 @@ export class Cli {
   public static readonly STDIN : string = "//stdin";
   public static readonly STDOUT : string = "//stdout";
 
+  // Keep a local cache of sources opened and compiled for diagnostic printing
+  // later so we don't need to reload the files
+  private readonly sources = new Map<string, string>();
+  private readonly sourceLines = new Map<string, string[]>();
+
   constructor(readonly callbacks: Callbacks) {
     this.callbacks = callbacks;
+  }
+
+  // Load the file and keep the source code in our local cache for later.
+  private async readSource(path: string, filename: string): Promise<string> {
+    const code = await this.callbacks.fsReadString(path, filename);
+    this.sources.set(filename, code);
+    this.sourceLines.delete(filename);
+    return code;
   }
 
   parseArgs(args : string[]) : Arguments {
@@ -158,7 +171,7 @@ export class Cli {
       // Convert CLI arguments to libassembler inputs
       const inputs: AssemblyInput[] = [];
       for (const file of args.files) {
-        const code = await this.callbacks.fsReadString("", file);
+        const code = await this.readSource("", file);
         inputs.push({ type: 'source', code, name: file });
       }
 
@@ -177,7 +190,7 @@ export class Cli {
       }
 
       const callbacks: FileCallbacks = {
-        readText: this.callbacks.fsReadString,
+        readText: (path, filename) => this.readSource(path, filename),
         readBinary: this.callbacks.fsReadBytes
       };
 
@@ -246,29 +259,75 @@ export class Cli {
     // if (err) this.printerrors(err);
   }
 
+  // Builds the `file:line:col: ` when we know where we are, else the program name
+  private locationPrefix(source?: Tokens.SourceInfo): string {
+    if (!source || !source.file || source.line <= 0) return 'js65: ';
+    return `${source.file}:${source.line}:${source.column + 1}: `;
+  }
+
+  // Load the code around the location for creating the inline snippet in the error message
+  private snippet(source?: Tokens.SourceInfo): string[] {
+    if (!source || source.line <= 0) return [];
+    let lines = this.sourceLines.get(source.file);
+    if (!lines) {
+      const text = this.sources.get(source.file);
+      if (text === undefined) return [];
+      lines = text.split(/\r\n|\n|\r/);
+      this.sourceLines.set(source.file, lines);
+    }
+    const line = lines[source.line - 1];
+    if (line === undefined) return [];
+    // We have the target source line that threw the error, so build the
+    // ^ caret pointing at the right location in the source line.
+    const gutter = String(source.line);
+    // Copy tabs into the caret row so the marker lines up under any indentation.
+    const indent = line.substring(0, Math.min(source.column, line.length)).replace(/[^\t]/g, ' ');
+    return [
+      ` ${gutter} | ${line}`,
+      ` ${' '.repeat(gutter.length)} | ${indent}^`,
+    ];
+  }
+
+  /**
+   * Prints one diagnostic in the following format:
+   *
+   *     file.s:12:8: error: Expected identifier
+   *      12 |   lda #$ff,
+   *         |            ^
+   *     file.s:3:1: note: expanded from here
+   */
+  private printDiagnostic(level: Tokens.ErrorLevel, message: string, source?: Tokens.SourceInfo) {
+    const label = level === 'info' ? 'note' : level;
+    console.log(`${this.locationPrefix(source)}${label}: ${message}`);
+    for (const line of this.snippet(source)) console.log(line);
+    // Walk the include / macro-expansion stack outwards.
+    for (let p = source?.parent; p; p = p.parent) {
+      console.log(`${this.locationPrefix(p)}note: expanded from here`);
+      for (const line of this.snippet(p)) console.log(line);
+    }
+  }
+
   printerrors(...err: Error[]) {
-    for (let i = 0; i < err.length; i++) {
-      console.log(`js65 Error: ${err[i].message}`);
+    for (const e of err) {
+      this.printDiagnostic('error', e.message,
+                           e instanceof Tokens.SourceError ? e.source : undefined);
     }
-    if (err.length > 1) {
-      console.log(`js65: Multiple errors`);
-    }
+    this.printSummary(err.length, 0);
   }
 
   printMessages(messages: Tokens.AssemblerMessage[]) {
     for (const msg of messages) {
-      const levelPrefix = msg.level === 'error' ? 'Error' : msg.level === 'warning' ? 'Warning' : 'Info';
-      const location = msg.source ? Tokens.at({ source: msg.source }) : '';
-      console.log(`js65 ${levelPrefix}: ${msg.message}${location}`);
+      this.printDiagnostic(msg.level, msg.message, msg.source);
     }
-    const errorCount = messages.filter(m => m.level === 'error').length;
-    const warningCount = messages.filter(m => m.level === 'warning').length;
-    if (errorCount > 0 || warningCount > 0) {
-      const parts = [];
-      if (errorCount > 0) parts.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
-      if (warningCount > 0) parts.push(`${warningCount} warning${warningCount !== 1 ? 's' : ''}`);
-      console.log(`js65: ${parts.join(', ')}`);
-    }
+    this.printSummary(messages.filter(m => m.level === 'error').length,
+                      messages.filter(m => m.level === 'warning').length);
+  }
+
+  private printSummary(errorCount: number, warningCount: number) {
+    const parts = [];
+    if (errorCount > 0) parts.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
+    if (warningCount > 0) parts.push(`${warningCount} warning${warningCount !== 1 ? 's' : ''}`);
+    if (parts.length) console.log(`${parts.join(', ')} generated.`);
   }
 
   public usage(code = 1, err: Error[]|undefined = undefined) {

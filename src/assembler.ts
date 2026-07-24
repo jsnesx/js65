@@ -159,9 +159,9 @@ export interface RefExtractor {
   assign?(name: string, value: number): void;
 }
 
-export class RecoverableError extends Error {
-  constructor(message: string) {
-    super(message);
+export class RecoverableError extends Tokens.SourceError {
+  constructor(message: string, source?: Tokens.SourceInfo) {
+    super(message, source);
     this.name = 'RecoverableError';
   }
 }
@@ -182,7 +182,7 @@ export class ErrorCollector {
     this.messages.push({
       level,
       message: err.message,
-      source,
+      source: (err instanceof Tokens.SourceError ? err.source : undefined) ?? source,
       stack: err.stack,
     });
   }
@@ -646,8 +646,9 @@ export class Assembler {
         // Error already recorded, continue to next line
         return;
       }
-      // Re-throw unrecoverable errors
-      throw err;
+      // Re-throw unrecoverable errors, and use this line for the source if
+      // it didn't have a source attached in the err.
+      throw Tokens.SourceError.locate(err, this._source);
     }
   }
 
@@ -704,7 +705,7 @@ export class Assembler {
           // NOTE: Will need to be actually implemented if 16-bit CPU support is added.
           return;
       }
-      this.fail(`Unknown directive: ${Tokens.nameAt(tokens[0])}`);
+      this.fail(`Unknown directive: ${Tokens.nameOf(tokens[0])}`, tokens[0]);
     } finally {
       this.errorToken = undefined;
     }
@@ -1480,15 +1481,12 @@ export class Assembler {
     // Record the error
     this.errorCollector.add('error', msg, source);
 
-    // Build the full error message for the exception
-    let fullMsg = msg;
-    if (source) {
-      fullMsg += Tokens.at({source});
-    } else if (!this._source && this._chunk?.name) {
-      fullMsg += `\n  in ${this._chunk.name}`;
-    }
+    // If we don't have any source info, then attach the chunk name to the
+    // message to try and provide some context.
+    const fullMsg = !source && !this._source && this._chunk?.name ?
+        `${msg}\n  in ${this._chunk.name}` : msg;
 
-    throw new RecoverableError(fullMsg);
+    throw new RecoverableError(fullMsg, source);
   }
 
   writeNumber(data: number[], size: number, val?: number) {

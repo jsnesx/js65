@@ -89,11 +89,12 @@ export class Tokenizer implements Tokens.Source {
       }
       return tok;
     } catch (err) {
-      const {file, line, column} = source;
-      let last = this.buffer.group();
-      last = last ? ` near '${last}'` : '';
-      err.message += `\n  at ${file}:${line}:${column}${last}`;
-      throw err;
+      // Add a `near` part to the message if we know what the last token was
+      const last = this.buffer.group();
+      const located = new Tokens.SourceError(
+          `${err.message}${last ? ` near '${last}'` : ''}`, source);
+      located.stack = err.stack;
+      throw located;
     }
   }
 

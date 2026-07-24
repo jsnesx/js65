@@ -160,7 +160,7 @@ export class Preprocessor implements Tokens.Source {
           }
           /* fallthrough */
         default:
-          throw new Error(`Unexpected: ${Tokens.nameAt(line[0])}`);
+          Tokens.fail(`Unexpected: ${Tokens.nameOf(line[0])}`, line[0]);
       }
     }
     return true;
@@ -186,8 +186,8 @@ export class Preprocessor implements Tokens.Source {
         maxPos = pos;
         depth = 0;
       } else if (depth++ > MAX_STACK_DEPTH) {
-        throw new Error(`Maximum expansion depth reached: ${
-                         line.map(Tokens.name).join(' ')}${Tokens.at(front)}`);
+        Tokens.fail(`Maximum expansion depth reached: ${
+                      line.map(Tokens.name).join(' ')}`, front);
       }
       pos = this.expandToken(line, pos);
     }
@@ -290,7 +290,7 @@ export class Preprocessor implements Tokens.Source {
           return this.expandLine(ts);
         });
     if (argCount && args.length !== argCount) {
-      throw new Error(`Expected ${argCount} parameters: ${Tokens.nameAt(cs)}`);
+      Tokens.fail(`Expected ${argCount} parameters: ${Tokens.nameOf(cs)}`, cs);
     }
     const expansion = fn.call(this, cs, ...args);
     line.splice(i, end + 1 - i, ...expansion);
@@ -436,8 +436,7 @@ export class Preprocessor implements Tokens.Source {
     }
     expr = Exprs.traversePost(expr, evalWrapper);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
-    const at = Tokens.at(expr);
-    throw new Error(`Expected a constant: ${at} : ${expr}`);
+    Tokens.fail(`Expected a constant: ${expr}`, expr);
   }
 
   private readonly runDirectives: Record<string, (ts: Token[]) => Promise<void>> = {
@@ -500,7 +499,7 @@ export class Preprocessor implements Tokens.Source {
     const name = Tokens.expectIdentifier(ident, cs);
     Tokens.expectEol(eol);
     if (!this.macros.has(name)) {
-      throw new Error(`Not defined: ${Tokens.nameAt(ident)}`);
+      Tokens.fail(`Not defined: ${Tokens.nameOf(ident)}`, ident);
     }
     this.macros.delete(name);
     return await Promise.resolve();
@@ -517,13 +516,13 @@ export class Preprocessor implements Tokens.Source {
   private async parseRepeat(line: Token[]) {
     const [expr, end] = Exprs.parse(line, 1);
     const at = line[1] || line[0];
-    if (!expr) throw new Error(`Expected expression: ${Tokens.nameAt(at)}`);
+    if (!expr) Tokens.fail(`Expected expression: ${Tokens.nameOf(at)}`, at);
     const times = this.evaluateConst(expr);
-    if (times == null) throw new Error(`Expected a constant${Tokens.at(expr)}`);
+    if (times == null) Tokens.fail(`Expected a constant`, expr);
     let ident: string|undefined;
     if (end < line.length) {
       if (!Tokens.eq(line[end], Tokens.COMMA)) {
-        throw new Error(`Expected comma: ${Tokens.nameAt(line[end])}`);
+        Tokens.fail(`Expected comma: ${Tokens.nameOf(line[end])}`, line[end]);
       }
       ident = Tokens.expectIdentifier(line[end + 1]);
       Tokens.expectEol(line[end + 2]);
@@ -543,7 +542,7 @@ export class Preprocessor implements Tokens.Source {
   private async parseEndRepeat(line: Token[]) {
     Tokens.expectEol(line[1]);
     const top = this.repeats.pop();
-    if (!top) throw new Error(`.endrep with no .repeat${Tokens.at(line[0])}`);
+    if (!top) Tokens.fail(`.endrep with no .repeat`, line[0]);
     if (++top[2] >= top[1]) return await Promise.resolve();
     this.repeats.push(top);
     this.stream.unshift(...top[0].map(line => line.map(token => {
@@ -735,13 +734,13 @@ function parseOneIdent(ts: Token[], prev?: Token): string {
 function parseOneExpr(ts: Token[], prev?: Token): Expr {
   if (!ts.length) {
     if (!prev) throw new Error(`Expected expression`);
-    throw new Error(`Expected expression: ${Tokens.nameAt(prev)}`);
+    Tokens.fail(`Expected expression: ${Tokens.nameOf(prev)}`, prev);
   }
   return Exprs.parseOnly(ts);
 }
 
 function noGarbage(token: Token|undefined): void {
-  if (token) throw new Error(`garbage at end of line: ${Tokens.nameAt(token)}`);
+  if (token) Tokens.fail(`garbage at end of line: ${Tokens.nameOf(token)}`, token);
 }
 
 // function fail(t: Token, msg: string): never {
@@ -754,7 +753,7 @@ function noGarbage(token: Token|undefined): void {
 // }
 
 function badClose(open: string, tok: Token): never {
-  throw new Error(`${Tokens.name(tok)} with no ${open}${Tokens.at(tok)}`);
+  Tokens.fail(`${Tokens.name(tok)} with no ${open}`, tok);
 }
 
 function fail(msg: string): never {

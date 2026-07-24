@@ -33,7 +33,7 @@ export class Macro {
       if (Tokens.eq(next[0], Tokens.ENDMACRO)) return new Macro(params, lines);
       lines.push(next);
     }
-    throw new Error(`EOF looking for .endmacro: ${Tokens.nameAt(line[1])}`);
+    Tokens.fail(`EOF looking for .endmacro: ${Tokens.nameOf(line[1])}`, line[1]);
   }
 
   expand(tokens: Token[], idGen: Source<number>): Token[][] {
@@ -56,7 +56,7 @@ export class Macro {
       replacements.set(param, slice);
     }
     if (i < tokens.length) {
-      throw new Error(`Too many macro parameters: ${Tokens.nameAt(tokens[i])}`);
+      Tokens.fail(`Too many macro parameters: ${Tokens.nameOf(tokens[i])}`, tokens[i]);
     }
     // All params filled in, make replacement
     const locals = new Map<string, string>();

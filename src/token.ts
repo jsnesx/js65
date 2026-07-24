@@ -181,23 +181,63 @@ export function at(arg: {source?: SourceInfo}): string {
   // TODO - definition vs usage?
 }
 
+/**
+ * Renders a token together with its location. Only for *secondary* locations inside a
+ * message ("previously defined at ...")
+ * Most every kind of error should use `nameOf` instead since the source location should
+ * be a part of the SourceError instead of the message text where this puts it.
+ * 
+ * TODO: we should expand the errors section to add a list of `notes` for handling these
+ * cases better.
+ */
 export function nameAt(arg: {source?: SourceInfo}|undefined): string {
   if (!arg) return 'at unknown';
   const token = arg as Token;
   return (token.token ? name(token) : '') + at(arg);
 }
 
+export function nameOf(arg: {source?: SourceInfo}|undefined): string {
+  if (!arg) return 'unknown';
+  const token = arg as Token;
+  return token.token ? name(token) : 'unknown';
+}
+
+export class SourceError extends Error {
+  readonly source?: SourceInfo;
+  constructor(message: string, at?: {source?: SourceInfo}|SourceInfo) {
+    super(message);
+    this.name = 'SourceError';
+    const source = at && ('source' in at ? at.source : at as SourceInfo);
+    if (source) this.source = source;
+  }
+
+  /**
+   * Add a stack to the eror if we haven't gotten that resolved yet.
+   */
+  static locate(err: unknown, source?: SourceInfo): unknown {
+    if (!source || !(err instanceof Error) || err instanceof SourceError) return err;
+    const located = new SourceError(err.message, source);
+    located.stack = err.stack;
+    return located;
+  }
+}
+
+// Helper function to create a source error from the message + sourceinfo
+export function fail(message: string, at?: {source?: SourceInfo}|SourceInfo): never {
+  throw new SourceError(message, at);
+}
+
 export function expectEol(token: Token|undefined, name = 'end of line') {
-  if (token) throw new Error(`Expected ${name}: ${nameAt(token)}`);
+  if (token) fail(`Expected ${name}: ${nameOf(token)}`, token);
 }
 
 export function expect(want: Token, token: Token, prev?: Token) {
   if (!token) {
     if (!prev) throw new Error(`Expected ${name(want)}`);
-    throw new Error(`Expected ${name(want)} after ${nameAt(token)}`);
+    fail(`Expected ${name(want)} after ${nameOf(prev)}`, prev);
   }
   if (!eq(want, token)) {
-    throw new Error(`Expected ${name(want)}: ${nameAt(token)}`);
+    fail(`Expected ${name(want)}: ${nameOf(token)}`, token);
   }
 }
 
@@ -224,10 +264,10 @@ function expectStringToken(want: StringTok,
                             prev?: Token): string {
   if (!token) {
     if (!prev) throw new Error(`Expected ${name}`);
-    throw new Error(`Expected ${name} after ${nameAt(prev)}`);
+    fail(`Expected ${name} after ${nameOf(prev)}`, prev);
   }
   if (token.token !== want) {
-    throw new Error(`Expected ${name}: ${nameAt(token)}`);
+    fail(`Expected ${name}: ${nameOf(token)}`, token);
   }
   return token.str;
 }
@@ -239,16 +279,10 @@ function optionalStringToken(want: StringTok,
     return undefined;
   }
   if (token.token !== want) {
-    throw new Error(`Expected ${name}: ${nameAt(token)}`);
+    fail(`Expected ${name}: ${nameOf(token)}`, token);
   }
   return token.str;
 }
-  
-// export function fail(token: Token, msg: string): never {
-//   if 
-//   throw new Error(msg + 
-
-// }
 
 /**
  * Given a comma-separated list of identifiers, return the
@@ -261,12 +295,12 @@ export function identsFromCList(list: Token[]): string[] {
   for (let i = 0; i <= list.length; i += 2) {
     const ident = list[i];
     if (ident?.token !== 'ident') {
-      if (ident) throw new Error(`Expected identifier: ${nameAt(ident)}`);
+      if (ident) fail(`Expected identifier: ${nameOf(ident)}`, ident);
       const last = list[list.length - 1];
-      throw new Error(`Expected identifier after ${nameAt(last)}`);
+      fail(`Expected identifier after ${nameOf(last)}`, last);
     } else if (i + 1 < list.length && !eq(list[i + 1], COMMA)) {
       const sep = list[i + 1];
-      throw new Error(`Expected comma: ${nameAt(sep)}`);
+      fail(`Expected comma: ${nameOf(sep)}`, sep);
     }
     out.push(ident.str);
   }
@@ -304,7 +338,7 @@ export function parseArgList(tokens: Token[],
       arg.push(token);
       if (eq(token, LP)) parens++;
       if (eq(token, RP)) {
-        if (--parens < 0) throw new Error(`Unbalanced paren${at(token)}`);
+        if (--parens < 0) fail(`Unbalanced paren`, token);
       }
     }
   }
@@ -321,12 +355,12 @@ export function parseAttrList(tokens: Token[],
   let val: Token[] = [];
   if (start >= tokens.length) return out;
   if (!eq(tokens[start], COLON)) {
-    throw new Error(`Unexpected: ${nameAt(tokens[start])}`);
+    fail(`Unexpected: ${nameOf(tokens[start])}`, tokens[start]);
   }
   for (let i = start + 1; i < tokens.length; i++) {
     const tok = tokens[i];
     if (eq(tok, COLON)) {
-      if (key == null) throw new Error(`Missing key${at(tok)}`);
+      if (key == null) fail(`Missing key`, tok);
       out.set(key, val);
       key = undefined;
       val = [];
@@ -382,7 +416,7 @@ export function str(t: Token) {
     case 'op':
       return t.str;
   }
-  throw new Error(`Non-string token: ${nameAt(t)}`);
+  fail(`Non-string token: ${nameOf(t)}`, t);
 }
 
 export function strip(t: Token): Token {
