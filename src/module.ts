@@ -35,6 +35,8 @@ interface BaseChunk {
   segments: string[];
   /** Absolute address of the start of the chunk, if not relocatable. */
   org?: number;
+  /** Alignment constraint (a power of two) the linker must place this chunk on */
+  align?: number;
   /** Substitutions to insert into the data. */
   subs?: Substitution[];
   /** Assertions within this chunk. Each expression must be nonzero. */

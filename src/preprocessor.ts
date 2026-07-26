@@ -47,6 +47,8 @@ interface Env {
   evaluate(expr: Expr): number|undefined;
   assignSym(line: Token[]): void;
   setSym(line: Token[]): void;
+  /** Applies the current charmap to a character literal (`'a'`). */
+  encodeChar(char: string): number|undefined;
   // also want methods to apply shunting yard to token list?
   //  - turn it into a json tree...?
 }
@@ -419,7 +421,7 @@ export class Preprocessor implements Tokens.Source {
           if (specType == 's')
             arg = Tokens.expectString(argToks[0], prevTok);
           else
-            arg = this.evaluateConst(parseOneExpr(argToks, prevTok));
+            arg = this.evaluateConst(parseOneExpr(argToks, prevTok, this.env.encodeChar));
 
           sprintfArgs.push(arg);
           argIdx++;
@@ -531,7 +533,7 @@ export class Preprocessor implements Tokens.Source {
     '.exitmacro': async ([, a]) => { noGarbage(a); this.stream.exit(); 
       return await Promise.resolve(); },
     '.if': ([cs, ...args]) =>
-        this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs), cs)),
+        this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs, this.env.encodeChar), cs)),
     '.ifdef': ([cs, ...args]) =>
         this.parseIf(this.parseIfDef(args, cs)),
     '.ifndef': ([cs, ...args]) =>
@@ -595,7 +597,7 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private async parseRepeat(line: Token[]) {
-    const [expr, end] = Exprs.parse(line, 1);
+    const [expr, end] = Exprs.parse(line, 1, undefined, this.env.encodeChar);
     const at = line[1] || line[0];
     if (!expr) Tokens.fail(`Expected expression: ${Tokens.nameOf(at)}`, at);
     const times = this.evaluateConst(expr);
@@ -657,7 +659,8 @@ export class Preprocessor implements Tokens.Source {
           continue;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
-          cond = !!this.evaluateConst(parseOneExpr(this.expandLine(line.slice(1)), front), front);
+          cond = !!this.evaluateConst(
+              parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar), front);
           continue;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
@@ -812,12 +815,12 @@ function parseOneIdent(ts: Token[], prev?: Token): string {
   return Exprs.identifier(e);
 }
 
-function parseOneExpr(ts: Token[], prev?: Token): Expr {
+function parseOneExpr(ts: Token[], prev?: Token, charEncoder?: Exprs.CharEncoder): Expr {
   if (!ts.length) {
     if (!prev) throw new Error(`Expected expression`);
     Tokens.fail(`Expected expression: ${Tokens.nameOf(prev)}`, prev);
   }
-  return Exprs.parseOnly(ts);
+  return Exprs.parseOnly(ts, 0, undefined, charEncoder);
 }
 
 function noGarbage(token: Token|undefined): void {

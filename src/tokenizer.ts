@@ -139,7 +139,8 @@ export class Tokenizer implements Tokens.Source {
       }
     }
     b.token(end);
-    return {token: 'str', str};
+    // mark single quoted strings as 'char' so they can be used as numeric literals later
+    return end === `'` ? {token: 'str', str, char: true} : {token: 'str', str};
   }
 
   private strTok(token: Tokens.StringToken['token']): Token {

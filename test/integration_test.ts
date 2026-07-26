@@ -11,6 +11,9 @@ import {compile, compileRequest, type AssemblyInput, type FileCallbacks} from '.
 async function compileSource(source: string, filename: string = 'test.s'): Promise<Uint8Array> {
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
   const result = await compile([input], { lineContinuations: true });
+  if (!result.success) {
+    throw new Error(`Expected compile result but got ${JSON.stringify(result)}`);
+  }
   return result.outputs[0].data;
 }
 
@@ -684,6 +687,261 @@ ValidLabel:
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
       expect(errors.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('Data & storage directives', function() {
+    it('.charmap remaps .byte-emitted string characters', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.charmap $41, $01
+  .byte "A"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x01]);
+    });
+
+    it('.asciiz emits the bytes then a terminating NUL', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .asciiz "hi"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x68, 0x69, 0x00]);
+    });
+
+    it('.align pads an absolute chunk up to the boundary', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .byte $01, $02, $03
+  .align $10
+  .byte $ff
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result.slice(0, 3))).toEqual([0x01, 0x02, 0x03]);
+      expect(Array.from(result.slice(3, 16))).toEqual(new Array(13).fill(0));
+      expect(result[16]).toBe(0xff);
+    });
+
+    it('.struct members yield byte offsets and .sizeof reports the total', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.struct Player
+  xpos .byte
+  ypos .byte
+  hp   .word
+.endstruct
+  .byte Player::xpos, Player::ypos, Player::hp, .sizeof(Player)
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0, 1, 2, 4]);
+    });
+
+    it('.enum members auto-increment from zero', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.enum
+  CMD_NOP
+  CMD_MOVE
+  CMD_JUMP
+.endenum
+  .byte CMD_NOP, CMD_MOVE, CMD_JUMP
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0, 1, 2]);
+    });
+  });
+
+  describe('.strmap encoding', function() {
+    it('maps a single-character key to a single byte', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "A", $42
+  .byte "A"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x42]);
+    });
+
+    it('maps a multi-character key to a bracketed multi-byte sequence', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "the", [1, 2, 3]
+  .byte "the"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([1, 2, 3]);
+    });
+
+    it('maps a single character key to a single character output', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "t", "w"
+  .byte "the"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([...'whe'].map(c => c.charCodeAt(0)));
+    });
+
+    it('maps a multi-character key to a multi character output', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "the", "what"
+  .byte "the"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([...'what'].map(c => c.charCodeAt(0)));
+    });
+
+    it('matches the longest registered key, falling back to .charmap/identity for the rest', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "the", [1, 2, 3]
+.strmap "cat", $09
+  .byte "the cat"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([1, 2, 3, 0x20, 9]);
+    });
+
+    it('accepts a non-ASCII Unicode code point as a key', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "é", $ff
+  .byte "café"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x63, 0x61, 0x66, 0xff]);
+    });
+
+    it('accepts any constant expression as a byte value, not just a literal', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+CONST_A = $10
+CONST_B = CONST_A + 1
+.org $8000
+.strmap "x", [CONST_A, CONST_B]
+  .byte "x"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x10, 0x11]);
+    });
+
+    it('.pushcharmap/.popcharmap save and restore .strmap together with .charmap', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "AB", $01
+.pushcharmap
+.strmap "AB", $02
+.popcharmap
+  .byte "AB"
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x01]);
+    });
+
+    it('rejects an empty key', async function() {
+      await expectCompileError(`
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "", $01
+`, '.strmap key must not be empty');
+    });
+
+    it('rejects an unterminated bracketed value list', async function() {
+      await expectCompileError(`
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.strmap "x", [1, 2
+`, '.strmap value list must end with ]');
+    });
+  });
+
+  // Test for ca65 compatible character literal shenanigans
+  describe('character literals', function() {
+    it('encodes a character literal through the charmap in a later .charmap', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.charmap 'a', $20
+.charmap 'b', 'a'
+  .byte "aabbcc"
+`;
+      // 'a' is already $20 when .charmap 'b', 'a' runs, so b maps to $20 too.
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x20, 0x20, 0x20, 0x20, 0x63, 0x63]);
+    });
+
+    it('is a number usable in arithmetic and in .word', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.charmap 'a', $20
+  .byte 'a'
+  .byte 'a'+1
+  .word 'a'
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x20, 0x21, 0x20, 0x00]);
+    });
+
+    it('is encoded when assigned to a symbol and when tested in .if', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.charmap 'a', $20
+FOO = 'a'
+  .byte FOO
+.if 'a' = $20
+  .byte $ee
+.else
+  .byte $dd
+.endif
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x20, 0xee]);
+    });
+
+    it('falls back to the raw code point when unmapped', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .byte 'a'
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x61]);
+    });
+
+    it('keeps double-quoted strings distinct from character literals', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.charmap 'a', $20
+  .byte "a"
+  .byte 'a'
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x20, 0x20]);
+    });
+
+    it('rejects a multi-character single-quoted literal in an expression', async function() {
+      await expectCompileError(`
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .word 'ab'+1
+`, 'Character literal must be one character');
     });
   });
 });

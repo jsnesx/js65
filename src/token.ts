@@ -65,6 +65,7 @@ export interface StringToken {
   token: StringTok;
   str: string; // Canonical form for CS tokens
   rawStr?: string; // Original possibly aliased form for CS tokens
+  char?: boolean; // marks a difference between char single quotes and string double quotes.
   source?: SourceInfo;
 }
 export interface NumberToken {
