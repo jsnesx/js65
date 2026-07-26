@@ -1,8 +1,4 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+// SPDX-License-Identifier: MPL-2.0
 
 // Shared-library entry point for the Static Hermes js65 frontend. Implements the C ABI
 // in js65.h over the shared host core (hermes_core.cpp): it forwards the caller's read

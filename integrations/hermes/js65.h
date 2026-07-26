@@ -1,8 +1,4 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+// SPDX-License-Identifier: MPL-2.0
 
 // Stable C ABI for the js65 shared library (js65.dll / libjs65.so / libjs65.dylib).
 // A native host (e.g. the .NET js65.hermes engine) calls js65_compile to assemble and

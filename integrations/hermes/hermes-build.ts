@@ -1,8 +1,4 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+// SPDX-License-Identifier: MPL-2.0
 
 // Build the Static Hermes js65 frontend (build/js65, the default js65 binary). Four steps:
 //   1. bun-bundle integrations/hermes/hermes.ts -> one inlined script

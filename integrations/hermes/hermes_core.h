@@ -1,8 +1,4 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+// SPDX-License-Identifier: MPL-2.0
 
 // Shared host core for the Static Hermes js65 frontend. The CLI executable
 // (hermes_host.cpp) and the shared library (hermes_lib.cpp) are thin entry points over
