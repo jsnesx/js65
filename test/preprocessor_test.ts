@@ -490,6 +490,66 @@ describe('Preprocessor', function() {
     // });
   });
 
+  describe('.left/.right/.mid', function() {
+    it('should take the leftmost tokens', async function() {
+      await test(['a .left(1, {a b c})'], await instruction('a a'));
+    });
+
+    it('should take the rightmost tokens', async function() {
+      await test(['a .right(2, {a b c})'], await instruction('a b c'));
+    });
+
+    it('should take a slice from the middle', async function() {
+      await test(['a .mid(1, 1, {a b c})'], await instruction('a b'));
+    });
+  });
+
+  describe('.match/.xmatch', function() {
+    it('should match identical raw tokens', async function() {
+      await test(['a .match(#, #)'], await instruction('a 1'));
+    });
+
+    it('should not match different tokens', async function() {
+      await test(['a .match(x, 0)'], await instruction('a 0'));
+    });
+
+    it('.match should treat all identifiers as equal', async function() {
+      await test(['a .match(x, y)'], await instruction('a 1'));
+    });
+
+    it('.xmatch should require identical identifier names', async function() {
+      await test(['a .xmatch(a, b)'], await instruction('a 0'));
+    });
+  });
+
+  describe('.if short-circuit', function() {
+    it('should not evaluate the right side of .and when the left side is false', async function() {
+      await test(['.if .defined(fwd) .and (fwd)',
+            'nope',
+            '.else',
+            'yep',
+            '.endif'],
+           await instruction('yep'));
+    });
+
+    it('should not evaluate the right side of .or when the left side is true', async function() {
+      await test(['.if 1 .or (fwd)',
+            'yep',
+            '.else',
+            'nope',
+            '.endif'],
+           await instruction('yep'));
+    });
+    it('should not evaluate the right side of .or when the middle arg is true, checking left to right', async function() {
+      await test(['.if 0 .or 1 .or (fwd)',
+            'yep',
+            '.else',
+            'nope',
+            '.endif'],
+           await instruction('yep'));
+    });
+  });
+
   // TODO - test .local, both for symbols AND for defines.
 
   // TODO - tests for .if, make sure it evaluates numbers, etc...

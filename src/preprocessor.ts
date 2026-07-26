@@ -234,6 +234,11 @@ export class Preprocessor implements Tokens.Source {
       case '.skip': return this.skip(line, i);
       case '.noexpand': return this.noexpand(line, i);
       case '.tcount': return this.parseArgs(line, i, 1, this.tcount);
+      case '.match': return this.parseArgs(line, i, 2, this.matchTokens);
+      case '.xmatch': return this.parseArgs(line, i, 2, this.xmatchTokens);
+      case '.left': return this.parseArgs(line, i, 2, this.left);
+      case '.right': return this.parseArgs(line, i, 2, this.right);
+      case '.mid': return this.parseArgs(line, i, 3, this.mid);
       case '.ident': return this.parseArgs(line, i, 1, this.ident);
       case '.string': return this.parseArgs(line, i, 1, this.string);
       case '.concat': return this.parseArgs(line, i, 0, this.concat);
@@ -299,6 +304,64 @@ export class Preprocessor implements Tokens.Source {
 
   private tcount(cs: Token, arg: Token[]) : Token[] {
     return [{token: 'num', num: Tokens.count(arg), source: cs.source}];
+  }
+
+  // `.match`/`.xmatch` compare two token lists as raw tokens and not values, so
+  // they work on things like `#` or register names that aren't expressions.
+  // `.match` compares token type + value but treats all identifiers as equal
+  // `.xmatch` also compares identifier names.
+  // the exact parameter is used to select between the two.
+  private static tokensEqual(a: Token[], b: Token[], exact: boolean): boolean {
+    if (a.length !== b.length) return false;
+    for (let k = 0; k < a.length; k++) {
+      const x = a[k], y = b[k];
+      if (x.token !== y.token) return false;
+      switch (x.token) {
+        case 'ident':
+          if (exact && x.str !== (y as typeof x).str) return false;
+          break;
+        case 'num':
+          if (x.num !== (y as typeof x).num) return false;
+          break;
+        case 'str': case 'op': case 'cs':
+          if (x.str !== (y as typeof x).str) return false;
+          break;
+        default:
+          break; // structural tokens match on type alone
+      }
+    }
+    return true;
+  }
+
+  private matchTokens(cs: Token, a: Token[], b: Token[]) : Token[] {
+    return [{token: 'num', num: Preprocessor.tokensEqual(a, b, false) ? 1 : 0, source: cs.source}];
+  }
+
+  private xmatchTokens(cs: Token, a: Token[], b: Token[]) : Token[] {
+    return [{token: 'num', num: Preprocessor.tokensEqual(a, b, true) ? 1 : 0, source: cs.source}];
+  }
+
+  /** Evaluate an already-expanded token list to a constant token count. */
+  private constCount(toks: Token[], cs: Token): number {
+    const e = Exprs.evaluate(Exprs.parseOnly(toks, 0));
+    if (e.num == null) Tokens.fail(`Expected a constant token count`, cs);
+    return e.num;
+  }
+
+  private left(cs: Token, count: Token[], list: Token[]) : Token[] {
+    const n = Math.max(0, this.constCount(count, cs));
+    return list.slice(0, n);
+  }
+
+  private right(cs: Token, count: Token[], list: Token[]) : Token[] {
+    const n = Math.max(0, this.constCount(count, cs));
+    return n >= list.length ? list.slice() : list.slice(list.length - n);
+  }
+
+  private mid(cs: Token, start: Token[], count: Token[], list: Token[]) : Token[] {
+    const s = Math.max(0, this.constCount(start, cs));
+    const n = Math.max(0, this.constCount(count, cs));
+    return list.slice(s, s + n);
   }
 
   private ident(cs: Token, arg: Token[]) : Token[] {
@@ -423,7 +486,7 @@ export class Preprocessor implements Tokens.Source {
     return true;
   }
 
-  evaluateConst(expr: Expr): number {
+  evaluateConst(expr: Expr, source?: Token): number {
     // Attempt to look up a symbol and see if its a constant value
     const evalWrapper = (ex: Expr) => {
       if (ex.op === 'sym' && this.env.definedSymbol(ex.sym!)) {
@@ -433,10 +496,28 @@ export class Preprocessor implements Tokens.Source {
         return Exprs.evaluate({op: 'num', num, meta: Exprs.size(num, undefined)});
       }
       return Exprs.evaluate(ex);
-    }
-    expr = Exprs.traversePost(expr, evalWrapper);
-    if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
-    Tokens.fail(`Expected a constant: ${expr}`, expr);
+    };
+    // Check for short circuiting to see if we should skip the rest of the check
+    const truthy = (n: number | undefined) => n === undefined ? undefined : n !== 0;
+    const evalNode = (ex: Expr): number | undefined => {
+      const isAnd = ex.op === '&&' || ex.op === '.and';
+      const isOr = ex.op === '||' || ex.op === '.or';
+      if ((isAnd || isOr) && ex.args?.length === 2) {
+        const l = truthy(evalNode(ex.args[0]));
+        if (isAnd && l === false) return 0;
+        if (isOr && l === true) return 1;
+        const r = truthy(evalNode(ex.args[1]));
+        if (l === undefined || r === undefined) return undefined;
+        return (isAnd ? (l && r) : (l || r)) ? 1 : 0;
+      }
+      const reduced = Exprs.traversePost(ex, evalWrapper);
+      return reduced.op === 'num' && !reduced.meta?.rel ? reduced.num : undefined;
+    };
+    const v = evalNode(expr);
+    if (v !== undefined) return v;
+    const reduced = Exprs.traversePost(expr, evalWrapper);
+    const desc = reduced.op === 'sym' ? `symbol ${reduced.sym}` : `${reduced.op} expression`;
+    Tokens.fail(`Expected a constant: ${desc}`, reduced.source ?? source);
   }
 
   private readonly runDirectives: Record<string, (ts: Token[]) => Promise<void>> = {
@@ -450,7 +531,7 @@ export class Preprocessor implements Tokens.Source {
     '.exitmacro': async ([, a]) => { noGarbage(a); this.stream.exit(); 
       return await Promise.resolve(); },
     '.if': ([cs, ...args]) =>
-        this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs))),
+        this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs), cs)),
     '.ifdef': ([cs, ...args]) =>
         this.parseIf(this.parseIfDef(args, cs)),
     '.ifndef': ([cs, ...args]) =>
@@ -576,7 +657,7 @@ export class Preprocessor implements Tokens.Source {
           continue;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
-          cond = !!this.evaluateConst(parseOneExpr(this.expandLine(line.slice(1)), front));
+          cond = !!this.evaluateConst(parseOneExpr(this.expandLine(line.slice(1)), front), front);
           continue;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
