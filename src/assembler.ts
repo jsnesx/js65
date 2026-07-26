@@ -214,9 +214,15 @@ export class Assembler {
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
 
-  /** Global symbols. */
+  /** Global symbols. `.global` resolves to import or export at close time
+   *  depending on whether the symbol ends up defined in this module. */
   // NOTE: we could add 'force-import', 'detect', or others...
-  private globals = new Map<string, 'export'|'import'>();
+  private globals = new Map<string, 'export'|'import'|'global'>();
+  /** Scope each `.export`/`.import`/`.global` was declared in, so the symbol is
+   *  resolved there. */
+  private globalScopes = new Map<string, Scope>();
+  /** Symbols declared zeropage (.importzp/.exportzp/.globalzp) */
+  private zeropageGlobals = new Set<string>();
 
   /** Current state for tracking .struct and .enum members */
   private structContext: Array<{kind: 'struct'|'enum', offset: number, name?: string}> = [];
@@ -526,8 +532,13 @@ export class Assembler {
     close(this.currentScope);
 
     for (const [name, global] of this.globals) {
-      const sym = this.currentScope.symbols.get(name);
-      if (global === 'export') {
+      // Resolve the symbol in the scope the declaration appeared in and
+      // fall back to the global scope if not found.
+      const scope = this.globalScopes.get(name) ?? this.currentScope;
+      const sym = scope.symbols.get(name);
+      // `.global` is import-or-export depending on whether it got defined here.
+      const kind = global === 'global' ? (sym?.expr ? 'export' : 'import') : global;
+      if (kind === 'export') {
         if (!sym?.expr) {
           collector.add('error', `Exported symbol '${name}' undefined`, sym?.ref?.source);
           continue;
@@ -537,16 +548,19 @@ export class Assembler {
           this.symbols.push(sym);
         }
         sym.export = name;
-      } else if (global === 'import') {
+      } else if (kind === 'import') {
         if (!sym) continue; // okay to import but not use.
         // TODO - record both positions?
         if (sym.expr) {
           collector.add('error', `Symbol '${name}' already defined`, sym.ref?.source);
           continue;
         }
-        sym.expr = {op: 'im', sym: name};
+        // Zeropage imports carry a one-byte size so references pick zp modes.
+        const expr: Expr = {op: 'im', sym: name};
+        if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
+        sym.expr = expr;
       } else {
-        assertNever(global);
+        assertNever(kind);
       }
     }
 
@@ -710,6 +724,10 @@ export class Assembler {
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
         case '.import': return this.import(...this.parseIdentifierList(tokens));
         case '.export': return this.export(...this.parseIdentifierList(tokens));
+        case '.importzp': return this.importzp(...this.parseIdentifierList(tokens));
+        case '.exportzp': return this.exportzp(...this.parseIdentifierList(tokens));
+        case '.global': return this.global(...this.parseIdentifierList(tokens));
+        case '.globalzp': return this.globalzp(...this.parseIdentifierList(tokens));
         case '.charmap': return this.charmap(tokens);
         case '.strmap': return this.strmap(tokens);
         case '.pushcharmap': return this.parseNoArgs(tokens, 1),
@@ -735,10 +753,34 @@ export class Assembler {
         case '.warning': return this.log('warn', tokens);
         case '.error': return this.log('error', tokens);
 
-        case '.a8': 
+        case '.a8':
         case '.i8':
         case '.p02':
           // NOTE: Will need to be actually implemented if 16-bit CPU support is added.
+          return;
+
+        // Segment shorthands: ca65 predeclares these named segments.
+        case '.zeropage': return this.parseNoArgs(tokens, 1), this.segment('ZEROPAGE');
+        case '.code': return this.parseNoArgs(tokens, 1), this.segment('CODE');
+        case '.data': return this.parseNoArgs(tokens, 1), this.segment('DATA');
+        case '.rodata': return this.parseNoArgs(tokens, 1), this.segment('RODATA');
+        case '.bss': return this.parseNoArgs(tokens, 1), this.segment('BSS');
+
+        // Unused directives we can figure out what to do with later.
+        case '.setcpu':
+        case '.feature':
+        case '.autoimport':
+        case '.case':
+        case '.listbytes':
+        case '.pagelength':
+        case '.fileopt':
+        case '.localchar':
+        case '.linecont':
+        case '.debuginfo':
+        case '.condes':
+        case '.constructor':
+        case '.destructor':
+        case '.interruptor':
           return;
       }
       this.fail(`Unknown directive: ${Tokens.nameOf(tokens[0])}`, tokens[0]);
@@ -925,7 +967,9 @@ export class Assembler {
       // console.log(`before resolving: ${JSON.stringify(expr)}`);
       // expr = this.resolve(expr);
       
-      const s = expr.meta?.size || 2;
+      // If the size is unknown, but it was declared zp through
+      // importzp/globalzp then we force it to 1 byte.
+      const s = expr.meta?.size ?? (this.isZeropageRef(expr) ? 1 : 2);
       // console.log(`sizing up 'add' expr: ${JSON.stringify(expr)}`);
       if (m === 'add' && s === 1 && 'zpg' in ops) {
         return this.opcode(ops.zpg!, 1, expr);
@@ -1371,15 +1415,48 @@ export class Assembler {
     this._segmentPrefix = prefix;
   }
 
+  /** Whether an operand is a bare reference to a symbol declared zeropage. */
+  private isZeropageRef(expr: Expr): boolean {
+    return expr.op === 'sym' && expr.sym != null && this.zeropageGlobals.has(expr.sym);
+  }
+
+  private declareGlobal(ident: string, kind: 'export'|'import'|'global', weak = false) {
+    if (weak && this.globals.has(ident)) return;
+    this.globals.set(ident, kind);
+    this.globalScopes.set(ident, this.currentScope);
+  }
+
   import(...idents: string[]) {
-    for (const ident of idents) {
-      this.globals.set(ident, 'import');
-    }
+    for (const ident of idents) this.declareGlobal(ident, 'import');
   }
 
   export(...idents: string[]) {
+    for (const ident of idents) this.declareGlobal(ident, 'export');
+  }
+
+  importzp(...idents: string[]) {
     for (const ident of idents) {
-      this.globals.set(ident, 'export');
+      this.declareGlobal(ident, 'import');
+      this.zeropageGlobals.add(ident);
+    }
+  }
+
+  exportzp(...idents: string[]) {
+    for (const ident of idents) {
+      this.declareGlobal(ident, 'export');
+      this.zeropageGlobals.add(ident);
+    }
+  }
+
+  global(...idents: string[]) {
+    // Don't clobber an explicit import/export declaration.
+    for (const ident of idents) this.declareGlobal(ident, 'global', true);
+  }
+
+  globalzp(...idents: string[]) {
+    for (const ident of idents) {
+      this.declareGlobal(ident, 'global', true);
+      this.zeropageGlobals.add(ident);
     }
   }
 
@@ -1527,7 +1604,7 @@ export class Assembler {
           case 'overlay': seg.overlay = this.parseStr(val, 0); break;
           // TODO allow setting free space
           // case 'free': seg.free = this.parseConst(val, 0); break;
-          case 'zp': seg.addressing = 1; break;
+          case 'zp': case 'zeropage': seg.addressing = 1; break;
           default: this.fail(`Unknown segment attr: ${key}`);
         }
       }

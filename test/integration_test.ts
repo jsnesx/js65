@@ -757,6 +757,138 @@ ValidLabel:
     });
   });
 
+  describe('ca65 syntax compatibility', function() {
+    it(':= assigns a constant like =', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+FOO := 5
+  .byte FOO
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([5]);
+    });
+
+    it('accepts zeropage as an alias for the zp segment attribute', async function() {
+      const source = `
+.segment "ZP" :bank $00 :size $0100 :mem $0000 :off $0000 : zeropage
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0100
+.org $8000
+  .byte $42
+`;
+      const result = await compileSource(source);
+      expect(result[0x100]).toBe(0x42);
+    });
+
+    it('rejects an unknown segment attribute', async function() {
+      await expectCompileError(`
+.segment "ZP" :bank $00 :size $0100 :mem $0000 :off $0000 : nonsense
+`, 'Unknown segment attr');
+    });
+  });
+
+  describe('Directive recognition', function() {
+    it('.code / .rodata / .bss switch to the named segment', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "RODATA" :bank $00 :size $0100 :mem $9000 :off $1000
+.code
+.org $8000
+  .byte $11
+.rodata
+.org $9000
+  .byte $22
+`;
+      const result = await compileSource(source);
+      expect(result[0]).toBe(0x11);
+      expect(result[0x1000]).toBe(0x22);
+    });
+
+    it('.export inside a .scope binds to that scope', async function() {
+      const lib: AssemblyInput = {
+        type: 'source',
+        name: 'lib.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8100
+.scope BHOP
+.export play
+.proc play
+  rts
+.endproc
+.endscope
+`
+      };
+      const main: AssemblyInput = {
+        type: 'source',
+        name: 'main.s',
+        code: `
+.segment "CODE"
+.import play
+.org $8000
+  jsr play
+`
+      };
+      const result = await compile([main, lib], { lineContinuations: true });
+      expect(result.success).toBe(true);
+      const data = result.outputs[0].data;
+      expect(data[0]).toBe(0x20); // JSR resolved, no "undefined symbol"
+    });
+
+    it('.importzp sizes references to one byte', async function() {
+      const zp: AssemblyInput = {
+        type: 'source',
+        name: 'zp.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.exportzp Var
+Var = $10
+`
+      };
+      const main: AssemblyInput = {
+        type: 'source',
+        name: 'main.s',
+        code: `
+.segment "CODE"
+.importzp Var
+.org $8000
+  lda Var
+`
+      };
+      const result = await compile([main, zp], { lineContinuations: true });
+      expect(result.success).toBe(true);
+      expect(Array.from(result.outputs[0].data.slice(0, 2))).toEqual([0xa5, 0x10]);
+    });
+
+    it('.global becomes an export when defined and an import when not', async function() {
+      const lib: AssemblyInput = {
+        type: 'source',
+        name: 'lib.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.global Helper
+.org $8100
+Helper:
+  rts
+`
+      };
+      const main: AssemblyInput = {
+        type: 'source',
+        name: 'main.s',
+        code: `
+.segment "CODE"
+.global Helper
+.org $8000
+  jsr Helper
+`
+      };
+      const result = await compile([main, lib], { lineContinuations: true });
+      expect(result.success).toBe(true);
+      const data = result.outputs[0].data;
+      expect(Array.from(data.slice(0, 3))).toEqual([0x20, 0x00, 0x81]);
+    });
+  });
+
   describe('.strmap encoding', function() {
     it('maps a single-character key to a single byte', async function() {
       const source = `

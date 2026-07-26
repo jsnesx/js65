@@ -106,8 +106,12 @@ export class Tokenizer implements Tokens.Source {
     }
     if (this.buffer.token(/^\.[a-z][a-z0-9]*/i)) return this.csTok();
     if (this.buffer.token(/^:([+-]\d+|[-+]+|<+rts|>*rts)/)) return this.strTok('ident');
-    if (this.buffer.token(/^(:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/)) {
-      return this.strTok('op');
+    if (this.buffer.token(/^(:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/)) {
+      const op = this.strTok('op');
+      // the := is just like = but it marks it as a label in the dbg file.
+      // which we don't support so just treat it as = for now.
+      if ((op as Tokens.StringToken).str === ':=') return {token: 'op', str: '='};
+      return op;
     }
     if (this.buffer.token('[')) return {token: 'lb'};
     if (this.buffer.token('{')) return {token: 'lc'};
