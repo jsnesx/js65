@@ -69,6 +69,7 @@ function throwIfCancelled(signal?: CancelSignal): void {
  */
 export interface AssemblerOptions {
   includePaths?: string[];
+  binIncludePaths?: string[];
   lineContinuations?: boolean;
   numberSeparators?: boolean;
   generateDebugInfo?: boolean;
@@ -101,6 +102,7 @@ export type OutputFormat = 'binary' | 'ips' | 'object';
  */
 export interface Js65Options {
   includePaths?: string[];
+  binIncludePaths?: string[];
   lineContinuations?: boolean;
   numberSeparators?: boolean;
   generateDebugInfo?: boolean;
@@ -186,6 +188,7 @@ export async function assemble(
 
   const opts = {
     includePaths: options?.includePaths || [],
+    binIncludePaths: options?.binIncludePaths,
     lineContinuations: options?.lineContinuations ?? true,
     numberSeparators: options?.numberSeparators,
     generateDebugInfo: options?.generateDebugInfo
@@ -531,6 +534,7 @@ export async function compile(
     throwIfCancelled(signal);
     const asmOpts: AssemblerOptions = {
       includePaths: options.includePaths,
+      binIncludePaths: options.binIncludePaths,
       lineContinuations: options.lineContinuations,
       numberSeparators: options.numberSeparators,
       generateDebugInfo: options.generateDebugInfo,

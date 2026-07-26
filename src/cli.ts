@@ -41,6 +41,7 @@ class Arguments {
   patch : "ips" | "" = "";
   options: Js65Options = {
     includePaths: [],
+    binIncludePaths: [],
     lineContinuations: true,
     debugLevel: 0, // -1 = disabled, 0 = comments/labels only, 1 = full source
     generateDebugInfo: true,
@@ -113,6 +114,10 @@ export class Cli {
         out.rom = args[++i];
       } else if (arg.startsWith('--rom=')) {
         out.rom = arg.substring('--rom='.length);
+      } else if (arg === '--bin-include-dir') {
+        out.options.binIncludePaths!.push(args[++i]);
+      } else if (arg.startsWith('--bin-include-dir=')) {
+        out.options.binIncludePaths!.push(arg.substring('--bin-include-dir='.length));
       } else if (arg === '-I' || arg === '--include-dir') {
         out.options.includePaths!.push(args[++i]);
       } else if (arg === '--ips') {

@@ -201,6 +201,8 @@ function parseBin(str: string): Token {
  */
 export interface Options {
   includePaths?: string[];
+  /** Search path for `.incbin`.*/
+  binIncludePaths?: string[];
   // caseInsensitive?: boolean; // handle elsewhere?
   lineContinuations?: boolean;
   numberSeparators?: boolean;
