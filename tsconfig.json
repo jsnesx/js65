@@ -1,12 +1,12 @@
 {
     "extends": "./tsconfig.base.json",
     "compilerOptions": {
-        "rootDir": "src/",
         "module": "es2022",
         "target": "es2020",
         "types": ["bun", "node"],
     },
     "include": [
-        "src/**/*.ts"
+        "src/**/*.ts",
+        "test/**/*.ts"
     ],
 }

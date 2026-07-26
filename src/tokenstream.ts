@@ -16,9 +16,36 @@ import * as Generic from './macpack/generic.ts'
 import * as Longbranch from './macpack/longbranch.ts'
 import * as Nes2header from './macpack/nes2header.ts'
 
-type Frame = [Tokens.Source|undefined, Token[][]];
+// A frame is a token source, a pushback queue, and the directory that
+// `.include`/`.incbin` inside this file should resolve relative to.
+type Frame = {
+  source?: Tokens.Source,
+  queue: Token[][],
+  dir?: string
+};
 
-const MAX_DEPTH = 100;
+// Arbitrarily chosen max stack depth for frames. Could bump it if people actually
+// ran into this in practice. Just want it high enough to not cause real problems
+// but low enough to catch issues quickly.
+const MAX_DEPTH = 256;
+
+/** Directory portion of a POSIX-style path ('a/b/c.s' -> 'a/b', 'x.s' -> ''). */
+function dirOf(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? '' : p.substring(0, i);
+}
+
+/** Combine two paths together and handle `.` and `..` when joining */
+function joinDir(base: string, rel: string): string {
+  const combined = !base ? rel : !rel ? base : `${base}/${rel}`;
+  const out: string[] = [];
+  for (const part of combined.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+    else out.push(part);
+  }
+  return out.join('/');
+}
 
 const MACPACK: Map<string, string> = new Map(
   [
@@ -45,24 +72,48 @@ export class TokenStream implements Tokens.Source {
     readonly opts?: Options,
     readonly sourceContents?: SourceContents) {}
 
-  // Try each include directory in turn, returning the first that loads.
-  async loadFile<T>(path: string, action: (path: string, filename: string) => Promise<T>,
-                    at?: Token): Promise<T> {
-    const paths = this.opts?.includePaths ?? ['./'];
-    for (const base of paths) {
+  /** Directory the frame currently on top should resolve includes against. */
+  private currentDir(): string | undefined {
+    return this.stack.length ? this.stack[this.stack.length - 1].dir : undefined;
+  }
+
+  // Try each search directory in turn, returning the first that loads along with
+  // the base it loaded from.
+  async loadFile<T>(path: string, bases: string[],
+                    action: (path: string, filename: string) => Promise<T>,
+                    at?: Token): Promise<{value: T, base: string}> {
+    for (const base of bases) {
       try {
-        return await action(base, path);
+        return {value: await action(base, path), base};
       } catch (_e) {
         // unable to load the file at that path, try the next include directory.
       }
     }
     // Report against the .include/.incbin line so the diagnostic carries a source location.
-    Tokens.fail(`Could not find file ${path} in include directories: ${paths.join(",")}`, at);
+    Tokens.fail(`Could not find file ${path} in include directories: ${bases.join(",")}`, at);
+  }
+
+  /** Search list for a `.include`. Including file's dir first, then -I dirs. 
+   * TODO: Support the other include path things like the CA65_INC env var
+  */
+  private includeSearch(): string[] {
+    const dir = this.currentDir();
+    const paths = this.opts?.includePaths ?? ['./'];
+    return dir != null ? [dir, ...paths] : [...paths];
+  }
+
+  /** Search list for a `.incbin`. Including file's dir first, then --bin-include-dir. */
+  private binIncludeSearch(): string[] {
+    const dir = this.currentDir();
+    const paths = this.opts?.binIncludePaths ?? this.opts?.includePaths ?? ['./'];
+    return dir != null ? [dir, ...paths] : [...paths];
   }
 
   async next(): Promise<Token[]|undefined> {
     while (this.stack.length) {
-      const [tok, front] = this.stack[this.stack.length - 1];
+      const frame = this.stack[this.stack.length - 1];
+      const tok = frame.source;
+      const front = frame.queue;
       if (front.length) return front.pop()!;
       const line = await tok?.next();
       if (line) {
@@ -72,8 +123,11 @@ export class TokenStream implements Tokens.Source {
             const path = this.str(line);
             if (!this.readFile) this.err(line);
             // TODO - options?
-            const code = await this.loadFile<string>(path, this.readFile, line[0]);
-            this.enter(new Tokenizer(code, path, this.opts, this.sourceContents));
+            const {value: code, base} = await this.loadFile<string>(
+                path, this.includeSearch(), this.readFile, line[0]);
+            // Nested includes resolve relative to this file's own directory.
+            this.enter(new Tokenizer(code, path, this.opts, this.sourceContents),
+                       joinDir(base, dirOf(path)));
             continue;
           }
           case '.macpack': {
@@ -108,8 +162,9 @@ export class TokenStream implements Tokens.Source {
             // The data passed in from the call back can either be base64 encoded or a u8 array
             // but because the user can slice the input, its easier to decode to bytes, then slice
             // then reencode for now.
-            let inbytes = await this.loadFile<Uint8Array|string>(path, this.readFileBinary, line[0]);
-            inbytes = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
+            const loaded = await this.loadFile<Uint8Array|string>(
+                path, this.binIncludeSearch(), this.readFileBinary, line[0]);
+            let inbytes = (typeof loaded.value === 'string') ? new Base64().decode(loaded.value) : loaded.value;
   
             const end = length !== undefined ? offset + length : undefined;
             const bin = new Base64().encode(inbytes.slice(offset, end));
@@ -130,7 +185,7 @@ export class TokenStream implements Tokens.Source {
 
   unshift(...lines: Token[][]) {
     if (!this.stack.length) throw new Error(`Cannot unshift after EOF`);
-    const front = this.stack[this.stack.length - 1][1];
+    const front = this.stack[this.stack.length - 1].queue;
     for (let i = lines.length - 1; i >= 0; i--) {
       front.push(lines[i]);
     }
@@ -140,10 +195,21 @@ export class TokenStream implements Tokens.Source {
   //   const code = await this.task.parent.readFile(file);
   //   this.stack.push([new Tokenizer(code, file, this.task.opts),  []]);
   // }
-  // Enter a macro scope.
-  enter(tokens?: Tokens.Source) {
-    const frame: Frame = [undefined, []];
-    if (tokens) frame[0] = tokens;
+  // Enter a macro scope, an included file, or the top-level source.
+  // dir parameter is the base level include directory for the file,
+  // used when dealing with expanding included macros in files (it should inherit
+  // the relative include for the file the macro is running in.)
+  enter(tokens?: Tokens.Source, dir?: string) {
+    let frameDir = dir;
+    if (frameDir == null) {
+      if (this.stack.length) {
+        frameDir = this.stack[this.stack.length - 1].dir;
+      } else {
+        const file = (tokens as {file?: string} | undefined)?.file;
+        frameDir = file && file.includes('/') ? dirOf(file) : '';
+      }
+    }
+    const frame: Frame = {source:tokens, queue:[], dir:frameDir};
     this.stack.push(frame);
     if (this.stack.length > MAX_DEPTH) throw new Error(`Stack overflow`);
   }

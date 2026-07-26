@@ -6,7 +6,7 @@
  */
 
 import {describe, it, expect} from 'bun:test';
-import {compile, compileRequest, type AssemblyInput} from '../src/libassembler.ts';
+import {compile, compileRequest, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
 
 async function compileSource(source: string, filename: string = 'test.s'): Promise<Uint8Array> {
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
@@ -50,6 +50,39 @@ async function expectCompileError(source: string, errorMatch?: string | RegExp):
   }
 
   return new Error(errorMessages);
+}
+
+// Simple mock filesystem for testing path resolution
+function normalize(p: string): string {
+  const out: string[] = [];
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+    else out.push(part);
+  }
+  return out.join('/');
+}
+function resolve(base: string, rel: string): string {
+  return normalize(base ? `${base}/${rel}` : rel);
+}
+
+function makeFs(text: Record<string, string>, bin: Record<string, number[]> = {}): FileCallbacks {
+  return {
+    readText: async (base, rel) => {
+      const key = resolve(base, rel);
+      if (!(key in text)) throw new Error(`ENOENT ${key}`);
+      return text[key];
+    },
+    readBinary: async (base, rel) => {
+      const key = resolve(base, rel);
+      if (!(key in bin)) throw new Error(`ENOENT ${key}`);
+      return new Uint8Array(bin[key]);
+    },
+  };
+}
+
+async function asmObject(input: AssemblyInput, opts: Parameters<typeof compile>[1], fs: FileCallbacks) {
+  return compile([input], {...opts, outputFormat: 'object'}, fs);
 }
 
 describe('End to end test cases', function() {
@@ -424,6 +457,51 @@ TestLabel:
       expect(result.success).toBe(false);
       expect(result.messages.filter(m => m.level === 'warning').map(m => m.message))
           .toEqual(['earlier warning']);
+    });
+    it('resolves nested .include relative to the including file', async () => {
+      const fs = makeFs({
+        'prg/sub/inner.inc': '.include "leaf.inc"\n',
+        'prg/sub/leaf.inc': 'lda #1\n',
+      });
+      const result = await asmObject(
+        {type: 'source', code: '.include "sub/inner.inc"\n', name: 'prg/stub.s'},
+        {}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('falls through every -I directory, not just the first', async () => {
+      const fs = makeFs({ 'inc2/common.inc': 'lda #2\n' });
+      const result = await asmObject(
+        {type: 'source', code: '.include "common.inc"\n', name: 'main.s'},
+        {includePaths: ['inc1', 'inc2']}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('uses --bin-include-dir (binIncludePaths) for .incbin', async () => {
+      const fs = makeFs(
+        {},
+        { 'art/data.bin': [0xAA, 0xBB, 0xCC] });
+      const result = await asmObject(
+        {type: 'source', code: '.incbin "data.bin"\n', name: 'main.s'},
+        {binIncludePaths: ['art']}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+      const mod = JSON.parse(new TextDecoder().decode(result.outputs[0].data));
+      // The three bytes should land in the module's data as base64 of AA BB CC.
+      const b64 = Buffer.from([0xAA, 0xBB, 0xCC]).toString('base64');
+      const found = (mod.chunks ?? []).some((c: {data?: string}) => c.data === b64);
+      expect(found).toBe(true);
+    });
+
+    it('reports the search list when a file is genuinely missing', async () => {
+      const fs = makeFs({});
+      const result = await asmObject(
+        {type: 'source', code: '.include "nope.inc"\n', name: 'main.s'},
+        {includePaths: ['a', 'b']}, fs);
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => /Could not find file nope\.inc/.test(m.message))).toBe(true);
     });
   });
 
