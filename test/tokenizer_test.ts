@@ -8,9 +8,9 @@
 import {describe, it, expect} from 'bun:test';
 
 import { Base64 } from '../src/base64.ts';
-import { Token } from '../src/token.ts';
+import { type Token } from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
-import {Tokenizer, Options} from '../src/tokenizer.ts';
+import {Tokenizer, type Options} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
 import { TokenStream } from '../src/tokenstream.ts';
 

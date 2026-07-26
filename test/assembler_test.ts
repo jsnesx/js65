@@ -7,10 +7,10 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Cpu} from '../src/cpu.ts';
-import {Expr} from '../src/expr.ts';
-import {Module} from '../src/module.ts';
+import {type Expr} from '../src/expr.ts';
+import {type Module} from '../src/module.ts';
 import {Assembler} from '../src/assembler.ts';
-import {Token} from '../src/token.ts';
+import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
 

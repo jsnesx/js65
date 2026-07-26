@@ -6,9 +6,9 @@
  */
 
 import {describe, it, expect} from 'bun:test';
-import {Expr} from '../src/expr.ts';
+import {type Expr} from '../src/expr.ts';
 import * as Exprs from '../src/expr.ts';
-import {Token} from '../src/token.ts';
+import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
 

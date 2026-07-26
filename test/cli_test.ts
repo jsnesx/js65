@@ -7,24 +7,24 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Cli} from '../src/cli.ts'
-import { toHexViewString, toHexString, fromHexString, fromByteString } from "../src/util.ts";
+import { fromHexString, fromByteString } from "../src/util.ts";
 
 describe('CLI', function() {
   describe('STDIN', function() {
     it('should handle `lda #$03`', async function() {
-      const [out, data] = await make(["--target", "sim", "--stdin"], `lda #3`);
+      const [_out, data] = await make(["--target", "sim", "--stdin"], `lda #3`);
       expect(data.length, "output should not be empty").toBeGreaterThan(0);
     });
 
     const bgHexStr = '00 01 02 03';
     const bg = fromHexString(bgHexStr);
     it('should handle `lda #$03` on top of binary `${bgHexStr}`', async function() {
-      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy"], `lda #3`, bg);
+      const [_out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy"], `lda #3`, bg);
       expect(data).toEqual(fromHexString('A9 03 02 03'));
     });
 
     it('test IPS patch generation', async function() {
-      const [out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy", "--ips"], `lda #3`, bg);
+      const [_out, data] = await make(["--target", "sim", "--stdin", "--rom", "dummy", "--ips"], `lda #3`, bg);
       expect(data).toEqual(fromByteString('PATCH\0\0\0\0\x02\xa9\x03EOF'));
     });
   });

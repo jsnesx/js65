@@ -6,7 +6,7 @@
  */
 
 import {describe, it, expect} from 'bun:test';
-import {Expr} from '../src/expr.ts';
+import {type Expr} from '../src/expr.ts';
 import {Linker} from '../src/linker.ts';
 import * as util from '../src/util.ts';
 

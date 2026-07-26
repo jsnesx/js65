@@ -88,7 +88,7 @@ export class Tokenizer implements Tokens.Source {
         tok.source = source;
       }
       return tok;
-    } catch (err) {
+    } catch (err:any) {
       // Add a `near` part to the message if we know what the last token was
       const last = this.buffer.group();
       const located = new Tokens.SourceError(

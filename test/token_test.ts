@@ -6,7 +6,7 @@
  */
 
 import {describe, it, expect} from 'bun:test';
-import { Token } from '../src/token.ts';
+import { type Token } from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 
 const {LP, LB, RP, RB} = Tokens;
