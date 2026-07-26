@@ -141,6 +141,9 @@ export function evaluate(expr: Expr): Expr {
       case '<': return unary(expr, x => x & 0xff);
       case '>': return unary(expr, x => (x >> 8) & 0xff);
       case '^': return num(expr.args![0].meta?.bank) ?? expr;
+      // `.sizeof(X)` is used for structs, and we assign a variable with the name
+      // of the struct, so we can check that here by name.
+      case '.sizeof': return expr.args![0];
       default: throw new Error(`Unknown unary operator: ${mapped}`);
     }
   }
@@ -300,11 +303,19 @@ export function identifier(expr: Expr): string {
 //   }
 // }
 
+/**
+ * Pull in the charEncoder from the current Env context if the user has created
+ * any charmapped values. This way we can do things like `.if 'a'` where `'a'` was
+ * charmapped to some value like `1` or `0` for instance
+ */
+export type CharEncoder = (char: string) => number|undefined;
+
 /** Parse a single expression, must occupy the rest of the line. */
-export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symbol>): Expr {
-  const [expr, i] = parse(tokens, index, symbols);
+export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
+                          charEncoder?: CharEncoder): Expr {
+  const [expr, i] = parse(tokens, index, symbols, charEncoder);
   if (i < tokens.length) {
-    parse(tokens, index, symbols);
+    parse(tokens, index, symbols, charEncoder);
     Tokens.fail(`Garbage after expression: ${Tokens.nameOf(tokens[i])}`, tokens[i]);
   } else if (!expr) {
     throw new Error(`No expression?`);
@@ -315,7 +326,8 @@ export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symb
 // Returns [undefined, -1] if a bad parse.
 // Give up on normal parsing, just use a shunting yard again...
 //  - but handle parens recursively.
-export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>): [Expr|undefined, number] {
+export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
+                      charEncoder?: CharEncoder): [Expr|undefined, number] {
 //console.log('PARSE: tokens=', tokens, 'index=', index);
 //try { throw new Error(); } catch (e) { console.log(e.stack); }
   const ops: [string, OperatorMeta][] = [];
@@ -356,7 +368,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
           }
           const args: Expr[] = [];
           for (const arg of Tokens.parseArgList(tokens, i + 2, close)) {
-            args.push(parseOnly(arg, 0, symbols));
+            args.push(parseOnly(arg, 0, symbols, charEncoder));
           }
           i = close;
           exprs.push(fixSize({op, args}));
@@ -373,7 +385,7 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
         if (close < 0) {
           Tokens.fail(`No close paren: ${Tokens.nameOf(front)}`, front);
         } // return [undefined, -1];
-        const e = parseOnly(tokens.slice(i + 1, close), 0, symbols);
+        const e = parseOnly(tokens.slice(i + 1, close), 0, symbols, charEncoder);
         exprs.push(e);
         i = close;
         val = false;
@@ -388,10 +400,20 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>)
         const num = front.num;
         exprs.push({op: 'num', num, meta: size(num, front)});
         val = false;
-      } else if (front.token === 'str') { 
-        // TODO: use the charmap to look up literal value
-        const s = front.str
-        exprs.push({op: 'str', str: s, meta: {size: s.length}});
+      } else if (front.token === 'str') {
+        const s = front.str;
+        // A single-quoted literal is a character literal, which is treated like a
+        // number in ca65.
+        const chars = front.char ? Array.from(s) : undefined;
+        if (chars) {
+          if (chars.length !== 1) {
+            Tokens.fail(`Character literal must be one character: '${s}'`, front);
+          }
+          const num = charEncoder?.(chars[0]) ?? chars[0].codePointAt(0)!;
+          exprs.push({op: 'num', num, meta: size(num, front)});
+        } else {
+          exprs.push({op: 'str', str: s, meta: {size: s.length}});
+        }
         val = false;
       } else {
         // bad token??
@@ -605,6 +627,7 @@ const FUNCTIONS = new Set<string>([
   '.wordat',
   '.match', '.xmatch',
   '.max', '.min',
+  '.sizeof',
 ]);
 
 const NAME_MAP = new Map<string, string>([

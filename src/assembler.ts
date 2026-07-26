@@ -218,6 +218,14 @@ export class Assembler {
   // NOTE: we could add 'force-import', 'detect', or others...
   private globals = new Map<string, 'export'|'import'>();
 
+  /** Current state for tracking .struct and .enum members */
+  private structContext: Array<{kind: 'struct'|'enum', offset: number, name?: string}> = [];
+
+  /** Mapping for any string to byte array  */
+  private charMapping = new Map<string, number[]>();
+  /** Saved charmaps for `.pushcharmap`/`.popcharmap`. */
+  private charmapStack: Array<Map<string, number[]>> = [];
+
   /** The current scope. */
   private currentScope = new Scope();
 
@@ -256,6 +264,11 @@ export class Assembler {
 
   /** Origin of the currnet chunk, if fixed. */
   private _org: number|undefined = undefined;
+
+  /** Alignment constraint to stamp on the next chunk, from a pending `.align`. */
+  private _pendingAlign: number|undefined = undefined;
+  /** TODO: use this to actually fill the alignment later. */
+  private _pendingFill: number|undefined = undefined;
 
   /** Prefix to prepend to all segment names. */
   private _segmentPrefix = '';
@@ -311,6 +324,11 @@ export class Assembler {
       this._chunk = {segments: this.segments, data: []};
       if (this._org != null) this._chunk.org = this._org;
       if (this._name) this._chunk.name = this._name;
+      if (this._pendingAlign != null) {
+        this._chunk.align = this._pendingAlign;
+        this._pendingAlign = undefined;
+        this._pendingFill = undefined;
+      }
       this.chunks.push(this._chunk);
       this._chunk.overwrite = this.overwriteMode;
 
@@ -634,7 +652,11 @@ export class Assembler {
     this._source = tokens[0].source;
 
     try {
-      if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
+      // Inside a .struct/.enum, a leading identifier is a member declaration and not
+      // an instruction. We still need to watch for `.endstruct` and similar instructions though.
+      if (this.structContext.length && tokens[0].token === 'ident') {
+        this.structMember(tokens);
+      } else if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
         this.label(tokens[0]);
       } else if (tokens[0].token === 'cs') {
         this.directive(tokens);
@@ -688,6 +710,20 @@ export class Assembler {
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
         case '.import': return this.import(...this.parseIdentifierList(tokens));
         case '.export': return this.export(...this.parseIdentifierList(tokens));
+        case '.charmap': return this.charmap(tokens);
+        case '.strmap': return this.strmap(tokens);
+        case '.pushcharmap': return this.parseNoArgs(tokens, 1),
+          void this.charmapStack.push(new Map(this.charMapping));
+        case '.popcharmap': return this.parseNoArgs(tokens, 1),
+          void (this.charMapping = this.charmapStack.pop() ?? this.charMapping);
+        case '.asciiz': return this.asciiz(...this.parseDataList(tokens, true));
+        case '.align': return this.alignDir(tokens);
+        case '.struct': return this.beginStruct(tokens, 'struct');
+        case '.union': return this.beginStruct(tokens, 'struct'); // union sized like struct here
+        case '.enum': return this.beginStruct(tokens, 'enum');
+        case '.endstruct': return this.parseNoArgs(tokens, 1), this.endStruct('struct');
+        case '.endunion': return this.parseNoArgs(tokens, 1), this.endStruct('struct');
+        case '.endenum': return this.parseNoArgs(tokens, 1), this.endStruct('enum');
         case '.scope': return this.scope(this.parseOptionalIdentifier(tokens));
         case '.endscope': return this.parseNoArgs(tokens, 1), this.endScope();
         case '.proc': return this.proc(this.parseRequiredIdentifier(tokens));
@@ -1110,6 +1146,140 @@ export class Assembler {
   byte(...args: Array<Expr|string|number>) {
     this.byteInternal(args);
   }
+
+  // `.asciiz` emits the bytes then a terminating NUL
+  // .charmap/.strmap applies to the string bytes but not the terminator character.
+  asciiz(...args: Array<Expr|string|number>) {
+    this.byteInternal([...args, 0]);
+  }
+
+  beginStruct(tokens: Token[], kind: 'struct'|'enum') {
+    const name = this.parseOptionalIdentifier(tokens);
+    if (name != null) this.enterScope(name, 'scope');
+    this.structContext.push({kind, offset: 0, name: name ?? undefined});
+  }
+
+  endStruct(kind: 'struct'|'enum') {
+    const ctx = this.structContext.pop();
+    if (!ctx || ctx.kind !== kind) this.fail(`.end${kind} without a matching .${kind}`);
+    if (ctx!.name != null) {
+      this.exitScope('scope');
+      // Assign a symbol to hold the size of the struct so `.sizeof(StructName)` works
+      this.assign(ctx!.name, ctx!.offset);
+    }
+  }
+
+  structMember(tokens: Token[]) {
+    const ctx = this.structContext[this.structContext.length - 1];
+    const name = Tokens.str(tokens[0]);
+    this.assign(name, ctx.offset);
+    if (ctx.kind === 'enum') {
+      ctx.offset += 1;
+    } else {
+      ctx.offset += this.structMemberSize(tokens);
+    }
+  }
+
+  // Parses out the rest of a struct member to figure out the size of it
+  private structMemberSize(tokens: Token[]): number {
+    const typeTok = tokens[1];
+    if (!typeTok || typeTok.token !== 'cs') {
+      this.fail(`struct member '${Tokens.str(tokens[0])}' needs a storage type`, tokens[0]);
+    }
+    const t = Tokens.str(typeTok);
+    if (t === '.tag') {
+      const structName = Tokens.expectIdentifier(tokens[2]);
+      const sz = this.evaluate(this.symbol(structName));
+      if (sz == null) this.fail(`.tag references unknown struct: ${structName}`, tokens[2]);
+      return sz;
+    }
+    let unit: number;
+    switch (t) {
+      // NOTE: .addr is tokenized as .word, so it lands in the 2-byte case.
+      case '.byte': case '.res': unit = 1; break;
+      case '.word': case '.dbyt': unit = 2; break;
+      case '.faraddr': unit = 3; break;
+      case '.dword': unit = 4; break;
+      default: this.fail(`Unsupported struct member type: ${t}`, typeTok);
+    }
+    // Optional element count (`field .byte 16`); required for .res.
+    if (tokens.length > 2) return unit * this.parseConst(tokens, 2);
+    if (t === '.res') this.fail(`.res in a struct needs a count`, typeTok);
+    return unit;
+  }
+
+  alignDir(tokens: Token[]) {
+    const args = Tokens.parseArgList(tokens, 1);
+    if (args.length < 1 || args.length > 2) this.fail(`.align expects a boundary and optional fill`, tokens[0]);
+    const boundary = this.parseConst(args[0], 0);
+    const fill = args.length > 1 ? this.parseConst(args[1], 0) : undefined;
+    this.align(boundary, fill);
+  }
+
+  align(boundary: number, fill?: number) {
+    if (boundary < 1) this.fail(`.align boundary must be positive: ${boundary}`);
+    // ca65 requires a power-of-two boundary unless the force option is supplied.
+    // ... which we don't have yet. TODO
+    if ((boundary & (boundary - 1)) !== 0) this.fail(`.align boundary must be a power of two: ${boundary}`);
+    if (boundary === 1) return; // no-op
+    if (this._org != null) {
+      // We have an org address, so we are in absolute mode meaning we can
+      // do the padding now too.
+      const pc = (this._chunk?.org ?? this._org) + (this._chunk?.data.length ?? 0);
+      const pad = (boundary - (pc % boundary)) % boundary;
+      if (pad) this.res(pad, fill);
+      return;
+    }
+    // Relocatable mode means we just delay this until link time instead
+    this._chunk = undefined;
+    this._pendingAlign = boundary;
+    this._pendingFill = fill;
+  }
+
+  // CA65 compatible 1:1 character mapping. Given a single char byte or a byte literal,
+  // converts it to the output value. This applies to any characters in any strings
+  charmap(tokens: Token[]) {
+    const args = Tokens.parseArgList(tokens, 1);
+    if (args.length !== 2) this.fail(`.charmap expects an index and a value`, tokens[0]);
+    const code = this.parseConst(args[0], 0);
+    const target = this.parseConst(args[1], 0);
+    if (code < 0 || code > 255) this.fail(`.charmap index out of range: ${code}`, tokens[0]);
+    this.charMapping.set(String.fromCodePoint(code), [target & 0xff]);
+  }
+
+  // Our own custom string based mapping, which allows any N input bytes to M output bytes
+  // This works by greedily consuming bytes and choosing the largest match first as our output.
+  strmap(tokens: Token[]) {
+    const keyTok = tokens[1];
+    if (!keyTok || keyTok.token !== 'str') this.fail(`.strmap expects a string key`, tokens[0]);
+    const key = keyTok.str;
+    if (!key) this.fail(`.strmap key must not be empty`, keyTok);
+    const commaIdx = Tokens.find(tokens, Tokens.COMMA, 2);
+    if (commaIdx < 0) this.fail(`.strmap expects a value after the key`, tokens[0]);
+    const valueToks = tokens.slice(commaIdx + 1);
+    if (!valueToks.length) this.fail(`.strmap expects a value after the key`, tokens[tokens.length - 1]);
+    let bytes: number[];
+    // The syntax for a multi byte output with hardcoded numbers is `[ $00, $01, ... $mm ]`
+    // so check for the bracket opening.
+    if (Tokens.eq(valueToks[0], Tokens.LB)) {
+      if (!Tokens.eq(valueToks[valueToks.length - 1], Tokens.RB)) {
+        this.fail(`.strmap value list must end with ]`, valueToks[valueToks.length - 1]);
+      }
+      const inner = valueToks.slice(1, -1);
+      bytes = inner.length ? Tokens.parseArgList(inner, 0).map(ts => this.parseConst(ts, 0)) : [];
+      if (!bytes.length) this.fail(`.strmap value list must not be empty`, valueToks[0]);
+    } else if (valueToks.length === 1 && valueToks[0].token === 'str' && !valueToks[0].char) {
+      // If its a string, parse it using the current charmapping values (to match ca65 behavior)
+      bytes = [];
+      writeString(bytes, valueToks[0].str, this.charMapping);
+      if (!bytes.length) this.fail(`.strmap value must not be empty`, valueToks[0]);
+    } else {
+      // Otherwise, its probaly some constant value or something.
+      bytes = [this.parseConst(valueToks, 0)];
+    }
+    this.charMapping.set(key, bytes.map(b => b & 0xff));
+  }
+
   byteInternal(args: Array<Expr|string|number>) {
     const {chunk} = this;
     this.markWritten(args.length);
@@ -1132,7 +1302,7 @@ export class Assembler {
             this._chunk.sourceMap.set(chunk.data.length + i, this._source);
           }
         }
-        writeString(chunk.data, arg);
+        writeString(chunk.data, arg, this.charMapping);
       } else {
         // Record source info before append (which writes 1 byte)
         if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
@@ -1294,8 +1464,22 @@ export class Assembler {
     Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {
-    return Exprs.parseOnly(tokens, start, this.currentScope.symbols);
+    return Exprs.parseOnly(tokens, start, this.currentScope.symbols, this.encodeChar);
   }
+
+  /**
+   * Converts the character to the numerical value for the output.
+   * This assumes that it is not multimapped to multiple output bytes to keep
+   * ca65 compatibility.
+   */
+  readonly encodeChar = (char: string): number|undefined => {
+    const bytes = this.charMapping.get(char);
+    if (!bytes) return undefined;
+    if (bytes.length !== 1) {
+      this.fail(`Character literal '${char}' maps to ${bytes.length} bytes`);
+    }
+    return bytes[0];
+  };
   // parseStringList(tokens: Token[], start = 1): string[] {
   //   return Tokens.parseArgList(tokens, 1).map(ts => {
   //     const str = Tokens.expectString(ts[0]);
@@ -1521,10 +1705,29 @@ export class Assembler {
   }
 }
 
-function writeString(data: number[], str: string) {
-  // TODO - support character maps (pass as third arg?)
-  for (let i = 0; i < str.length; i++) {
-    data.push(str.charCodeAt(i));
+function writeString(data: number[], str: string, charmap: Map<string, number[]>) {
+  // Split into Unicode code points (not js string UTF-16 code units) so a multi-byte
+  // character is one unit for both matching and the unmapped fallback.
+  const chars = Array.from(str);
+  const maxKeyLen = charmap.size ?
+      Math.max(...[...charmap.keys()].map(k => Array.from(k).length)) : 0;
+  for (let i = 0; i < chars.length; ) {
+    // Greedy longest-match, so a `.strmap` key beats the single-character
+    // `.charmap` entries it overlaps.
+    let bytes: number[]|undefined;
+    let len = Math.min(maxKeyLen, chars.length - i);
+    for (; len >= 1; len--) {
+      bytes = charmap.get(chars.slice(i, i + len).join(''));
+      if (bytes) break;
+    }
+    if (bytes) {
+      data.push(...bytes);
+      i += len;
+    } else {
+      // Unmapped: emit the code point/character itself
+      data.push(chars[i].codePointAt(0)! & 0xff);
+      i++;
+    }
   }
 }
 
