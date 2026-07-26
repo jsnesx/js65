@@ -7,7 +7,7 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Define} from '../src/define.ts';
-import {Token} from '../src/token.ts';
+import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';

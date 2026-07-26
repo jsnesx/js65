@@ -6,7 +6,7 @@
  */
 
 import {describe, it, expect} from 'bun:test';
-import {MesenLabelFormat} from '../src/linker.ts';
+import {type MesenLabelFormat} from '../src/linker.ts';
 import {compile} from '../src/libassembler.ts';
 
 async function assembleAndGetDebugInfo(source: string, filename: string = 'test.s', debugLevel: number = 0): Promise<MesenLabelFormat[]> {

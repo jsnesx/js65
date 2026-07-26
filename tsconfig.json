@@ -2,7 +2,7 @@
     "extends": "./tsconfig.base.json",
     "compilerOptions": {
         "module": "es2022",
-        "target": "es2020",
+        "target": "es2022",
         "types": ["bun", "node"],
     },
     "include": [
