@@ -331,7 +331,6 @@ export class Assembler {
         this._pendingAlign = undefined;
         this._pendingFill = undefined;
       }
-      this.chunks.push(this._chunk);
       this._chunk.overwrite = this.overwriteMode;
 
       // Initialize debug info tracking if enabled
@@ -339,6 +338,14 @@ export class Assembler {
         this._chunk.sourceMap = new Map();
         this._chunk.labelIndex = new Map();
       }
+      // Check the current segments right now to see if we know if this
+      // chunk is landing in ZP or ABS. If all of the possible segments for this
+      // chunk are labelled as ZP, then this chunk should be in ZP too.
+      if (this.segments.length &&
+          this.segments.every(s => this.segmentData.get(s)?.addressing === 1)) {
+        this._chunk.zeropage = true;
+      }
+      this.chunks.push(this._chunk);
     }
   }
 
@@ -383,6 +390,7 @@ export class Assembler {
     const num = this.chunk.data.length; // NOTE: before counting chunks
     const meta: Exprs.Meta = {rel: true, chunk: this.chunks.length - 1};
     if (this._chunk?.org != null) meta.org = this._chunk.org;
+    if (this._chunk?.zeropage) meta.zeropage = true;
     return Exprs.evaluate({op: 'num', num, meta});
   }
 
@@ -758,7 +766,9 @@ export class Assembler {
           return;
 
         // Segment shorthands: ca65 predeclares these named segments.
-        case '.zeropage': return this.parseNoArgs(tokens, 1), this.segment('ZEROPAGE');
+        // ZEROPAGE is predeclared with zeropage addressing, same as `:zeropage`.
+        case '.zeropage': return this.parseNoArgs(tokens, 1),
+          this.segment({name: 'ZEROPAGE', addressing: 1});
         case '.code': return this.parseNoArgs(tokens, 1), this.segment('CODE');
         case '.data': return this.parseNoArgs(tokens, 1), this.segment('DATA');
         case '.rodata': return this.parseNoArgs(tokens, 1), this.segment('RODATA');

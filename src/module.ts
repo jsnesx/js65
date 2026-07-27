@@ -43,6 +43,12 @@ interface BaseChunk {
   sourceMap?: Map<number, SourceInfo>;
   /** Labels within the chunk, mapped to byte offset. */
   labelIndex?: Map<string, number>;
+  /** Tracks if the chunk is assigned to a segment in zeropage.
+   * Defaults to abs (false) unless assigned by using .segment "whatever" : zeropage
+   * to force the segment to use zeropage (or if the segment was defined in the
+   * same compliation unit as zeropage)
+   */
+  zeropage?: boolean;
 }
 
 /**

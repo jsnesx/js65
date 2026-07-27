@@ -786,6 +786,77 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.addrsize', function() {
+    it('should report 1 for a symbol in a segment marked zeropage', function() {
+      const a = new Assembler(Cpu.P02);
+      a.segment({name: 'zp', addressing: 1});
+      a.label('zp_sym');
+      a.segment({name: 'abs'});
+      a.reloc();
+      a.directive([cs('.byte'), cs('.addrsize'), LP, ident('zp_sym'), RP]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: ['zp'],
+          name: 'zp_sym',
+          zeropage: true,
+          data: Uint8Array.of(),
+        }, {
+          overwrite: 'allow',
+          segments: ['abs'],
+          data: Uint8Array.of(1),
+        }],
+        symbols: [],
+        segments: [{name: 'zp', addressing: 1}, {name: 'abs'}]});
+    });
+
+    it('should report 2 for a symbol in a segment not marked zeropage', function() {
+      const a = new Assembler(Cpu.P02);
+      a.segment({name: 'abs'});
+      a.label('abs_sym');
+      a.directive([cs('.zeropage')]);
+      a.reloc();
+      a.directive([cs('.byte'), cs('.addrsize'), LP, ident('abs_sym'), RP]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: ['abs'],
+          name: 'abs_sym',
+          data: Uint8Array.of(),
+        }, {
+          overwrite: 'allow',
+          segments: ['ZEROPAGE'],
+          zeropage: true,
+          data: Uint8Array.of(2),
+        }],
+        symbols: [],
+        segments: [{name: 'abs'}, {name: 'ZEROPAGE', addressing: 1}]});
+    });
+
+    it('should report 1 for a symbol in the .zeropage shorthand segment', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.zeropage')]);
+      a.label('zp_sym');
+      a.segment({name: 'abs'});
+      a.reloc();
+      a.directive([cs('.byte'), cs('.addrsize'), LP, ident('zp_sym'), RP]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: ['ZEROPAGE'],
+          name: 'zp_sym',
+          zeropage: true,
+          data: Uint8Array.of(),
+        }, {
+          overwrite: 'allow',
+          segments: ['abs'],
+          data: Uint8Array.of(1),
+        }],
+        symbols: [],
+        segments: [{name: 'ZEROPAGE', addressing: 1}, {name: 'abs'}]});
+    });
+  });
+
   describe('.strlen/.strat', function() {
     it('should compute a string literal length', function() {
       const a = new Assembler(Cpu.P02);
