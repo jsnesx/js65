@@ -142,6 +142,11 @@ export function evaluate(expr: Expr): Expr {
       case '.sizeof': return expr.args![0];
       case '.loword': return unary(expr, x => x & 0xffff);
       case '.hiword': return unary(expr, x => (x >>> 16) & 0xffff);
+      case '.strlen': {
+        const arg = expr.args![0];
+        if (arg.op !== 'str') throw new Error('.strlen requires a string literal');
+        return {op: 'num', num: arg.str!.length, meta: size(arg.str!.length)};
+      }
       default: throw new Error(`Unknown unary operator: ${mapped}`);
     }
   }
@@ -174,6 +179,14 @@ export function evaluate(expr: Expr): Expr {
     case '&&': return binary(expr, (a, b) => a && b);
     case '||': return binary(expr, (a, b) => a || b);
     case '.xor': return binary(expr, (a, b) => !a && b || !b && a || 0);
+    case '.strat': {
+      const [s, idx] = expr.args!;
+      if (s.op !== 'str') throw new Error('.strat requires a string literal');
+      if (idx.op !== 'num') return expr; // not resolvable yet
+      const ch = Array.from(s.str!)[idx.num!];
+      if (ch === undefined) throw new Error('.strat index out of range');
+      return {op: 'num', num: ch.codePointAt(0)!, meta: size(ch.codePointAt(0)!)};
+    }
     default: throw new Error(`Unknown operator: ${mapped} Expr: ${JSON.stringify(expr)}`);
   }
 }
@@ -627,6 +640,7 @@ const FUNCTIONS = new Set<string>([
   '.max', '.min',
   '.sizeof',
   '.hiword', '.loword',
+  '.strlen', '.strat',
 ]);
 
 const NAME_MAP = new Map<string, string>([
