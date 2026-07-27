@@ -82,8 +82,8 @@ export class Linker {
     return this._link.link(signal);
   }
 
-  report(verbose = false) {
-    console.log(this._link.report(verbose));
+  report(verbose = false): string {
+    return this._link.report(verbose);
   }
 
   exports(): Map<string, Export> {

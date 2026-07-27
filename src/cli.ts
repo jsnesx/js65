@@ -33,6 +33,7 @@ class Arguments {
   rom = "";
   files : string[] = [];
   dbgfile = "";
+  mapfile = "";
   compileonly = false;
   patch : "ips" | "" = "";
   options: Js65Options = {
@@ -85,6 +86,11 @@ export class Cli {
       } else if (arg === '--dbgfile') {
         if (out.dbgfile) this.usage();
         out.dbgfile = args[++i];
+      } else if (arg === '-m' || arg === '--mapfile') {
+        if (out.mapfile) this.usage();
+        out.mapfile = args[++i];
+      } else if (arg.startsWith('--mapfile=')) {
+        out.mapfile = arg.substring('--mapfile='.length);
       } else if (arg === '-g' || arg === '-g0') {
         out.options.debugLevel = 0; // Comments and labels only
         out.options.generateDebugInfo = true;
@@ -146,7 +152,11 @@ export class Cli {
         return this.usage(8, [new Error("Cannot use --compileonly flag combined with multiple input files")]);
       else if (args.patch)
         return this.usage(8, [new Error(`Cannot use --compileonly flag combined with --${args.patch}`)]);
+      else if (args.mapfile)
+        return this.usage(8, [new Error("Cannot use --compileonly flag combined with -m/--mapfile")]);
     }
+
+    if (args.mapfile) args.options.generateMapFile = true;
 
     if (args.outfile == "--stdout") {
       args.outfile = Cli.STDOUT;
@@ -207,13 +217,20 @@ export class Cli {
       }
 
       // The linked ROM / first artifact goes to outfile for now
-      const primary = result.outputs.find(o => o.type !== 'debug') ?? result.outputs[0];
+      const primary = result.outputs.find(o => o.type === 'binary' || o.type === 'object')
+          ?? result.outputs[0];
       await this.callbacks.fsWriteBytes("", args.outfile, primary.data);
 
       // Write debug info if requested
       const debug = findOutput(result, 'debug');
       if (args.dbgfile && debug) {
         await this.callbacks.fsWriteBytes("", args.dbgfile, debug.data);
+      }
+
+      // Write the linker map if requested
+      const map = findOutput(result, 'map');
+      if (args.mapfile && map) {
+        await this.callbacks.fsWriteBytes("", args.mapfile, map.data);
       }
     } catch (e) {
       this.printerrors(e);
@@ -354,6 +371,7 @@ optional arguments:
   -g                      Add debug info to the assembly that can be used at link time to produce debug symbols (Default ON)
   --no-debuginfo          Disable debug info generation.
   --dbgfile FILE          Output debug symbols to the specified file.
+  -m FILE/--mapfile=FILE  Output a linker map (free space / placed chunks) to the specified file. Cannot be used with --compileonly.
   -h/--help               Print this help text and exit.
 
 ===
