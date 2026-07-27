@@ -831,6 +831,21 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.loword/.hiword', function() {
+    it('should split a 32-bit value into words', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.word'), cs('.loword'), LP, num(0x12345678), RP,
+                   COMMA, cs('.hiword'), LP, num(0x12345678), RP]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0x78, 0x56, 0x34, 0x12),
+        }],
+        symbols: [], segments: []});
+    });
+  });
+
   describe('.segment', function() {
     it('should change the segment', function() {
       const a = new Assembler(Cpu.P02);

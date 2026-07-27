@@ -204,6 +204,20 @@ describe('Expr', function() {
       ]));
       expect(expr).toEqual(num(0));
     });
+
+    it('should evaluate .loword', function() {
+      const expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.loword'), LP, tnum(0x12345678), RP
+      ]));
+      expect(expr).toEqual({op: 'num', num: 0x5678, meta: {size: 2}});
+    });
+
+    it('should evaluate .hiword', function() {
+      const expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.hiword'), LP, tnum(0x12345678), RP
+      ]));
+      expect(expr).toEqual({op: 'num', num: 0x1234, meta: {size: 2}});
+    });
   });
 
   // describe('Exprs.resolve', function() {
