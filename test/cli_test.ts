@@ -24,6 +24,27 @@ describe('CLI', function() {
       expect(data).toEqual(fromByteString('PATCH\0\0\0\0\x02\xa9\x03EOF'));
     });
   });
+
+  describe('map file', function() {
+    it('should write a map file when -m is given', async function() {
+      const files = await makeFiles(
+          ["--target", "sim", "--stdin", "-m", "out.map"], `lda #3`);
+      expect(files.has('out.map')).toBe(true);
+      const map = new TextDecoder().decode(files.get('out.map'));
+      expect(map.length).toBeGreaterThan(0);
+    });
+
+    it('should not write a map file when -m is not given', async function() {
+      const files = await makeFiles(["--target", "sim", "--stdin"], `lda #3`);
+      expect(files.has('out.map')).toBe(false);
+    });
+
+    it('should reject -m combined with --compileonly', async function() {
+      await expect(makeFiles(
+          ["--target", "sim", "--stdin", "-c", "-m", "out.map"], `lda #3`))
+          .rejects.toThrow();
+    });
+  });
 });
 
 async function make(args: string[], input: string, bytes: Uint8Array|null = null) : Promise<[string, Uint8Array]> {
@@ -52,7 +73,37 @@ async function make(args: string[], input: string, bytes: Uint8Array|null = null
   });
 
   await cli.run(args);
-  
+
   const data = new Uint8Array(dataParts.map((p) => Array.from(p)).reduce((a, p) => a.concat(p), []));
   return [outParts.join(), data];
+}
+
+/** Like make(), but keyed by filename so callers can tell which files were written. */
+async function makeFiles(args: string[], input: string, bytes: Uint8Array|null = null)
+    : Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>();
+  let exitCode = 0;
+  const cli = new Cli({
+    fsReadString: async (_path: string, _filename: string) => {
+      return await Promise.resolve(input);
+    },
+    fsReadBytes: async (_path: string, _filename: string) => {
+      return await Promise.resolve(bytes ?? new Uint8Array(0));
+    },
+    fsWriteString: async (_path: string, _filename: string, _data: string) => {
+      return await Promise.resolve(undefined);
+    },
+    fsWriteBytes: async (_path: string, filename: string, data: Uint8Array) => {
+      files.set(filename, data);
+      return await Promise.resolve(undefined);
+    },
+    fsWalk: async (_path: string, _action: (filename: string) => Promise<boolean>) => {
+      return await Promise.resolve(undefined);
+    },
+    exit: (code: number) => { exitCode = code; },
+  });
+
+  await cli.run(args);
+  if (exitCode !== 0) throw new Error(`cli exited with code ${exitCode}`);
+  return files;
 }

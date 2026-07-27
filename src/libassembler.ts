@@ -85,6 +85,8 @@ export interface LinkerOptions {
    *  2 = full source + file:line location suffix
    */
   debugLevel?: number;
+  /** Emit a linker map (free space / placed chunks report) as a sidecar output. */
+  generateMapFile?: boolean;
 }
 
 /**
@@ -106,6 +108,7 @@ export interface Js65Options {
   target?: string;
   baseRomOffset?: number;
   outputFormat?: OutputFormat;
+  generateMapFile?: boolean;
 }
 
 /**
@@ -123,8 +126,9 @@ export interface Js65Request {
  *   - 'object' : a serialized .o module
  *   - 'debug'  : debug info (currently MLB labels)
  *   - 'source' : generated source text
+ *   - 'map'    : linker map (free space / placed chunks report)
  */
-export type OutputType = 'source' | 'binary' | 'object' | 'debug';
+export type OutputType = 'source' | 'binary' | 'object' | 'debug' | 'map';
 
 /**
  * One named output produced by a compile. `type` distinguishes the binary ROM/IPS
@@ -360,6 +364,8 @@ export interface LinkResult {
   data: Uint8Array;
   /** Debug information in MLB format (empty string if sourceContents not provided or errors) */
   debugInfo: string;
+  /** Linker map (empty unless requested or on errors) */
+  mapFile: string;
   /** All messages (errors, warnings, info) from compilation */
   messages: AssemblerMessage[];
 }
@@ -412,6 +418,7 @@ export function link(
     }
 
     const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
+    const mapFile = options?.generateMapFile ? linker.report(true) : '';
 
     const hasErrors = allMessages.some(m => m.level === 'error');
 
@@ -419,6 +426,7 @@ export function link(
       success: !hasErrors,
       data: binaryData,
       debugInfo,
+      mapFile,
       messages: allMessages
     };
   } catch (err) {
@@ -429,6 +437,7 @@ export function link(
       success: false,
       data: new Uint8Array(0),
       debugInfo: '',
+      mapFile: '',
       messages: allMessages
     };
   }
@@ -540,6 +549,7 @@ export async function compile(
       baseRom,
       baseRomOffset: options.baseRomOffset,
       debugLevel: options.debugLevel,
+      generateMapFile: options.generateMapFile,
     };
     const outputFormat: OutputFormat = options.outputFormat ?? 'binary';
     const sourceContents = options.generateDebugInfo ? new SourceContents() : undefined;
@@ -580,6 +590,9 @@ export async function compile(
     // Debug info rides as a sidecar output (type 'debug') rather than a separate field.
     if (lr.debugInfo) {
       outputs.push({ name: 'out.mlb', data: new TextEncoder().encode(lr.debugInfo), type: 'debug' });
+    }
+    if (lr.mapFile) {
+      outputs.push({ name: 'out.map', data: new TextEncoder().encode(lr.mapFile), type: 'map' });
     }
     return {
       success: lr.success,
