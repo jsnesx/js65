@@ -760,6 +760,32 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.hibytes/.lobytes', function() {
+    it('should emit the high byte of each expression', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.hibytes'), num(0x1234), COMMA, num(0x5678)]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0x12, 0x56),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should emit the low byte of each expression', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.lobytes'), num(0x1234), COMMA, num(0x5678)]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0x34, 0x78),
+        }],
+        symbols: [], segments: []});
+    });
+  });
+
   describe('.strlen/.strat', function() {
     it('should compute a string literal length', function() {
       const a = new Assembler(Cpu.P02);
