@@ -140,6 +140,8 @@ export function evaluate(expr: Expr): Expr {
       // `.sizeof(X)` is used for structs, and we assign a variable with the name
       // of the struct, so we can check that here by name.
       case '.sizeof': return expr.args![0];
+      case '.loword': return unary(expr, x => x & 0xffff);
+      case '.hiword': return unary(expr, x => (x >>> 16) & 0xffff);
       default: throw new Error(`Unknown unary operator: ${mapped}`);
     }
   }
@@ -624,6 +626,7 @@ const FUNCTIONS = new Set<string>([
   '.match', '.xmatch',
   '.max', '.min',
   '.sizeof',
+  '.hiword', '.loword',
 ]);
 
 const NAME_MAP = new Map<string, string>([
@@ -659,6 +662,8 @@ const SIZE_TRANSFORMS = new Map<string, (...args: number[]) => number>([
   ['.xor', Math.max],
   ['.max', Math.max],
   ['.min', Math.max], // could use min, but may not be safe w/ negatives
+  ['.hiword', () => 2],
+  ['.loword', () => 2],
 ]);
   
 function fixSize(expr: Expr): Expr {
