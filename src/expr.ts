@@ -41,6 +41,8 @@ export interface Meta {
   size?: number;
   /** Whether this is a branch offset (requires signed range checking). */
   branch?: boolean;
+  /** Whether the chunk this value lives in is assigned to a zeropage segment. */
+  zeropage?: boolean;
 }
 
 export interface Expr {
@@ -142,6 +144,17 @@ export function evaluate(expr: Expr): Expr {
       case '.sizeof': return expr.args![0];
       case '.loword': return unary(expr, x => x & 0xffff);
       case '.hiword': return unary(expr, x => (x >>> 16) & 0xffff);
+      // `.addrsize(sym)` is 1 for a zeropage symbol and 2 otherwise.  js65 has no
+      // far/long segments, so ca65's 3 and 4 are unreachable.
+      case '.addrsize': {
+        const arg = expr.args![0];
+        // Imports carry a one-byte size hint when declared zeropage.
+        if (arg.op === 'im') {
+          return {op: 'num', num: arg.meta?.size === 1 ? 1 : 2, meta: size(1)};
+        }
+        if (arg.op !== 'num') return expr;
+        return {op: 'num', num: arg.meta?.zeropage ? 1 : 2, meta: size(1)};
+      }
       case '.strlen': {
         const arg = expr.args![0];
         if (arg.op !== 'str') throw new Error('.strlen requires a string literal');
@@ -641,6 +654,7 @@ const FUNCTIONS = new Set<string>([
   '.sizeof',
   '.hiword', '.loword',
   '.strlen', '.strat',
+  '.addrsize',
 ]);
 
 const NAME_MAP = new Map<string, string>([
