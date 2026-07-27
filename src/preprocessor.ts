@@ -241,7 +241,7 @@ export class Preprocessor implements Tokens.Source {
       case '.string': return this.parseArgs(line, i, 1, this.string);
       case '.concat': return this.parseArgs(line, i, 0, this.concat);
       case '.sprintf': return this.parseArgs(line, i, 0, this.sprintf);
-      case '.cond': return this.parseArgs(line, i, 0, this.cond);
+      case '.cond': return this.parseArgs(line, i, 3, this.cond);
       case '.blank':
         return this.parseArgs(line, i, 1, this.blank);
       case '.defined':
@@ -432,8 +432,9 @@ export class Preprocessor implements Tokens.Source {
     return [{token: 'str', str: vsprintf(sprintfFmt, sprintfArgs), source: cs.source}];
   }
 
-  private cond(_cs: Token, ..._args: Token[][]) : Token[] {
-    throw new Error('unimplemented');
+  private cond(cs: Token, cond: Token[], ifTrue: Token[], ifFalse: Token[]) : Token[] {
+    const v = this.evaluateConst(parseOneExpr(cond, cs, this.env.encodeChar), cs);
+    return v ? ifTrue : ifFalse;
   }
 
   private blank(cs: Token, arg: Token[]) : Token[] {

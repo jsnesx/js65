@@ -500,6 +500,16 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.cond', function() {
+    it('should return the true branch when the condition is truthy', async function() {
+      await test(['a .cond(1, {b}, {c})'], await instruction('a b'));
+    });
+
+    it('should return the false branch when the condition is falsy', async function() {
+      await test(['a .cond(0, {b}, {c})'], await instruction('a c'));
+    });
+  });
+
   describe('.match/.xmatch', function() {
     it('should match identical raw tokens', async function() {
       await test(['a .match(#, #)'], await instruction('a 1'));
