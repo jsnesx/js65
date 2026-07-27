@@ -218,6 +218,32 @@ describe('Expr', function() {
       ]));
       expect(expr).toEqual({op: 'num', num: 0x1234, meta: {size: 2}});
     });
+
+    it('should evaluate .strlen', function() {
+      const expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.strlen'), LP, tstr('hello'), RP
+      ]));
+      expect(expr).toEqual(num(5));
+    });
+
+    it('should evaluate .strat', function() {
+      const expr = Exprs.evaluate(Exprs.parseOnly([
+        tcs('.strat'), LP, tstr('hello'), COMMA, tnum(1), RP
+      ]));
+      expect(expr).toEqual(num('e'.codePointAt(0)!));
+    });
+
+    it('should reject .strlen on a non-string argument', function() {
+      expect(() => Exprs.evaluate(Exprs.parseOnly([
+        tcs('.strlen'), LP, tnum(1), RP
+      ]))).toThrow(/requires a string literal/);
+    });
+
+    it('should throw on an out-of-range .strat index', function() {
+      expect(() => Exprs.evaluate(Exprs.parseOnly([
+        tcs('.strat'), LP, tstr('hi'), COMMA, tnum(5), RP
+      ]))).toThrow(/index out of range/);
+    });
   });
 
   // describe('Exprs.resolve', function() {

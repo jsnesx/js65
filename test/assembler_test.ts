@@ -760,6 +760,32 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.strlen/.strat', function() {
+    it('should compute a string literal length', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.byte'), cs('.strlen'), LP, str('hello'), RP]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(5),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should extract a character from a string literal', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.byte'), cs('.strat'), LP, str('hello'), COMMA, num(1), RP]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of('e'.codePointAt(0)!),
+        }],
+        symbols: [], segments: []});
+    });
+  });
+
   describe('.res', function() {
     it('should reserve space', function() {
       const a = new Assembler(Cpu.P02);
