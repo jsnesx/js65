@@ -713,6 +713,8 @@ export class Assembler {
         case '.assert': return this.assert(...this.parseAssert(tokens));
         case '.segment': return this.segment(...this.parseSegmentList(tokens, 1, false));
         case '.byte': return this.byte(...this.parseDataList(tokens, true));
+        case '.hibytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.hiByte(e)));
+        case '.lobytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.loByte(e)));
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
