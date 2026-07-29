@@ -131,6 +131,10 @@ export const CS_TOKEN_ALIAS_MAP = new Map([
   ['.endmac', '.endmacro'],
   ['.endrep', '.endrepeat'],
   ['.exitmac', '.exitmacro'],
+  ['.fopt', '.fileopt'],
+  // NOTE: js65's linker always links every module fully, so forceimport
+  // does nothing. Just alias it to .import for compatibility.
+  ['.forceimport', '.import'],
   ['.ismnem', '.ismnemonic'],
   ['.mac', '.macro'],
   ['.ref', '.referencedsymbol'],
