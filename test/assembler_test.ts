@@ -6,7 +6,7 @@ import {Cpu} from '../src/cpu.ts';
 import {type Expr} from '../src/expr.ts';
 import {type Module} from '../src/module.ts';
 import {Assembler} from '../src/assembler.ts';
-import {compile, type AssemblyInput} from '../src/libassembler.ts';
+import {assemble as libAssemble, compile, type AssemblyInput} from '../src/libassembler.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -27,6 +27,16 @@ async function assembleErrors(body: string): Promise<string[]> {
   const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
   if (result.success) throw new Error('Expected the assembly to fail');
   return result.messages.filter(m => m.level === 'error').map(m => m.message);
+}
+
+// Assembles a snippet through the full tokenizer/preprocessor pipeline and returns
+// the module without linking it. Allows us to test for aliases as those are handled
+// at the tokenizer level.
+async function assembleModule(body: string): Promise<Module> {
+  const result = await libAssemble([{type: 'source', code: body, name: 'test.s'} as AssemblyInput],
+                                   {generateDebugInfo: false});
+  if (!result.success) throw new Error(JSON.stringify(result.messages));
+  return result.modules[0];
 }
 
 const [_a] = [util];
@@ -1748,6 +1758,20 @@ describe('Assembler', function() {
   .endif
   .byte 2
 `)).toEqual([1, 2]);
+    });
+  });
+
+  describe('.forceimport', function() {
+    it('imports the symbol like .import', async function() {
+      const m = await assembleModule(`.forceimport foo\n.byte foo\n`);
+      expect(strip(m).symbols).toEqual([{expr: {op: 'im', sym: 'foo'}}]);
+    });
+  });
+
+  describe('.fopt', function() {
+    it('is accepted and ignored as its unimplemented still', async function() {
+      const m = await assembleModule(`.fopt comment, "hello"\n.byte 1\n`);
+      expect(m.chunks![0].data).toEqual(Uint8Array.of(1));
     });
   });
 
