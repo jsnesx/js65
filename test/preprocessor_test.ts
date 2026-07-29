@@ -510,6 +510,22 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.definedmacro', function() {
+    it('should find a .macro definition', async function() {
+      await test(['.macro foo', '  nop', '.endmacro', 'a .definedmacro(foo)'],
+           await instruction('a 1'));
+    });
+
+    it('should not find an undefined name', async function() {
+      await test(['a .definedmacro(foo)'], await instruction('a 0'));
+    });
+
+    it('should not find a plain symbol', async function() {
+      await test(['foo = 1', 'a .definedmacro(foo)'],
+           await assign('foo = 1'), await instruction('a 0'));
+    });
+  });
+
   describe('.match/.xmatch', function() {
     it('should match identical raw tokens', async function() {
       await test(['a .match(#, #)'], await instruction('a 1'));

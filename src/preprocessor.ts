@@ -252,6 +252,8 @@ export class Preprocessor implements Tokens.Source {
         return this.parseArgs(line, i, 1, this.constExpr);
       case '.defined':
         return this.parseArgs(line, i, 1, this.definedSymbol);
+      case '.definedmacro':
+        return this.parseArgs(line, i, 1, this.definedMacro);
       case '.definedsymbol':
         return this.parseArgs(line, i, 1, this.definedSymbol);
       case '.constantsymbol':
@@ -460,6 +462,16 @@ export class Preprocessor implements Tokens.Source {
       known = false; // `*`, forward references and imports are not constant
     }
     return [{token: 'num', num: known ? 1 : 0, source: cs.source}];
+  }
+
+  /**
+   * `.definedmacro` checks only for `.macro` and not the c-style `.define` macros
+   */
+  private definedMacro(cs: Token, arg: Token[]) : Token[] {
+    const ident = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single identifier');
+    return [{token: 'num', num: this.macros.get(ident) instanceof Macro ? 1 : 0,
+             source: cs.source}];
   }
 
   private definedSymbol(cs: Token, arg: Token[]) : Token[] {
