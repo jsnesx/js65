@@ -906,6 +906,7 @@ export class Assembler {
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
+        case '.dword': return this.dword(...this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
         case '.import': return this.import(...this.parseIdentifierList(tokens));
@@ -1585,6 +1586,25 @@ export class Assembler {
         this.writeNumber(chunk.data, 2, arg);
       } else {
         this.append(arg, 2);
+      }
+    }
+  }
+
+  dword(...args: Array<Expr|number>) {
+    const {chunk} = this;
+    this.markWritten(4 * args.length);
+
+    for (const arg of args) {
+      // Record source info for each byte of the dword (4 bytes)
+      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+        for (let i = 0; i < 4; i++) {
+          this._chunk.sourceMap.set(chunk.data.length + i, this._source);
+        }
+      }
+      if (typeof arg === 'number') {
+        this.writeNumber(chunk.data, 4, arg);
+      } else {
+        this.append(arg, 4);
       }
     }
   }

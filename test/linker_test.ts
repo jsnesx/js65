@@ -83,6 +83,19 @@ describe('Linker', function() {
     expect([...link(m).chunks()]).toEqual([[50, [2, 4, 103, 8]]]);
   });
 
+  it('should fill in a 4-byte substitution', function() {
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        org: 100,
+        data: Uint8Array.of(0xff, 0xff, 0xff, 0xff),
+        subs: [{offset: 0, size: 4, expr: num(0x12345678)}],
+      }],
+      segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
+    };
+    expect([...link(m).chunks()]).toEqual([[50, [0x78, 0x56, 0x34, 0x12]]]);
+  });
+
   it('should fill in an offset from a symbol', function() {
     const m = {
       chunks: [{
