@@ -40,6 +40,8 @@ interface Env {
   definedSymbol(sym: string): boolean;
   constantSymbol(sym: string): boolean;
   referencedSymbol(sym: string): boolean;
+  /** Whether the name is an opcode mnemonic of the CPU being assembled for. */
+  isMnemonic(name: string): boolean;
   evaluate(expr: Expr): number|undefined;
   assignSym(line: Token[]): void;
   setSym(line: Token[]): void;
@@ -256,6 +258,8 @@ export class Preprocessor implements Tokens.Source {
         return this.parseArgs(line, i, 1, this.definedMacro);
       case '.definedsymbol':
         return this.parseArgs(line, i, 1, this.definedSymbol);
+      case '.ismnemonic':
+        return this.parseArgs(line, i, 1, this.isMnemonic);
       case '.constantsymbol':
         return this.parseArgs(line, i, 1, this.constantSymbol);
       case '.referencedsymbol':
@@ -471,6 +475,14 @@ export class Preprocessor implements Tokens.Source {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
     return [{token: 'num', num: this.macros.get(ident) instanceof Macro ? 1 : 0,
+             source: cs.source}];
+  }
+
+  /** Checks if the current CPU setting supports this mnemonic */
+  private isMnemonic(cs: Token, arg: Token[]) : Token[] {
+    const ident = Tokens.expectIdentifier(arg[0], cs);
+    Tokens.expectEol(arg[1], 'a single identifier');
+    return [{token: 'num', num: this.env.isMnemonic(ident) ? 1 : 0,
              source: cs.source}];
   }
 

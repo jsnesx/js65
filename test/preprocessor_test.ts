@@ -526,6 +526,43 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.ref/.referenced', function() {
+    it('should report an unreferenced symbol as 0', async function() {
+      await test(['a .referencedsymbol(foo)'], await instruction('a 0'));
+    });
+
+    it('should accept the .referenced', async function() {
+      await test(['a .referenced(foo)'], await instruction('a 0'));
+    });
+
+    it('should accept the .ref', async function() {
+      await test(['a .ref(foo)'], await instruction('a 0'));
+    });
+
+    it('should report a defined symbol as referenced', async function() {
+      await test(['foo = 1', 'a .ref(foo)'],
+           await assign('foo = 1'), await instruction('a 1'));
+    });
+  });
+
+  describe('.ismnemonic', function() {
+    it('should recognize an opcode', async function() {
+      await test(['a .ismnemonic(lda)'], await instruction('a 1'));
+    });
+
+    it('should recognize an opcode in upper case', async function() {
+      await test(['a .ismnemonic(LDA)'], await instruction('a 1'));
+    });
+
+    it('should not recognize a non-opcode', async function() {
+      await test(['a .ismnemonic(foo)'], await instruction('a 0'));
+    });
+
+    it('should accept the .ismnem spelling', async function() {
+      await test(['a .ismnem(nop)'], await instruction('a 1'));
+    });
+  });
+
   describe('.match/.xmatch', function() {
     it('should match identical raw tokens', async function() {
       await test(['a .match(#, #)'], await instruction('a 1'));
