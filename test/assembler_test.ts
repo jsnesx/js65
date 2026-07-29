@@ -964,6 +964,51 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.dbyt', function() {
+    it('should write words big-endian', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.dbyt'), num(1), COMMA, num(0x403)]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0, 1, 4, 3),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support expressions with backward refs', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('q', 0x305);
+      a.directive([cs('.dbyt'), ident('q')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(3, 5),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support expressions with forward refs', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.dbyt'), ident('q')]);
+      a.label('q');
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xff, 0xff),
+          subs: [{offset: 0, size: 1,
+                  expr: {op: '>', args: [{op: 'sym', num: 0}]}},
+                 {offset: 1, size: 1,
+                  expr: {op: '<', args: [{op: 'sym', num: 0}]}}],
+        }],
+        symbols: [{expr: off(2)}],
+        segments: []});
+    });
+  });
+
   describe('.dword', function() {
     it('should support numbers', function() {
       const a = new Assembler(Cpu.P02);

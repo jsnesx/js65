@@ -906,6 +906,7 @@ export class Assembler {
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
+        case '.dbyt': return this.dbyte(...this.parseDataList(tokens));
         case '.dword': return this.dword(...this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
@@ -1586,6 +1587,29 @@ export class Assembler {
         this.writeNumber(chunk.data, 2, arg);
       } else {
         this.append(arg, 2);
+      }
+    }
+  }
+
+  // `.dbyt` is a big-endian word, but substitutions only work in little endian.
+  // So we need to split this into a `.hiByte` and `.loByte` pair if this is
+  // a forward reference that will be substituted in later.
+  dbyte(...args: Array<Expr|number>) {
+    const {chunk} = this;
+    this.markWritten(2 * args.length);
+
+    for (const arg of args) {
+      // Record source info for each byte of the word (2 bytes)
+      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
+        this._chunk.sourceMap.set(chunk.data.length, this._source);
+        this._chunk.sourceMap.set(chunk.data.length + 1, this._source);
+      }
+      if (typeof arg === 'number') {
+        this.writeNumber(chunk.data, 1, arg >> 8);
+        this.writeNumber(chunk.data, 1, arg);
+      } else {
+        this.append(Exprs.hiByte(arg), 1);
+        this.append(Exprs.loByte(arg), 1);
       }
     }
   }
