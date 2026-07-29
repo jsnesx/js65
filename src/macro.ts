@@ -39,7 +39,10 @@ export class Macro {
     let i = 1; // start looking _after_ macro ident
     const replacements = new Map<string, Token[]>();
     const lines: Token[][] = [];
-    
+    // `.paramCount` needs to know how many commas were used in the invocation
+    // in case they use it later, so store it here.
+    const paramCount = Macro.countArgs(tokens, 1);
+
     // Find a comma, skipping balanced curlies.  Parens are not special.
     for (const param of this.params) {
       const comma = Tokens.findComma(tokens, i);
@@ -84,6 +87,11 @@ export class Macro {
               mapped.push({token: 'ident', str: local});
               continue;
             }
+          } else if (tok.token === 'cs' && tok.str === '.paramcount') {
+            // .paramcount can only be used in macros, so we don't need to put
+            // it in the main directive switch statement.
+            mapped.push({token: 'num', num: paramCount, source: tok.source});
+            continue;
           } else if (tok.token === 'grp') {
             mapped.push({token: 'grp', inner: map(tok.inner)});
             continue;
@@ -99,5 +107,19 @@ export class Macro {
       lines.push(map(line));
     }
     return lines.filter(m => m.length != 0);
+  }
+
+  /**
+   * Counts the number of commas used in a macro invocation.
+   * If a param is blank like foo ,, 3 it still counts as a param
+   * If there's no params, then this should return 0
+   */
+  private static countArgs(tokens: Token[], start: number): number {
+    if (start >= tokens.length) return 0;
+    let count = 1;
+    for (let i = start; i < tokens.length; i++) {
+      if (Tokens.eq(tokens[i], Tokens.COMMA)) count++;
+    }
+    return count;
   }
 }
