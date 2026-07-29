@@ -139,9 +139,10 @@ export function evaluate(expr: Expr): Expr {
       case '<': return unary(expr, x => x & 0xff);
       case '>': return unary(expr, x => (x >> 8) & 0xff);
       case '^': return num(expr.args![0].meta?.bank) ?? expr;
-      // `.sizeof(X)` is used for structs, and we assign a variable with the name
-      // of the struct, so we can check that here by name.
-      case '.sizeof': return expr.args![0];
+      case '.sizeof': {
+        const arg = expr.args![0];
+        return arg.op === 'sym' ? expr : arg;
+      }
       case '.loword': return unary(expr, x => x & 0xffff);
       case '.hiword': return unary(expr, x => (x >>> 16) & 0xffff);
       // `.addrsize(sym)` is 1 for a zeropage symbol and 2 otherwise.  js65 has no
@@ -391,8 +392,11 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
             Tokens.fail(`Never closed: ${Tokens.nameOf(next)}`, next);
           }
           const args: Expr[] = [];
+          // `.sizeof` names a definition rather than using its value, so its
+          // argument must survive as a symbol instead of being inlined here.
+          const argSymbols = op === '.sizeof' ? undefined : symbols;
           for (const arg of Tokens.parseArgList(tokens, i + 2, close)) {
-            args.push(parseOnly(arg, 0, symbols, charEncoder));
+            args.push(parseOnly(arg, 0, argSymbols, charEncoder));
           }
           i = close;
           exprs.push(fixSize({op, args}));

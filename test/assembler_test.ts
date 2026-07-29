@@ -6,9 +6,19 @@ import {Cpu} from '../src/cpu.ts';
 import {type Expr} from '../src/expr.ts';
 import {type Module} from '../src/module.ts';
 import {Assembler} from '../src/assembler.ts';
+import {compile, type AssemblyInput} from '../src/libassembler.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
+
+// Some directives (labels especially) are only observable after the preprocessor
+// has split the source into lines, so those cases assemble a source snippet.
+async function assemble(body: string): Promise<number[]> {
+  const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
+  const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+  if (!result.success) throw new Error(JSON.stringify(result));
+  return Array.from(result.outputs[0].data);
+}
 
 const [_a] = [util];
 
@@ -1545,6 +1555,184 @@ describe('Assembler', function() {
       } catch (err: any) {
         expect(err.message).toEqual("Cannot re-enter scope foo");
       }
+    });
+  });
+
+  describe('.sizeof', function() {
+    it('reports the total size of a struct', async function() {
+      expect(await assemble(`
+.struct Player
+  xpos .byte
+  ypos .byte
+  hp   .word
+.endstruct
+  .byte .sizeof(Player)
+`)).toEqual([4]);
+    });
+
+    it('treats a struct tag as a scope rather than a value', async function() {
+      // As in ca65, a struct name names a scope whose size is only reachable
+      // through `.sizeof` - it is not itself a symbol holding the size.
+      await expect(assemble(`
+.struct Player
+  hp .word
+.endstruct
+  .byte Player
+`)).rejects.toThrow(/Symbol 'Player' undefined/);
+    });
+
+    it('reports the size of an individual struct field', async function() {
+      expect(await assemble(`
+.struct Player
+  xpos .byte
+  hp   .word
+  name .byte 8
+.endstruct
+  .byte .sizeof(Player::xpos), .sizeof(Player::hp), .sizeof(Player::name)
+`)).toEqual([1, 2, 8]);
+    });
+
+    it('reports the size of a .tag field as the tagged struct size', async function() {
+      expect(await assemble(`
+.struct Point
+  x .byte
+  y .byte
+.endstruct
+.struct Player
+  hp  .word
+  pos .tag Point
+.endstruct
+  .byte .sizeof(Player::pos), .sizeof(Player)
+`)).toEqual([2, 4]);
+    });
+
+    it('reports the size of a .proc', async function() {
+      expect(await assemble(`
+.proc Foo
+  lda #$00
+  rts
+.endproc
+  .byte .sizeof(Foo)
+`)).toEqual([0xa9, 0x00, 0x60, 3]);
+    });
+
+    it('includes nested scopes in a .proc size', async function() {
+      expect(await assemble(`
+.proc Outer
+  .byte $01
+  .proc Inner
+    .byte $02, $03
+  .endproc
+  .byte $04
+.endproc
+  .byte .sizeof(Outer), .sizeof(Outer::Inner)
+`)).toEqual([1, 2, 3, 4, 4, 2]);
+    });
+
+    it('resolves a forward reference to a .proc size', async function() {
+      expect(await assemble(`
+  .byte .sizeof(Later)
+.proc Later
+  .byte $01, $02, $03
+.endproc
+`)).toEqual([3, 1, 2, 3]);
+    });
+
+    it('prefers a scope over a symbol of the same name', async function() {
+      expect(await assemble(`
+Foo = 99
+.scope Foo
+  .byte $01, $02
+.endscope
+  .byte .sizeof(Foo)
+`)).toEqual([1, 2, 2]);
+    });
+
+    it('reports the size of data declared on a label line', async function() {
+      expect(await assemble(`
+buf: .res 10
+tbl: .byte $01, $02, $03
+  .byte .sizeof(buf), .sizeof(tbl)
+`)).toEqual([...new Array(10).fill(0), 1, 2, 3, 10, 3]);
+    });
+
+    it('reports zero for a label with no data on its line', async function() {
+      expect(await assemble(`
+empty:
+  .byte $aa
+  .byte .sizeof(empty)
+`)).toEqual([0xaa, 0]);
+    });
+
+    it('resolves forward references to structs and labels', async function() {
+      expect(await assemble(`
+  .byte .sizeof(Later), .sizeof(buf)
+.struct Later
+  a .byte
+  b .word
+.endstruct
+buf: .res 5
+`)).toEqual([3, 5, 0, 0, 0, 0, 0]);
+    });
+
+    // Unlike ca65, which counts only the segment active when a scope opened, js65
+    // counts every chunk the scope covers - crossing chunks is normal here, since
+    // `.reloc` and multi-segment placement make it something users do on purpose.
+    function sizeOfScope(build: (a: Assembler) => void, name: string) {
+      const a = new Assembler(Cpu.P02);
+      build(a);
+      return a.evaluate(a.resolve({op: '.sizeof', args: [{op: 'sym', sym: name}]}));
+    }
+
+    it('counts data on both sides of a .reloc inside a scope', function() {
+      expect(sizeOfScope(a => {
+        a.segment('CODE');
+        a.proc('Split');
+        a.byte(1, 2, 3);
+        a.reloc();
+        a.byte(4, 5);
+        a.endProc();
+      }, 'Split')).toBe(5);
+    });
+
+    it('counts data across a segment change inside a scope', function() {
+      expect(sizeOfScope(a => {
+        a.segment('CODE');
+        a.proc('Split');
+        a.byte(1);
+        a.segment('OTHER');
+        a.byte(2, 3);
+        a.endProc();
+      }, 'Split')).toBe(3);
+    });
+
+    it('counts every chunk of a scope spanning more than two', function() {
+      expect(sizeOfScope(a => {
+        a.segment('CODE');
+        a.org(0x8000);
+        a.proc('Split');
+        a.byte(1, 2);
+        a.org(0x9000);
+        a.byte(3, 4, 5, 6);
+        a.org(0xa000);
+        a.byte(7);
+        a.endProc();
+      }, 'Split')).toBe(7);
+    });
+
+    it('sizes a scope placed in one of several candidate segments', function() {
+      // A segment list is a placement choice for a single chunk, not a split.
+      expect(sizeOfScope(a => {
+        a.segment('A', 'B', 'C');
+        a.proc('Multi');
+        a.byte(1, 2, 3, 4);
+        a.endProc();
+      }, 'Multi')).toBe(4);
+    });
+
+    it('rejects .sizeof on an undefined name', async function() {
+      await expect(assemble(`  .byte .sizeof(Nope)\n`))
+          .rejects.toThrow(/Size of 'Nope' is unknown/);
     });
   });
 });

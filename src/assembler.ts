@@ -13,6 +13,20 @@ import { IntervalSet, assertNever } from './util.ts';
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
 
+/**
+ * Symbol tag used to store the size of something in the symbol table while
+ * keeping it inaccessible to the user. When a scope is closed, or
+ * the label's chunk ends, we can create this size symbol in case the user
+ * decides to query the size with `.sizeof` later.
+ */
+const SIZE_NAME = '.size';
+const SIZE_SUFFIX = `::${SIZE_NAME}`;
+
+/** Whether a symbol name is one of the internal size entries described above. */
+function isSizeOfSymbol(name: string): boolean {
+  return name === SIZE_NAME || name.endsWith(SIZE_SUFFIX);
+}
+
 export class Symbol {
   /**
    * Index into the global symbol array.  Only applies to immutable
@@ -90,34 +104,56 @@ class Scope extends BaseScope {
   readonly children = new Map<string, Scope>();
   readonly anonymousChildren: Scope[] = [];
 
+  /** Position when the scope was entered, for sizing it on exit. */
+  startPc?: Expr;
+  /** Name of the label this scope belongs to */
+  label?: string;
+
   constructor(readonly parent?: Scope, readonly kind?: 'scope'|'proc') {
     super();
     this.global = parent ? parent.global : this;
   }
 
-  pickScope(name: string): [string, Scope] {
-    // TODO - plumb the source information through here?
+  /**
+   * Walks through the scope tree to find the child scope that matches.
+   * Returns an object {scope: found} or {missing: index} if not found
+   */
+  private walkScopes(parts: string[]): {scope: Scope}|{missing: number} {
     // deno-lint-ignore no-this-alias
     let scope: Scope = this;
-    const split = name.split(/::/g);
-    const tail = split.pop()!;
-    for (let i = 0; i < split.length; i++) {
-      if (!i && !split[i]) { // global
+    for (let i = 0; i < parts.length; i++) {
+      if (!i && !parts[i]) { // leading `::` - global
         scope = scope.global;
         continue;
       }
-      let child = scope.children.get(split[i]);
+      let child = scope.children.get(parts[i]);
       while (!i && scope.parent && !child) {
-        child = (scope = scope.parent).children.get(split[i]);
+        child = (scope = scope.parent).children.get(parts[i]);
       }
-      // If the name has an explicit scope, this is an error?
-      if (!child) {
-        const scopeName = split.slice(0, i + 1).join('::');
-        throw new Error(`Could not resolve scope ${scopeName}`);
-      }
+      if (!child) return {missing: i};
       scope = child;
     }
-    return [tail, scope];
+    return {scope};
+  }
+
+  /** Look up a scope by (possibly qualified) name. Undefined if there is none. */
+  findScope(name: string): Scope|undefined {
+    const found = this.walkScopes(name.split(/::/g));
+    return 'scope' in found ? found.scope : undefined;
+  }
+
+  /** Splits a qualified symbol name into its unqualified tail and owning scope. */
+  pickScope(name: string): [string, Scope] {
+    // TODO - plumb the source information through here?
+    const split = name.split(/::/g);
+    const tail = split.pop()!;
+    const found = this.walkScopes(split);
+    // If the name has an explicit scope, this is an error?
+    if ('missing' in found) {
+      throw new Error(
+          `Could not resolve scope ${split.slice(0, found.missing + 1).join('::')}`);
+    }
+    return [tail, found.scope];
   }
 
   // close() {
@@ -222,6 +258,20 @@ export class Assembler {
 
   /** Current state for tracking .struct and .enum members */
   private structContext: Array<{kind: 'struct'|'enum', offset: number, name?: string}> = [];
+
+  /**
+   * When a `.sizeof` operation is used in a non-const context, we can defer the check
+   * and try and see if the size was added later. This is different from ca65 who just
+   * errors out, but I think its worth doing this.
+   */
+  private deferredSizeOfs = new Map<Expr, Scope>();
+
+  /**
+   * `.sizeof(label)` is the data declared on the same source line as the label.
+   * so we need a flag to track that a label started on this line so we can close
+   * the size after the line ends.
+   */
+  private pendingLabel?: {name: string, startPc: Expr};
 
   /** Mapping for any string to byte array  */
   private charMapping = new Map<string, number[]>();
@@ -408,6 +458,16 @@ export class Assembler {
 
   resolve(expr: Expr): Expr {
     const out = Exprs.traverse(expr, (e, rec) => {
+      // Need to check to see if we are resolving a `.sizeof` operation here
+      // since we don't want the symbol, but the value from symbol.size
+      // (so we don't want to run resolveSymbol below is what i mean)
+      if (e.op === '.sizeof' && e.args?.length === 1 && e.args[0].sym) {
+        const replacement = this.sizeOf(e.args[0].sym);
+        if (replacement) return Exprs.evaluate(rec(replacement));
+        // Not defined yet - leave it for `resolveSizeOfs` to retry at the end.
+        this.deferredSizeOfs.set(e, this.currentScope);
+        return e;
+      }
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
       }
@@ -418,6 +478,73 @@ export class Assembler {
       this.exprMap.set(out, orig);
     }
     return out;
+  }
+
+  private defineSizeOfSymbol(scope: Scope, name: string, size: Expr|number) {
+    const expr = typeof size === 'number' ?
+        {op: 'num', num: size, meta: Exprs.size(size)} : size;
+    scope.symbols.set(`${name}${SIZE_SUFFIX}`, {expr});
+  }
+
+  private defineSizeOfScope(scope: Scope, name: string|undefined, size: Expr) {
+    // The size lives in the scope itself, so `.sizeof(Scope)` finds it by looking
+    // up SIZE_NAME there. `.proc` also names a label, which gets the same size.
+    scope.symbols.set(SIZE_NAME, {expr: size});
+    if (name && scope.parent) this.defineSizeOfSymbol(scope.parent, name, size);
+  }
+
+  private sizeOf(name: string): Expr|undefined {
+    // A scope stores its size under its own SIZE_NAME entry. `.struct` opens a
+    // scope too, so struct tags resolve here as well.
+    const scope = this.currentScope.findScope(name);
+    if (scope) return scope.symbols.get(SIZE_NAME)?.expr;
+    return this.lookupSizeOfSymbol(name)?.expr;
+  }
+
+  /**
+   * Finds the size symbol of a (possibly qualified) symbol name.
+   */
+  private lookupSizeOfSymbol(name: string): Symbol|undefined {
+    const split = name.split(/::/g);
+    const tail = split.pop()!;
+    if (split.length) {
+      const owner = this.currentScope.findScope(split.join('::'));
+      return owner?.symbols.get(`${tail}${SIZE_SUFFIX}`);
+    }
+    // Unqualified: search up the scope chain the way symbol lookup does.
+    for (let s: Scope|undefined = this.currentScope; s; s = s.parent) {
+      const sym = s.symbols.get(`${tail}${SIZE_SUFFIX}`);
+      if (sym) return sym;
+    }
+    return undefined;
+  }
+
+  /**
+   * Size of a region as an expression resolved through the normal forward-reference handler
+   */
+  private sizeSpan(startPc: Expr, endPc: Expr): Expr {
+    const first = startPc.meta?.chunk;
+    const last = endPc.meta?.chunk;
+    if (first === last) return {op: '-', args: [endPc, startPc]};
+    if (first == null || last == null) {
+      this.fail(`Cannot determine size across chunks`, this.errorToken);
+    }
+    // If a scope spans across chunks, then we sum up the sizes across all of the chunks
+    // that it touches, stopping at the start of the final chunk.
+    let total = this.chunkLength(first!) - this.offsetIn(startPc, first!);
+    for (let i = first! + 1; i < last!; i++) total += this.chunkLength(i);
+    total += this.offsetIn(endPc, last!);
+    return {op: 'num', num: total, meta: Exprs.size(total)};
+  }
+
+  private chunkLength(chunk: number): number {
+    return this.chunks[chunk].data.length;
+  }
+
+  /** Byte offset a position expr refers to within its chunk. */
+  private offsetIn(pc: Expr, chunk: number): number {
+    // `pc()` folds in the chunk's org when one is known, so take it back out.
+    return pc.num! - (pc.meta?.rel ? 0 : this.chunks[chunk].org ?? 0);
   }
 
   resolveSymbol(symbol: Expr): Expr {
@@ -573,6 +700,47 @@ export class Assembler {
         collector.add('error', `Symbol '${name}' undefined`, sym.ref?.source);
       }
     }
+
+    this.resolveSizeOfs();
+  }
+
+  /**
+   * As part of closing scopes, we need to resolve any deferred size of operations
+   * This function was pulled out just for clarities sake, but its really just
+   * an extension of `closeScopes`
+   */
+  private resolveSizeOfs() {
+    if (!this.deferredSizeOfs.size) return;
+    const saved = this.currentScope;
+    const fix = (expr: Expr): Expr => Exprs.traverse(expr, (e, rec) => {
+      const scope = this.deferredSizeOfs.get(e);
+      if (scope && e.args?.[0]?.sym) {
+        const name = e.args[0].sym;
+        this.currentScope = scope;
+        try {
+          const replacement = this.sizeOf(name);
+          // Since we've closed all the scopes by now, anything still undefined
+          // should throw an error.
+          if (!replacement) {
+            this.fail(`Size of '${name}' is unknown`, this.errorToken);
+          }
+          return Exprs.evaluate(this.resolve(replacement!));
+        } finally {
+          this.currentScope = saved;
+        }
+      }
+      return Exprs.evaluate(rec(e));
+    });
+    for (const chunk of this.chunks) {
+      if (chunk.subs) {
+        for (const sub of chunk.subs) sub.expr = fix(sub.expr);
+      }
+      if (chunk.asserts) chunk.asserts = chunk.asserts.map(fix);
+    }
+    for (const symbol of this.symbols) {
+      if (symbol.expr) symbol.expr = fix(symbol.expr);
+    }
+    this.deferredSizeOfs.clear();
   }
 
   module(): Module {
@@ -620,6 +788,8 @@ export class Assembler {
 
       const collectSymbols = (scope: Scope) => {
         for (const [name, sym] of scope.symbols) {
+          // skip adding size symbols to the exported module since its not really a symbol
+          if (isSizeOfSymbol(name)) continue;
           if (sym.expr != null) {
             const expr = {...sym.expr};
 
@@ -668,13 +838,15 @@ export class Assembler {
       return;
     }
     this._source = tokens[0].source;
+    const isLabel =
+        tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON);
 
     try {
       // Inside a .struct/.enum, a leading identifier is a member declaration and not
       // an instruction. We still need to watch for `.endstruct` and similar instructions though.
       if (this.structContext.length && tokens[0].token === 'ident') {
         this.structMember(tokens);
-      } else if (tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON)) {
+      } else if (isLabel) {
         this.label(tokens[0]);
       } else if (tokens[0].token === 'cs') {
         this.directive(tokens);
@@ -689,6 +861,10 @@ export class Assembler {
       // Re-throw unrecoverable errors, and use this line for the source if
       // it didn't have a source attached in the err.
       throw Tokens.SourceError.locate(err, this._source);
+    } finally {
+      // A label opens its span above; this line is the remainder of the label's
+      // source line, so whatever it emitted is the label's size.
+      if (!isLabel) this.closeLabelSpan();
     }
   }
 
@@ -797,6 +973,17 @@ export class Assembler {
     }
   }
 
+  /**
+   * Finish collecting the rest of the data on a line for the size of the label
+   */
+  private closeLabelSpan() {
+    const pending = this.pendingLabel;
+    if (!pending) return;
+    this.pendingLabel = undefined;
+    this.defineSizeOfSymbol(
+        this.currentScope, pending.name, this.sizeSpan(pending.startPc, this.pc()));
+  }
+
   label(label: string|Token) {
     let ident: string;
     let token: Token|undefined;
@@ -836,6 +1023,14 @@ export class Assembler {
 
     if (!ident.startsWith('@')) {
       this.cheapLocals.clear();
+      // In ca65, sizeof only references the data on the same source line as the label.
+      // so we need to collect the data here into `pendingLabel` and end that when the next
+      // line starts. If there's nothing on the line, then the size of the label is zero.
+      if (token && (token as Tokens.StringToken).labelsData) {
+        this.pendingLabel = {name: ident, startPc: this.pc()};
+      } else {
+        this.defineSizeOfSymbol(this.currentScope, ident, 0);
+      }
       if (!this.chunk.name && !this.chunk.data.length) this.chunk.name = ident;
       if (this.opts.refExtractor?.label && this.chunk.org != null) {
         this.opts.refExtractor.label(
@@ -1215,9 +1410,11 @@ export class Assembler {
     const ctx = this.structContext.pop();
     if (!ctx || ctx.kind !== kind) this.fail(`.end${kind} without a matching .${kind}`);
     if (ctx!.name != null) {
+      // A struct tag names a scope, not a value - its size lives in that scope's
+      // size symbol, reachable only through `.sizeof`, as in ca65.
+      const size: Expr = {op: 'num', num: ctx!.offset, meta: Exprs.size(ctx!.offset)};
+      this.defineSizeOfScope(this.currentScope, ctx!.name, size);
       this.exitScope('scope');
-      // Assign a symbol to hold the size of the struct so `.sizeof(StructName)` works
-      this.assign(ctx!.name, ctx!.offset);
     }
   }
 
@@ -1225,11 +1422,10 @@ export class Assembler {
     const ctx = this.structContext[this.structContext.length - 1];
     const name = Tokens.str(tokens[0]);
     this.assign(name, ctx.offset);
-    if (ctx.kind === 'enum') {
-      ctx.offset += 1;
-    } else {
-      ctx.offset += this.structMemberSize(tokens);
-    }
+    const size = ctx.kind === 'enum' ? 1 : this.structMemberSize(tokens);
+    // The member's own symbol holds its offset, so its width goes in a size symbol.
+    this.defineSizeOfSymbol(this.currentScope, name, size);
+    ctx.offset += size;
   }
 
   // Parses out the rest of a struct member to figure out the size of it
@@ -1241,7 +1437,8 @@ export class Assembler {
     const t = Tokens.str(typeTok);
     if (t === '.tag') {
       const structName = Tokens.expectIdentifier(tokens[2]);
-      const sz = this.evaluate(this.symbol(structName));
+      const expr = this.sizeOf(structName);
+      const sz = expr != null ? this.evaluate(expr) : undefined;
       if (sz == null) this.fail(`.tag references unknown struct: ${structName}`, tokens[2]);
       return sz;
     }
@@ -1475,6 +1672,9 @@ export class Assembler {
   proc(name: string) {
     this.label(name);
     this.enterScope(name, 'proc');
+    // the size for the proc should match the scope, so give the scope the name of the label
+    // we just made so that it works properly
+    this.currentScope.label = name;
   }
 
   enterScope(name: string|undefined, kind: 'scope'|'proc') {
@@ -1487,6 +1687,7 @@ export class Assembler {
       this.fail(`Cannot re-enter scope ${name}`);
     }
     const child = new Scope(this.currentScope, kind);
+    child.startPc = this.pc();
     if (name) {
       this.currentScope.children.set(name, child);
     } else {
@@ -1502,7 +1703,11 @@ export class Assembler {
     if (this.currentScope.kind !== kind || !this.currentScope.parent) {
       this.fail(`.end${kind} without .${kind}`);
     }
-    this.currentScope = this.currentScope.parent;
+    const scope = this.currentScope;
+    if (scope.startPc && !scope.symbols.has(SIZE_NAME)) {
+      this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.pc()));
+    }
+    this.currentScope = scope.parent!;
   }
 
   pushSeg(...segments: Array<string|mod.Segment>) {
