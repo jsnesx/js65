@@ -20,6 +20,15 @@ async function assemble(body: string): Promise<number[]> {
   return Array.from(result.outputs[0].data);
 }
 
+// Same as `assemble`, but for sources that are expected to fail.
+// Returns the recorded error messages rather than the output bytes.
+async function assembleErrors(body: string): Promise<string[]> {
+  const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
+  const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+  if (result.success) throw new Error('Expected the assembly to fail');
+  return result.messages.filter(m => m.level === 'error').map(m => m.message);
+}
+
 const [_a] = [util];
 
 function ident(str: string): Token { return {token: 'ident', str}; }
@@ -1739,6 +1748,30 @@ describe('Assembler', function() {
   .endif
   .byte 2
 `)).toEqual([1, 2]);
+    });
+  });
+
+  describe('.fatal', function() {
+    it('aborts the assembly instead of continuing like .error', async function() {
+      // `.error` is recoverable, so everything after it is still assembled...
+      expect(await assembleErrors(`
+  .error "first"
+  .error "second"
+`)).toEqual(['first', 'second']);
+      // ...while `.fatal` stops immediately, so the second one never runs.
+      expect(await assembleErrors(`
+  .fatal "first"
+  .error "second"
+`)).toEqual(['first']);
+    });
+
+    it('reports its message exactly once', async function() {
+      expect(await assembleErrors(`  .fatal "boom"\n`)).toEqual(['boom']);
+    });
+
+    it('requires a single string argument', async function() {
+      expect(await assembleErrors(`  .fatal\n`))
+          .toEqual(['Expected constant string after .FATAL']);
     });
   });
 

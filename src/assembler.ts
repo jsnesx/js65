@@ -946,6 +946,7 @@ export class Assembler {
         case '.out': return this.log('info', tokens);
         case '.warning': return this.log('warn', tokens);
         case '.error': return this.log('error', tokens);
+        case '.fatal': return this.log('error', tokens, true);
 
         case '.a8':
         case '.i8':
@@ -1785,10 +1786,14 @@ export class Assembler {
     this.append({op: '.move', args: [source], meta: {size}}, size);
   }
 
-  log(level: 'info'|'warn'|'error', line: Token[]) {
+  log(level: 'info'|'warn'|'error', line: Token[], fatal = false) {
     const str = Tokens.expectString(line[1], line[0]);
     Tokens.expectEol(line[2], 'a single string');
     const source = line[0].source;
+
+    // Don't add the error to the error collector if its from `.fatal`
+    // since its unrecoverable.
+    if (fatal) throw new Tokens.SourceError(str, source);
 
     // Map 'warn' to 'warning' for ErrorLevel
     const errorLevel: ErrorLevel = level === 'warn' ? 'warning' : level;
