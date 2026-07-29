@@ -964,6 +964,51 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.dword', function() {
+    it('should support numbers', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.dword'), num(1), COMMA, num(0x12345678)]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(1, 0, 0, 0, 0x78, 0x56, 0x34, 0x12),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support expressions with backward refs', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('q', 0x305);
+      a.directive([cs('.dword'), ident('q')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(5, 3, 0, 0),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support expressions with forward refs', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.dword'), ident('q'), op('+'), num(1)]);
+      a.label('q');
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xff, 0xff, 0xff, 0xff),
+          subs: [{offset: 0, size: 4,
+                  expr: {op: '+', args: [{op: 'sym', num: 0},
+                                         {op: 'num', num: 1,
+                                          meta: {size: 1}}]}}],
+        }],
+        symbols: [{expr: off(4)}],
+        segments: []});
+    });
+  });
+
   describe('.loword/.hiword', function() {
     it('should split a 32-bit value into words', function() {
       const a = new Assembler(Cpu.P02);

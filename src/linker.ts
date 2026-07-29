@@ -823,8 +823,11 @@ class LinkChunk {
       }
     } else {
       // Regular values use unsigned range check
+      // NOTE: 2**bits rather than 1<<bits, since a 4-byte value shifts by 32,
+      // which wraps around to 1 and rejects everything.
       const bits = (size) << 3;
-      if (val != null && (val < (-1 << bits) || val >= (1 << bits))) {
+      const limit = 2 ** bits;
+      if (val != null && (val < -limit || val >= limit)) {
         const name = ['byte', 'word', 'farword', 'dword'][size - 1];
         throw new Error(`Not a ${name}: $${val.toString(16)} at $${
             (this.org! + offset).toString(16)}`);
