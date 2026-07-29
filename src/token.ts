@@ -131,7 +131,10 @@ export const CS_TOKEN_ALIAS_MAP = new Map([
   ['.endmac', '.endmacro'],
   ['.endrep', '.endrepeat'],
   ['.exitmac', '.exitmacro'],
+  ['.ismnem', '.ismnemonic'],
   ['.mac', '.macro'],
+  ['.ref', '.referencedsymbol'],
+  ['.referenced', '.referencedsymbol'],
   ['.undef', '.undefine'],
 ]);
 

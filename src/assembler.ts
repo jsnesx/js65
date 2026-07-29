@@ -425,6 +425,10 @@ export class Assembler {
     return s != null; // NOTE: this counts definitions.
   }
 
+  isMnemonic(name: string): boolean {
+    return name.toLowerCase() in this.cpu.table;
+  }
+
   evaluate(expr: Expr): number|undefined {
     expr = this.resolve(expr);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num;
