@@ -4,6 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
 import * as Exprs from '../src/expr.ts';
+import {compile, type AssemblyInput} from '../src/libassembler.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -294,4 +295,160 @@ describe('Expr', function() {
   //        .toEqual({op: 'num', num: 0x37, meta: {chunk: 1, size: 1}});
   //   });
   // });
+
+  // Test cases and output for each test case came from running each in ca65
+  describe('ca65 operator compatibility', function() {
+
+    async function assemble(body: string): Promise<number[]> {
+      const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+${body}`;
+      const result =
+          await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+      if (!result.success) {
+        throw new Error(result.messages.filter(m => m.level === 'error')
+            .map(m => m.message).join('; '));
+      }
+      return Array.from(result.outputs[0].data);
+    }
+
+    // Really should add the .dword soon, but till then, we can check the 4 bytes of the
+    // output by splitting it into a loword and hiword.
+    async function value(expr: string): Promise<number> {
+      const [lo, hi, hi2, hi3] =
+          await assemble(`.word ((${expr}) & $ffff)\n.word (.hiword(${expr}))\n`);
+      return lo | hi << 8 | hi2 << 16 | hi3 << 24;
+    }
+
+    function check(cases: Array<[string, number]>) {
+      for (const [expr, want] of cases) {
+        it(`should evaluate \`${expr}\` to ${want}`, async function() {
+          expect(await value(expr)).toBe(want);
+        });
+      }
+    }
+
+    describe('precedence', function() {
+      // ca65 gives boolean not the loosest precedence of all its operators.
+      check([
+        ['!1 && 1', 0],
+        ['!0 && 0', 1],
+        ['!1 || 0', 0],
+        ['!0 || 0', 1],
+        ['!1 .xor 1', 1],
+        ['!1 = 0', 1],
+        ['!0 = 0', 0],
+        ['!(1 = 1)', 0],
+        // boolean or is looser than boolean and/xor
+        ['1 && 0 || 1', 1],
+        ['0 || 1 && 1', 1],
+        ['1 && 0 .xor 1', 1],
+        ['0 || 1 .xor 1', 0],
+        // unary operators are the highest priority
+        ['-1 + 2', 1],
+        ['<$1234 + 1', 0x35],
+        ['2 * -3', -6],
+      ]);
+    });
+
+    describe('associativity', function() {
+      // Operators sharing a precedence level evaluate left to right.
+      check([
+        ['1 << 2 << 3', 32],
+        ['1 - 2 - 3', -4],
+        ['16 / 4 / 2', 2],
+        ['1 = 1 = 1', 1],
+        ['1 < 2 < 3', 1],
+        ['1 .xor 0 .xor 1', 0],
+        // ...including operators ca65 groups together but spells differently
+        ['2 * 3 & 7', 6],
+        ['1 << 2 * 3', 12],
+        ['2 ^ 3 & 1', 1],
+        ['1 + 2 | 4', 7],
+        ['7 - 2 | 8', 13],
+      ]);
+    });
+
+    describe('boolean operators', function() {
+      // These always reduce to 0 or 1 rather than to one of their operands.
+      check([
+        ['2 && 3', 1],
+        ['2 && 0', 0],
+        ['2 || 0', 1],
+        ['0 || 5', 1],
+        ['0 .xor 5', 1],
+        ['5 .xor 3', 0],
+        ['2 .and 3', 1],
+        ['2 .or 0', 1],
+        ['!2', 0],
+        ['.not 2', 0],
+      ]);
+    });
+
+    describe('arithmetic', function() {
+      check([
+        // Division truncates toward zero and operates on signed 32-bit values.
+        ['-7 / 2', -3],
+        ['-3 / 2', -1],
+        ['7 / -2', -3],
+        ['$80000000 / 2', -0x40000000],
+        ['-1 = $ffffffff', 1],
+        // A shift count outside 0..31 clears the value.
+        ['1 << 32', 0],
+        ['1 << 64', 0],
+        ['1 << -1', 0],
+        ['$ffffffff >> 32', 0],
+        // The bank byte of a plain number is bits 16-23.
+        ['^$123456', 0x12],
+        ['.bankbyte($123456)', 0x12],
+      ]);
+
+      it('should reject division by zero', async function() {
+        await expect(value('1 / 0')).rejects.toThrow(/division by zero/i);
+      });
+
+      it('should reject modulo by zero', async function() {
+        await expect(value('1 .mod 0')).rejects.toThrow(/modulo operation with zero/i);
+      });
+    });
+
+    describe('functions', function() {
+      check([
+        ['.max(3, 7)', 7],
+        ['.min(3, 7)', 3],
+        ['.max(-3, 7)', 7],
+        ['.min(-3, 7)', -3],
+        ['.match(1, 2)', 1],
+        ['.xmatch(1, 2)', 0],
+        ['.xmatch(1, 1)', 1],
+        ['.match("a", "b")', 1],
+        ['.xmatch("a", "b")', 0],
+        ['.match(abc, def)', 1],
+        ['.xmatch(abc, def)', 0],
+        ['.match(+, -)', 0],
+        ['.const(5)', 1],
+        ['.const(1+2)', 1],
+        ['.const(*)', 0],
+      ]);
+    });
+
+    describe('constant expressions in .if', function() {
+      it('should apply the same precedence as the assembler', async function() {
+        expect(await assemble(`
+.if !0 && 0
+.byte $11
+.endif
+.if !1 || 0
+.byte $22
+.endif
+.if 1 && 0 || 1
+.byte $33
+.endif
+.if 0 || 1 && 1
+.byte $44
+.endif
+`)).toEqual([0x11, 0x33, 0x44]);
+      });
+    });
+  });
 });
