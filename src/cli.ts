@@ -5,7 +5,7 @@ import { Cpu } from './cpu.ts';
 import { clean, smudge } from './smudge.ts';
 import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
-import { compile, findOutput, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
+import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
 
 export interface CompileOptions {
@@ -72,6 +72,28 @@ export class Cli {
     this.sources.set(filename, code);
     this.sourceLines.delete(filename);
     return code;
+  }
+
+  /**
+   * Peak at the file as a binary input and check to see if its a gzip file or
+   * a text file (skipping over the BOM if its there)
+   */
+  private async readInput(filename: string): Promise<AssemblyInput> {
+    let bytes = await this.callbacks.fsReadBytes("", filename);
+    if (typeof bytes === "string") bytes = new Base64().decode(bytes);
+    if (isGzip(bytes)) {
+      return { type: 'module', module: deserializeObjectFile(bytes, filename) };
+    }
+    // Frontends also strip the BOM, but it doesn't hurt to check it in this path too.
+    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
+    const code = new TextDecoder().decode(bytes);
+    // No assembly source starts with `{` so error out if it didn't decompress earlier.
+    if (code.trimStart().startsWith('{')) {
+      throw new Error(`${filename}: not a valid object file`);
+    }
+    this.sources.set(filename, code);
+    this.sourceLines.delete(filename);
+    return { type: 'source', code, name: filename };
   }
 
   parseArgs(args : string[]) : Arguments {
@@ -182,8 +204,7 @@ export class Cli {
       // Convert CLI arguments to libassembler inputs
       const inputs: AssemblyInput[] = [];
       for (const file of args.files) {
-        const code = await this.readSource("", file);
-        inputs.push({ type: 'source', code, name: file });
+        inputs.push(await this.readInput(file));
       }
 
       // Seed the include path with the first file's directory

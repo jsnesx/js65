@@ -54,7 +54,8 @@ async function make(args: string[], input: string, bytes: Uint8Array|null = null
     fsReadString: async (_path: string, _filename: string) => {
       return await Promise.resolve(input);
     },
-    fsReadBytes: async (_path: string, _filename: string) => {
+    fsReadBytes: async (_path: string, filename: string) => {
+      if (filename === Cli.STDIN) return await Promise.resolve(new TextEncoder().encode(input));
       return await Promise.resolve(bytes ?? new Uint8Array(0));
     },
     fsWriteString: async (_path: string, _filename: string, data: string) => {
@@ -87,7 +88,8 @@ async function makeFiles(args: string[], input: string, bytes: Uint8Array|null =
     fsReadString: async (_path: string, _filename: string) => {
       return await Promise.resolve(input);
     },
-    fsReadBytes: async (_path: string, _filename: string) => {
+    fsReadBytes: async (_path: string, filename: string) => {
+      if (filename === Cli.STDIN) return await Promise.resolve(new TextEncoder().encode(input));
       return await Promise.resolve(bytes ?? new Uint8Array(0));
     },
     fsWriteString: async (_path: string, _filename: string, _data: string) => {

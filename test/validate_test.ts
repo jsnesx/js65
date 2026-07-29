@@ -4,7 +4,8 @@
 import { describe, it, expect } from 'bun:test';
 import { parseModule, parseActionModules } from '../src/validate_modules.ts';
 import { Base64 } from '../src/base64.ts';
-import { assemble, compile, link } from '../src/libassembler.ts';
+import { gzipSync, strToU8 } from 'fflate/browser';
+import { assemble, compile, deserializeObjectFile, isGzip, link, serializeObjectFile, type Module } from '../src/libassembler.ts';
 
 const b64 = (bytes: number[]) => new Base64().encode(new Uint8Array(bytes));
 
@@ -169,26 +170,71 @@ loop:
     );
     expect(out.success).toBe(true);
 
-    const obj = JSON.parse(new TextDecoder().decode(out.outputs[0].data));
-    const parsed = parseModule(obj);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-
-    const chunk = parsed.value.chunks![0];
+    const chunk = deserializeObjectFile(out.outputs[0].data).chunks![0];
     expect(chunk.labelIndex).toBeInstanceOf(Map);
     expect(chunk.labelIndex!.get('start')).toBe(0);
     expect(chunk.labelIndex!.get('loop')).toBe(2);
     expect(chunk.sourceMap!.get(0)).toMatchObject({ file: 't.s', line: 6 }); // the `lda`
   });
 
-  it('accepts empty `{}` debug maps', () => {
+  it('writes .o files as gzip and reads them back losslessly', async () => {
+    const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "CODE"
+.org $8000
+start:
+    lda #$01
+    sta $2000
+    rts
+`;
+    const out = await compile(
+      [{ type: 'source', code: source, name: 't.s' }],
+      { lineContinuations: true, outputFormat: 'object', generateDebugInfo: true },
+    );
+    expect(out.success).toBe(true);
+
+    const o = out.outputs[0].data;
+    expect(isGzip(o)).toBe(true);
+
+    const linked = link([deserializeObjectFile(o)], {}, 'binary');
+    expect(linked.success).toBe(true);
+    expect(Array.from(linked.data)).toEqual([0xa9, 0x01, 0x8d, 0x00, 0x20, 0x60]);
+  });
+
+  it('round-trips a module handed over in-process with real Maps', () => {
+    const m: Module = {
+      name: 'inproc',
+      chunks: [{
+        segments: ['CODE'], data: new Uint8Array([0x60]),
+        labelIndex: new Map([['here', 0]]),
+        sourceMap: new Map([[0, { file: 'a.s', line: 1, column: 0 }]]),
+      }],
+    };
+    const chunk = deserializeObjectFile(serializeObjectFile(m)).chunks![0];
+    expect(chunk.labelIndex!.get('here')).toBe(0);
+    expect(chunk.sourceMap!.get(0)).toEqual({ file: 'a.s', line: 1, column: 0 });
+  });
+
+  it('reports a useful error for a corrupt .o', () => {
+    const truncated = serializeObjectFile({ name: 'm' }).slice(0, 8);
+    expect(() => deserializeObjectFile(truncated, 'bad.o')).toThrow(/bad\.o: could not decompress/);
+
+    // Well-formed gzip, but the payload is not a module.
+    const notAModule = gzipSync(strToU8('{"chunks":[{}]}'));
+    expect(() => deserializeObjectFile(notAModule, 'bad.o'))
+      .toThrow(/bad\.o: not a valid object file: module\.chunks\[0\]\.data/);
+
+    // Plain JSON is no longer an accepted object file.
+    expect(isGzip(new TextEncoder().encode('{"name":"m"}'))).toBe(false);
+    expect(() => deserializeObjectFile(new TextEncoder().encode('{"name":"m"}'), 'plain.o'))
+      .toThrow(/plain\.o: could not decompress/);
+  });
+
+  it('rejects debug maps that are not entry arrays', () => {
     const r = parseModule({
-      chunks: [{ segments: ['CODE'], data: b64([0x60]), sourceMap: {}, labelIndex: {} }],
+      chunks: [{ segments: ['CODE'], data: b64([0x60]), labelIndex: {} }],
     });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.value.chunks![0].sourceMap!.size).toBe(0);
-      expect(r.value.chunks![0].labelIndex!.size).toBe(0);
-    }
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('labelIndex');
   });
 });

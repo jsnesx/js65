@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {compile, compileRequest, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
+import {compile, compileRequest, deserializeObjectFile, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
 
 async function compileSource(source: string, filename: string = 'test.s'): Promise<Uint8Array> {
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
@@ -487,10 +487,10 @@ TestLabel:
         {binIncludePaths: ['art']}, fs);
       expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
       expect(result.success).toBe(true);
-      const mod = JSON.parse(new TextDecoder().decode(result.outputs[0].data));
-      // The three bytes should land in the module's data as base64 of AA BB CC.
-      const b64 = Buffer.from([0xAA, 0xBB, 0xCC]).toString('base64');
-      const found = (mod.chunks ?? []).some((c: {data?: string}) => c.data === b64);
+      const mod = deserializeObjectFile(result.outputs[0].data);
+      // The three bytes should land in one of the module's chunks.
+      const found = (mod.chunks ?? []).some(c =>
+        Array.from(c.data).join() === [0xAA, 0xBB, 0xCC].join());
       expect(found).toBe(true);
     });
 
