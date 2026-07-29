@@ -334,6 +334,9 @@ export class Assembler {
   /** Token for reporting errors. */
   private errorToken?: Token;
 
+  /** Flag set by `.end` directive to kill the rest of the file processing. */
+  private ended = false;
+
   /** Collector for errors and messages */
   readonly errorCollector = new ErrorCollector();
 
@@ -877,7 +880,8 @@ export class Assembler {
   // (compile) turns into an ordinary failure result.
   async tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }) {
     let line;
-    while ((line = await source.next())) {
+    // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
+    while (!this.ended && (line = await source.next())) {
       if (signal?.aborted) throw new Error('Compilation cancelled');
       await this.line(line);
     }
@@ -938,6 +942,7 @@ export class Assembler {
         case '.pushseg': return this.pushSeg(...this.parseSegmentList(tokens, 1, true));
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
         case '.move': return this.move(...this.parseMoveArgs(tokens));
+        case '.end': return this.parseNoArgs(tokens, 1), void (this.ended = true);
         case '.out': return this.log('info', tokens);
         case '.warning': return this.log('warn', tokens);
         case '.error': return this.log('error', tokens);

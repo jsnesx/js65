@@ -1711,6 +1711,37 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.end', function() {
+    it('stops assembling the rest of the file', async function() {
+      expect(await assemble(`
+  .byte 1
+  .end
+  .byte 2
+`)).toEqual([1]);
+    });
+
+    // `###` fails in the preprocessor rather than the assembler, checking that
+    // the file is really stopped processing completely
+    it('does not require the rest of the file to be valid', async function() {
+      expect(await assemble(`
+  .byte 1
+  .end
+  .notadirective bogus
+  ###
+`)).toEqual([1]);
+    });
+
+    it('is skipped inside a false conditional', async function() {
+      expect(await assemble(`
+  .byte 1
+  .if 0
+  .end
+  .endif
+  .byte 2
+`)).toEqual([1, 2]);
+    });
+  });
+
   describe('.sizeof', function() {
     it('reports the total size of a struct', async function() {
       expect(await assemble(`
