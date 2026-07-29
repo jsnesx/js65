@@ -248,6 +248,8 @@ export class Preprocessor implements Tokens.Source {
       case '.cond': return this.parseArgs(line, i, 3, this.cond);
       case '.blank':
         return this.parseArgs(line, i, 1, this.blank);
+      case '.const':
+        return this.parseArgs(line, i, 1, this.constExpr);
       case '.defined':
         return this.parseArgs(line, i, 1, this.definedSymbol);
       case '.definedsymbol':
@@ -310,8 +312,9 @@ export class Preprocessor implements Tokens.Source {
 
   // `.match`/`.xmatch` compare two token lists as raw tokens and not values, so
   // they work on things like `#` or register names that aren't expressions.
-  // `.match` compares token type + value but treats all identifiers as equal
-  // `.xmatch` also compares identifier names.
+  // `.match` compares token types only, so any number matches any other number
+  // and any identifier matches any other identifier; `.xmatch` also compares
+  // the attribute (the number's value, the identifier's or string's text).
   // the exact parameter is used to select between the two.
   private static tokensEqual(a: Token[], b: Token[], exact: boolean): boolean {
     if (a.length !== b.length) return false;
@@ -319,13 +322,15 @@ export class Preprocessor implements Tokens.Source {
       const x = a[k], y = b[k];
       if (x.token !== y.token) return false;
       switch (x.token) {
-        case 'ident':
+        case 'ident': case 'str':
           if (exact && x.str !== (y as typeof x).str) return false;
           break;
         case 'num':
-          if (x.num !== (y as typeof x).num) return false;
+          if (exact && x.num !== (y as typeof x).num) return false;
           break;
-        case 'str': case 'op': case 'cs':
+        case 'op': case 'cs':
+          // Operators and control commands *are* their text, so the text is
+          // part of the token type rather than an attribute.
           if (x.str !== (y as typeof x).str) return false;
           break;
         default:
@@ -443,6 +448,18 @@ export class Preprocessor implements Tokens.Source {
 
   private blank(cs: Token, arg: Token[]) : Token[] {
     return [{token: 'num', num: arg.length === 0 ? 1 : 0}];
+  }
+
+  /** `.const(expr)` is 1 when the expression is already known, 0 otherwise. */
+  private constExpr(cs: Token, arg: Token[]) : Token[] {
+    const expr = parseOneExpr(arg, cs, this.env.encodeChar);
+    let known = true;
+    try {
+      this.evaluateConst(expr, cs);
+    } catch {
+      known = false; // `*`, forward references and imports are not constant
+    }
+    return [{token: 'num', num: known ? 1 : 0, source: cs.source}];
   }
 
   private definedSymbol(cs: Token, arg: Token[]) : Token[] {
