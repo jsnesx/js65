@@ -9,6 +9,7 @@ import * as Tokens from '../src/token.ts';
 import {Tokenizer, type Options} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
 import { TokenStream } from '../src/tokenstream.ts';
+import { ErrorCollector } from '../src/assembler.ts';
 
 const [_] = [util];
 
@@ -29,9 +30,10 @@ async function expectSourceError(promise: Promise<unknown>, message: RegExp,
 
 //const MATCH = Symbol();
 
-async function tokenize(str: string, opts: Options = {}): Promise<Token[][]> {
+async function tokenize(str: string, opts: Options = {},
+                        errorCollector?: ErrorCollector): Promise<Token[][]> {
   const out : Token[][] = [];
-  const tokenizer = new Tokenizer(str, 'input.s', opts);
+  const tokenizer = new Tokenizer(str, 'input.s', opts, undefined, errorCollector);
   for (let line = await tokenizer.next(); line; line = await tokenizer.next()) {
     out.push(line.map(strip));
   }
@@ -271,8 +273,34 @@ describe('Tokenizer.line', function() {
     await expectSourceError(tokenize('  `abc'), /Syntax error/s, 1, 2);
   });
 
-  it('should fail to parse a bad string', function() {
-    expect(tokenize('  "abc')).rejects.toThrow(/EOF while looking for "/);
+  it('should fail to parse a string unterminated at eof', async function() {
+    await expectSourceError(tokenize('  "abc'), /Unterminated string, expected "/s, 1, 2);
+  });
+
+  it('should fail to parse a string unterminated at eol', async function() {
+    await expectSourceError(tokenize('  "abc\n  lda #$12\n'),
+                            /Unterminated string, expected "/s, 1, 2);
+  });
+
+  it('should fail to parse an unterminated char literal', async function() {
+    await expectSourceError(tokenize("  .byte 'a\n"),
+                            /Unterminated string, expected '/s, 1, 8);
+  });
+
+  it('should recover from an unterminated string when collecting errors', async function() {
+    const collector = new ErrorCollector();
+    const toks = await tokenize('  .byte "abc\n  lda #$12\n', {}, collector);
+    // The string is terminated at the end of the line and the next line is fine.
+    expect(toks).toEqual([
+      [{token: 'cs', str: '.byte', rawStr: '.byte'}, {token: 'str', str: 'abc'}],
+      [{token: 'ident', str: 'lda'}, {token: 'op', str: '#'},
+       {token: 'num', num: 0x12, width: 1}],
+    ]);
+    expect(collector.getMessages()).toMatchObject([{
+      level: 'error',
+      message: `Unterminated string, expected "`,
+      source: {file: 'input.s', line: 1, column: 8},
+    }]);
   });
 
   it('should not parse .2 as a directive', async function() {

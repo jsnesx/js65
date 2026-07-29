@@ -234,7 +234,8 @@ export async function assemble(
                 callbacks?.readText,
                 callbacks?.readBinary,
                 opts,
-                sourceContents
+                sourceContents,
+                asm.errorCollector
               );
               // Use the first name provided through a code action as the outer module name
               if (module_name === original_module_name && action.name) {
@@ -314,7 +315,8 @@ export async function assemble(
         callbacks?.readText,
         callbacks?.readBinary,
         opts,
-        sourceContents
+        sourceContents,
+        asm.errorCollector
       );
 
       // Tokenize and assemble source code
