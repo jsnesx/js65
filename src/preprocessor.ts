@@ -16,6 +16,12 @@ import { ErrorCollector, RecoverableError } from './assembler.ts';
 //    to know when to release the frame?
 const MAX_STACK_DEPTH = 100;
 
+/**
+ * Value reported by `.version`, encoded the way ca65 does it:
+ * `(major << 8) | minor`.
+ */
+const JS65_VERSION = 0x0213; // matches ca65 version 2.19
+
 // interface TokenSource {
 //   next(): Token[];
 //   include(file: string): Promise<void>;
@@ -264,7 +270,21 @@ export class Preprocessor implements Tokens.Source {
         return this.parseArgs(line, i, 1, this.constantSymbol);
       case '.referencedsymbol':
         return this.parseArgs(line, i, 1, this.referencedSymbol);
+      case '.time':
+        // Seconds since the epoch, so that source can stamp a build time.
+        return this.pseudoVariable(line, i, Math.floor(Date.now() / 1000));
+      case '.version':
+        return this.pseudoVariable(line, i, JS65_VERSION);
     }
+    return i + 1;
+  }
+
+  /**
+   * Substitutes a bare pseudo-variable with its value. Unlike
+   * the pseudo-functions these take no parentheses at all.
+   */
+  private pseudoVariable(line: Token[], i: number, num: number): number {
+    line.splice(i, 1, {token: 'num', num, source: line[i].source});
     return i + 1;
   }
 
