@@ -27,6 +27,14 @@ function isSizeOfSymbol(name: string): boolean {
   return name === SIZE_NAME || name.endsWith(SIZE_SUFFIX);
 }
 
+/**
+ * List of CPUs that we support. 
+ * We aren't very strict about the difference between 6502 and 6502x.
+ */
+const SUPPORTED_CPUS = new Set(['6502', '6502x']);
+
+const DEFAULT_CPU_NAME = '6502';
+
 export class Symbol {
   /**
    * Index into the global symbol array.  Only applies to immutable
@@ -277,6 +285,12 @@ export class Assembler {
   private charMapping = new Map<string, number[]>();
   /** Saved charmaps for `.pushcharmap`/`.popcharmap`. */
   private charmapStack: Array<Map<string, number[]>> = [];
+
+  /**
+   * We don't have any CPUs to switch to, so this is just there to make sure the
+   * .push/.popcpus match.
+   */
+  private cpuStack: string[] = [];
 
   /** The current scope. */
   private currentScope = new Scope();
@@ -927,6 +941,9 @@ export class Assembler {
           void this.charmapStack.push(new Map(this.charMapping));
         case '.popcharmap': return this.parseNoArgs(tokens, 1),
           void (this.charMapping = this.charmapStack.pop() ?? this.charMapping);
+        case '.setcpu': return this.setCpu(this.parseStr(tokens, 1));
+        case '.pushcpu': return this.parseNoArgs(tokens, 1), this.pushCpu();
+        case '.popcpu': return this.parseNoArgs(tokens, 1), this.popCpu();
         case '.asciiz': return this.asciiz(...this.parseDataList(tokens, true));
         case '.align': return this.alignDir(tokens);
         case '.struct': return this.beginStruct(tokens, 'struct');
@@ -963,17 +980,20 @@ export class Assembler {
         case '.rodata': return this.parseNoArgs(tokens, 1), this.segment('RODATA');
         case '.bss': return this.parseNoArgs(tokens, 1), this.segment('BSS');
 
-        // Unused directives we can figure out what to do with later.
-        case '.setcpu':
-        case '.feature':
-        case '.autoimport':
-        case '.case':
+        // Directives js65 accepts and deliberately ignores, because the thing
+        // they configure either doesn't exist yet or isn't configurable yet.
+        // These should probably be fixed at some point.
+        case '.list':
         case '.listbytes':
         case '.pagelength':
         case '.fileopt':
-        case '.localchar':
-        case '.linecont':
         case '.debuginfo':
+        case '.linecont':
+        case '.localchar':
+        case '.case':
+        case '.feature':
+        case '.autoimport':
+        // Probably not going to add these.
         case '.condes':
         case '.constructor':
         case '.destructor':
@@ -1780,6 +1800,21 @@ export class Assembler {
     if (!this.segmentStack.length) this.fail(`.popseg without .pushseg`);
     [this.segments, this._chunk] = this.segmentStack.pop()!;
     this._org = this._chunk?.org;
+  }
+
+  setCpu(name: string) {
+    if (!SUPPORTED_CPUS.has(name.toLowerCase())) {
+      this.fail(`Unsupported CPU: ${name}`);
+    }
+  }
+
+  pushCpu() {
+    this.cpuStack.push(DEFAULT_CPU_NAME);
+  }
+
+  popCpu() {
+    if (!this.cpuStack.length) this.fail(`.popcpu without .pushcpu`);
+    this.cpuStack.pop();
   }
 
   move(size: number, source: Expr) {

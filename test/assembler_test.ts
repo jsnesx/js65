@@ -1346,6 +1346,36 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.setcpu/.pushcpu/.popcpu', function() {
+    it('should accept a supported cpu', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.setcpu'), str('6502')]);
+      a.directive([cs('.setcpu'), str('6502X')]);
+    });
+
+    it('should reject an unsupported cpu', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.directive([cs('.setcpu'), str('65816')]))
+          .toThrow(/Unsupported CPU: 65816/);
+    });
+
+    it('should allow balanced pushes and pops', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.pushcpu')]);
+      a.directive([cs('.pushcpu')]);
+      a.directive([cs('.popcpu')]);
+      a.directive([cs('.popcpu')]);
+    });
+
+    it('should reject a .popcpu with no matching .pushcpu', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.pushcpu')]);
+      a.directive([cs('.popcpu')]);
+      expect(() => a.directive([cs('.popcpu')]))
+          .toThrow(/\.popcpu without \.pushcpu/);
+    });
+  });
+
   describe('.assert', function() {
     it('should pass immediately when true', function() {
       const a = new Assembler(Cpu.P02);
