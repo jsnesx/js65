@@ -7,6 +7,8 @@ import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
 import { ErrorCollector } from './assembler.ts';
 
+const NEWLINE = /^(\r\n|\n|\r)/;
+
 export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
 
@@ -126,7 +128,15 @@ export class Tokenizer implements Tokens.Source {
     const end = m[0];
     let str = '';
     while (!b.lookingAt(end)) {
-      if (b.eof()) throw new Error(`EOF while looking for ${end}`);
+      // Strings don't span lines, so running into a newline (or the end of the
+      // file) means the terminator is missing. Report it and pretend the string
+      // ended here, leaving the newline in the buffer so the rest of the file
+      // still tokenizes normally.
+      if (b.eof() || b.lookingAt(NEWLINE)) {
+        this.unterminated(`Unterminated string, expected ${end}`,
+                          {file: this.file, line: m.line, column: m.column});
+        return this.makeStrToken(end, str);
+      }
       if (b.token(/^\\u([0-9a-f]{4})/i)) {
         str += String.fromCodePoint(parseInt(b.group(1)!, 16));
       } else if (b.token(/^\\x([0-9a-f]{2})/i)) {
@@ -139,8 +149,22 @@ export class Tokenizer implements Tokens.Source {
       }
     }
     b.token(end);
-    // mark single quoted strings as 'char' so they can be used as numeric literals later
-    return end === `'` ? {token: 'str', str, char: true} : {token: 'str', str};
+    return this.makeStrToken(end, str);
+  }
+
+  /** mark single quoted strings as 'char' so they can be used as numeric literals later */
+  private makeStrToken(quote: string, str: string): Token {
+    return quote === `'` ? {token: 'str', str, char: true} : {token: 'str', str};
+  }
+
+  /**
+   * Records a missing string terminator. If we have an error collector, then treat
+   * it as a recoverable error by marking the end of line as the end of the string,
+   * and continue processing.
+   */
+  private unterminated(message: string, source: Tokens.SourceInfo): void {
+    if (!this.errorCollector) throw new Tokens.SourceError(message, source);
+    this.errorCollector.add('error', message, source);
   }
 
   private strTok(token: Tokens.StringToken['token']): Token {

@@ -5,6 +5,7 @@ import * as Exprs from './expr.ts';
 import { Base64 } from './base64.ts'
 import {type Token} from './token.ts'
 import {Tokenizer, type Options} from './tokenizer.ts'
+import {type ErrorCollector} from './assembler.ts';
 import * as Tokens from './token.ts';
 // TODO: import raw text files seems painful right now.
 import * as Common from './macpack/common.ts'
@@ -66,7 +67,8 @@ export class TokenStream implements Tokens.Source {
     readonly readFile?: ReadFileCallback,
     readonly readFileBinary?: ReadFileBinaryCallback,
     readonly opts?: Options,
-    readonly sourceContents?: SourceContents) {}
+    readonly sourceContents?: SourceContents,
+    readonly errorCollector?: ErrorCollector) {}
 
   /** Directory the frame currently on top should resolve includes against. */
   private currentDir(): string | undefined {
@@ -122,14 +124,16 @@ export class TokenStream implements Tokens.Source {
             const {value: code, base} = await this.loadFile<string>(
                 path, this.includeSearch(), this.readFile, line[0]);
             // Nested includes resolve relative to this file's own directory.
-            this.enter(new Tokenizer(code, path, this.opts, this.sourceContents),
+            this.enter(new Tokenizer(code, path, this.opts, this.sourceContents,
+                                     this.errorCollector),
                        joinDir(base, dirOf(path)));
             continue;
           }
           case '.macpack': {
             const pack = Tokens.expectIdentifier(line[1])?.toLowerCase();
             const code = MACPACK.get(pack) ?? this.err(line);
-            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts, this.sourceContents));
+            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts, this.sourceContents,
+                                     this.errorCollector));
             continue;
           }
           case '.incbin': {
