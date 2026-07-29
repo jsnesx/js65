@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'bun:test';
 import { parseModule, parseActionModules } from '../src/validate_modules.ts';
 import { Base64 } from '../src/base64.ts';
-import { assemble, link } from '../src/libassembler.ts';
+import { assemble, compile, link } from '../src/libassembler.ts';
 
 const b64 = (bytes: number[]) => new Base64().encode(new Uint8Array(bytes));
 
@@ -150,5 +150,45 @@ start:
     expect(roundTripped.success).toBe(true);
     expect(Array.from(roundTripped.data)).toEqual(Array.from(direct.data));
     expect(Array.from(roundTripped.data)).toEqual([0xa9, 0x01, 0x8d, 0x00, 0x20, 0x60]);
+  });
+
+  // Check that the .o round trip works with the sourceMap added
+  it('a .o built with debug info re-validates with its debug maps intact', async () => {
+    const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "CODE"
+.org $8000
+start:
+    lda #$01
+loop:
+    jmp loop
+`;
+    const out = await compile(
+      [{ type: 'source', code: source, name: 't.s' }],
+      { lineContinuations: true, outputFormat: 'object', generateDebugInfo: true },
+    );
+    expect(out.success).toBe(true);
+
+    const obj = JSON.parse(new TextDecoder().decode(out.outputs[0].data));
+    const parsed = parseModule(obj);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const chunk = parsed.value.chunks![0];
+    expect(chunk.labelIndex).toBeInstanceOf(Map);
+    expect(chunk.labelIndex!.get('start')).toBe(0);
+    expect(chunk.labelIndex!.get('loop')).toBe(2);
+    expect(chunk.sourceMap!.get(0)).toMatchObject({ file: 't.s', line: 6 }); // the `lda`
+  });
+
+  it('accepts empty `{}` debug maps', () => {
+    const r = parseModule({
+      chunks: [{ segments: ['CODE'], data: b64([0x60]), sourceMap: {}, labelIndex: {} }],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.chunks![0].sourceMap!.size).toBe(0);
+      expect(r.value.chunks![0].labelIndex!.size).toBe(0);
+    }
   });
 });

@@ -127,6 +127,24 @@ function validateSymbol(v: unknown, path: string): Symbol {
   return out;
 }
 
+// Reload the sourceMap from an object into a Array that we can use to build a map
+function mapEntries(v: unknown, path: string): Array<[unknown, unknown]> {
+  if (v instanceof Map) return [...v];
+  if (isObject(v)) return Object.entries(v);
+  return reqArray(v, path).map((e, i) => {
+    const pair = reqArray(e, `${path}[${i}]`);
+    if (pair.length !== 2) fail(`${path}[${i}]`, 'expected [key, value] pair');
+    return [pair[0], pair[1]];
+  });
+}
+
+// Object keys are always strings, so a numeric key that round-tripped as a plain
+// object property still has to read back as a number.
+function mapKeyNumber(v: unknown, path: string): number {
+  if (typeof v === 'string' && v !== '' && !Number.isNaN(Number(v))) return Number(v);
+  return reqNumber(v, path);
+}
+
 const OVERWRITE_MODES = new Set<string>(['forbid', 'allow', 'require']);
 
 function validateChunk(v: unknown, path: string): Chunk {
@@ -163,22 +181,16 @@ function validateChunk(v: unknown, path: string): Chunk {
     if (!OVERWRITE_MODES.has(ow)) fail(`${path}.overwrite`, `expected one of forbid|allow|require`);
     out.overwrite = ow as OverwriteMode;
   }
-  // sourceMap / labelIndex are `Map`s that do not survive JSON serialization
-  // (JSON.stringify emits `{}`), so they are effectively never present in a
-  // serialized `.o` file. 
-  // Accept only a real Map with correctly-typed entries and reject anything else.
   if (v.sourceMap !== undefined) {
-    if (!(v.sourceMap instanceof Map)) fail(`${path}.sourceMap`, 'expected Map');
     const m = new Map<number, SourceInfo>();
-    for (const [k, val] of v.sourceMap as Map<unknown, unknown>) {
-      m.set(reqNumber(k, `${path}.sourceMap.key`), validateSourceInfo(val, `${path}.sourceMap.value`));
+    for (const [k, val] of mapEntries(v.sourceMap, `${path}.sourceMap`)) {
+      m.set(mapKeyNumber(k, `${path}.sourceMap.key`), validateSourceInfo(val, `${path}.sourceMap.value`));
     }
     out.sourceMap = m;
   }
   if (v.labelIndex !== undefined) {
-    if (!(v.labelIndex instanceof Map)) fail(`${path}.labelIndex`, 'expected Map');
     const m = new Map<string, number>();
-    for (const [k, val] of v.labelIndex as Map<unknown, unknown>) {
+    for (const [k, val] of mapEntries(v.labelIndex, `${path}.labelIndex`)) {
       m.set(reqString(k, `${path}.labelIndex.key`), reqNumber(val, `${path}.labelIndex.value`));
     }
     out.labelIndex = m;
