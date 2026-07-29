@@ -1,6 +1,9 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
+// We use the browser build here since this file is intended to be used from both the cli and browser
+// environments
+import { gzipSync, gunzipSync, strToU8, strFromU8 } from 'fflate/browser';
 import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
@@ -160,13 +163,6 @@ export interface AssembleResult {
   messages: AssemblerMessage[];
 }
 
-const MODULE_KEYS = ['chunks', 'symbols', 'segments', 'debugSymbols'];
-
-function looksLikeModule(v: unknown): boolean {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) &&
-      MODULE_KEYS.some(k => k in (v as Record<string, unknown>));
-}
-
 // Helper to convert ActionSource to SourceInfo
 function toSourceInfo(source?: ActionSource): SourceInfo | undefined {
   if (!source) return undefined;
@@ -320,32 +316,6 @@ export async function assemble(
         opts,
         sourceContents
       );
-
-      // Try to parse as JSON Module first (for .o files)
-      let parsedJson: unknown;
-      try {
-        parsedJson = JSON.parse(input.code);
-      } catch (_err) {
-        // Not JSON, so it's source code.
-      }
-      if (parsedJson !== undefined) {
-        const parsedModule = parseModule(parsedJson);
-        if (parsedModule.ok) {
-          modules.push(parsedModule.value);
-          continue;
-        }
-        // It parsed as JSON and carries module keys, so it was meant to be a .o.
-        // Report why it was rejected instead of falling through to the tokenizer
-        if (looksLikeModule(parsedJson)) {
-          allMessages.push({
-            level: 'error',
-            message: `${input.name}: not a valid object file: ${parsedModule.error}`,
-          });
-          continue;
-        }
-        // Otherwise it's a source file that happens to be valid JSON; assemble it.
-        // I dare you to make this case happen. I dare you.
-      }
 
       // Tokenize and assemble source code
       const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
@@ -509,6 +479,7 @@ function messageFromException(err: unknown): AssemblerMessage {
 
 /**
  * Serialize a module to the .o JSON format, base64-encoding chunk data.
+ * This data will get compressed later for the final output.
  */
 function serializeModule(m: Module): string {
   const base64 = new Base64();
@@ -521,11 +492,48 @@ function serializeModule(m: Module): string {
       return [...v];
     }
     return v;
-  }, '  ');
+  });
+}
+
+/** Leading bytes of a gzip member (RFC 1952): magic 0x1f 0x8b, method 0x08 (deflate). */
+const GZIP_MAGIC = [0x1f, 0x8b, 0x08];
+
+/** Whether `data` starts with a gzip header, i.e. is a compressed `.o` rather than raw JSON. */
+export function isGzip(data: Uint8Array): boolean {
+  return data.length >= GZIP_MAGIC.length && GZIP_MAGIC.every((b, i) => data[i] === b);
 }
 
 /**
- * Deserialize a Js65Request JSON ({ inputs, options }) into typed inputs.
+ * The source info added to the output json is hilariously bad for disk size, so we
+ * compress the object files to save a lotta space. In my testing its around 10x just
+ * from gzip + another 2.5x saved just from cutting indents outta the json file.
+ */
+export function serializeObjectFile(m: Module): Uint8Array {
+  return gzipSync(strToU8(serializeModule(m)), { level: 9 });
+}
+
+/**
+ * Decode a `.o` file produced by serializeObjectFile back into a Module.
+ */
+export function deserializeObjectFile(data: Uint8Array, name = 'object file'): Module {
+  let json: string;
+  try {
+    json = strFromU8(gunzipSync(data));
+  } catch (err) {
+    throw new Error(`${name}: could not decompress: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(`${name}: not a valid object file (malformed JSON)`);
+  }
+  const validated = parseModule(parsed);
+  if (!validated.ok) throw new Error(`${name}: not a valid object file: ${validated.error}`);
+  return validated.value;
+}
+
+/**
  * Parses the JSON (expanding base64 byte/word literals) and validates the structure.
  */
 export function deserializeRequest(requestJson: string): Js65Request {
@@ -602,7 +610,7 @@ export async function compile(
     if (outputFormat === 'object') {
       const outputs: OutputFile[] = asm.modules.map(m => ({
         name: `${m.name || 'module'}.o`,
-        data: new TextEncoder().encode(serializeModule(m)),
+        data: serializeObjectFile(m),
         type: 'object',
       }));
       return { success: true, outputs, messages: asm.messages };

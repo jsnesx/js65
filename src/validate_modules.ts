@@ -127,22 +127,15 @@ function validateSymbol(v: unknown, path: string): Symbol {
   return out;
 }
 
-// Reload the sourceMap from an object into a Array that we can use to build a map
+// sourceMap / labelIndex arrive either as a real `Map` (a Module handed over
+// in-process) or as the `[key, value]` entry arrays a serialized `.o` carries.
 function mapEntries(v: unknown, path: string): Array<[unknown, unknown]> {
   if (v instanceof Map) return [...v];
-  if (isObject(v)) return Object.entries(v);
   return reqArray(v, path).map((e, i) => {
     const pair = reqArray(e, `${path}[${i}]`);
     if (pair.length !== 2) fail(`${path}[${i}]`, 'expected [key, value] pair');
     return [pair[0], pair[1]];
   });
-}
-
-// Object keys are always strings, so a numeric key that round-tripped as a plain
-// object property still has to read back as a number.
-function mapKeyNumber(v: unknown, path: string): number {
-  if (typeof v === 'string' && v !== '' && !Number.isNaN(Number(v))) return Number(v);
-  return reqNumber(v, path);
 }
 
 const OVERWRITE_MODES = new Set<string>(['forbid', 'allow', 'require']);
@@ -184,7 +177,7 @@ function validateChunk(v: unknown, path: string): Chunk {
   if (v.sourceMap !== undefined) {
     const m = new Map<number, SourceInfo>();
     for (const [k, val] of mapEntries(v.sourceMap, `${path}.sourceMap`)) {
-      m.set(mapKeyNumber(k, `${path}.sourceMap.key`), validateSourceInfo(val, `${path}.sourceMap.value`));
+      m.set(reqNumber(k, `${path}.sourceMap.key`), validateSourceInfo(val, `${path}.sourceMap.value`));
     }
     out.sourceMap = m;
   }
