@@ -27,7 +27,7 @@ function num(num: number): Token { return {token: 'num', num}; }
 function str(str: string): Token { return {token: 'str', str}; }
 function cs(str: string): Token { return {token: 'cs', str}; }
 function op(str: string): Token { return {token: 'op', str}; }
-const {COLON, COMMA, IMMEDIATE, LP, RP} = Tokens;
+const {COLON, COMMA, IMMEDIATE, LB, LP, RB, RP} = Tokens;
 const ORG = cs('.org');
 const RELOC = cs('.reloc');
 const ASSERT = cs('.assert');
@@ -754,6 +754,69 @@ describe('Assembler', function() {
     it('should support expressions with forward refs', function() {
       const a = new Assembler(Cpu.P02);
       a.directive([cs('.byte'), ident('q'), op('+'), num(1)]);
+      a.label('q');
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xff),
+          subs: [{offset: 0, size: 1,
+                  expr: {op: '+', args: [{op: 'sym', num: 0},
+                                         {op: 'num', num: 1,
+                                          meta: {size: 1}}]}}],
+        }],
+        symbols: [{expr: off(1)}],
+        segments: []});
+    });
+  });
+
+  describe('.literal', function() {
+    it('should emit strings without applying the charmap', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.charmap'), num(0x61), COMMA, num(0x80)]);
+      a.directive([cs('.byte'), str('ab')]);
+      a.directive([cs('.literal'), str('ab')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0x80, 0x62, 0x61, 0x62),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should emit strings without applying a multi-byte strmap', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.strmap'), str('ab'), COMMA,
+                   LB, num(1), COMMA, num(2), COMMA, num(3), RB]);
+      a.directive([cs('.byte'), str('ab')]);
+      a.directive([cs('.literal'), str('ab')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(1, 2, 3, 0x61, 0x62),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support numbers and expressions like .byte', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('q', 5);
+      a.directive([cs('.literal'), num(1), COMMA, num(2), op('+'), num(3),
+                   COMMA, ident('q')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(1, 5, 5),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support expressions with forward refs', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.literal'), ident('q'), op('+'), num(1)]);
       a.label('q');
       expect(strip(a.module())).toEqual({
         chunks: [{

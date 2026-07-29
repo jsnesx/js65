@@ -904,6 +904,7 @@ export class Assembler {
         case '.hibytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.hiByte(e)));
         case '.lobytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.loByte(e)));
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
+        case '.literal': return this.byteInternal(this.parseDataList(tokens, true), new Map());
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
         case '.dbyt': return this.dbyte(...this.parseDataList(tokens));
@@ -1535,7 +1536,10 @@ export class Assembler {
     this.charMapping.set(key, bytes.map(b => b & 0xff));
   }
 
-  byteInternal(args: Array<Expr|string|number>) {
+  // the `charMap` parameter defaults to the current charMap, but for `.literal`
+  // we pass in an empty map to disable the charMapping for this string.
+  byteInternal(args: Array<Expr|string|number>,
+               charmap: Map<string, number[]> = this.charMapping) {
     const {chunk} = this;
     this.markWritten(args.length);
 
@@ -1557,7 +1561,7 @@ export class Assembler {
             this._chunk.sourceMap.set(chunk.data.length + i, this._source);
           }
         }
-        writeString(chunk.data, arg, this.charMapping);
+        writeString(chunk.data, arg, charmap);
       } else {
         // Record source info before append (which writes 1 byte)
         if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
