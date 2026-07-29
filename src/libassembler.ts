@@ -160,6 +160,13 @@ export interface AssembleResult {
   messages: AssemblerMessage[];
 }
 
+const MODULE_KEYS = ['chunks', 'symbols', 'segments', 'debugSymbols'];
+
+function looksLikeModule(v: unknown): boolean {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) &&
+      MODULE_KEYS.some(k => k in (v as Record<string, unknown>));
+}
+
 // Helper to convert ActionSource to SourceInfo
 function toSourceInfo(source?: ActionSource): SourceInfo | undefined {
   if (!source) return undefined;
@@ -315,16 +322,29 @@ export async function assemble(
       );
 
       // Try to parse as JSON Module first (for .o files)
+      let parsedJson: unknown;
       try {
-        const obj = JSON.parse(input.code);
-        const parsedModule = parseModule(obj);
+        parsedJson = JSON.parse(input.code);
+      } catch (_err) {
+        // Not JSON, so it's source code.
+      }
+      if (parsedJson !== undefined) {
+        const parsedModule = parseModule(parsedJson);
         if (parsedModule.ok) {
-          // Successfully parsed as a module
           modules.push(parsedModule.value);
           continue;
         }
-      } catch (_err) {
-        // Not JSON or not a valid module, treat as source code
+        // It parsed as JSON and carries module keys, so it was meant to be a .o.
+        // Report why it was rejected instead of falling through to the tokenizer
+        if (looksLikeModule(parsedJson)) {
+          allMessages.push({
+            level: 'error',
+            message: `${input.name}: not a valid object file: ${parsedModule.error}`,
+          });
+          continue;
+        }
+        // Otherwise it's a source file that happens to be valid JSON; assemble it.
+        // I dare you to make this case happen. I dare you.
       }
 
       // Tokenize and assemble source code
@@ -495,6 +515,10 @@ function serializeModule(m: Module): string {
   return JSON.stringify(m, (k, v) => {
     if (k === 'data' && v instanceof Uint8Array) {
       return base64.encode(v);
+    }
+    // Convert maps to [key, value] arrays so we can properly save it to the module
+    if (v instanceof Map) {
+      return [...v];
     }
     return v;
   }, '  ');
