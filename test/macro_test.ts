@@ -50,6 +50,27 @@ describe('Macro', function() {
           .rejects.toThrowError(/Too many macro parameters: baz/);
     });
   });
+
+  describe('.paramcount', function() {
+    // Expected values cross-checked against a real ca65 invocation.
+    const macro = '.macro foo a, b, c\n  .byte .paramcount\n.endmacro';
+
+    it('should be 0 for a bare invocation', async function() {
+      await testExpand(macro, 'foo', '  .byte 0');
+    });
+    it('should count a single supplied argument', async function() {
+      await testExpand(macro, 'foo 1', '  .byte 1');
+    });
+    it('should count commas, not declared parameters', async function() {
+      await testExpand(macro, 'foo 1, 2', '  .byte 2');
+    });
+    it('should count blank slots between commas', async function() {
+      await testExpand(macro, 'foo ,, 3', '  .byte 3');
+    });
+    it('should count a trailing blank slot', async function() {
+      await testExpand(macro, 'foo 1,', '  .byte 2');
+    });
+  });
 });
 
 function strip(t: Token): Token {
