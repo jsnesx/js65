@@ -526,6 +526,32 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.time', function() {
+    it('should substitute the current time in seconds', async function() {
+      // Nondeterministic by nature, so check if its within a range instead
+      const before = Math.floor(Date.now() / 1000);
+      const toks = new TokenStream();
+      toks.enter(new Tokenizer('a .time', 'input.s'));
+      const line = await new Preprocessor(toks, new Assembler()).next();
+      const after = Math.floor(Date.now() / 1000);
+      const tok = line![1];
+      expect(tok.token).toBe('num');
+      expect((tok as Tokens.NumberToken).num).toBeGreaterThanOrEqual(before);
+      expect((tok as Tokens.NumberToken).num).toBeLessThanOrEqual(after);
+    });
+  });
+
+  describe('.version', function() {
+    it('should substitute a bare pseudo-variable', async function() {
+      await test(['a .version'], await instruction('a 531')); // $0213
+    });
+
+    it('should not consume parentheses', async function() {
+      // ca65 rejects `.version()`, so the parens must survive as themselves.
+      await test(['a .version ( 1 )'], await instruction('a 531 ( 1 )'));
+    });
+  });
+
   describe('.ref/.referenced', function() {
     it('should report an unreferenced symbol as 0', async function() {
       await test(['a .referencedsymbol(foo)'], await instruction('a 0'));
