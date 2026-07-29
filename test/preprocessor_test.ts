@@ -588,6 +588,32 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.asize/.isize', function() {
+    it('should report 8-bit registers', async function() {
+      await test(['a .asize .isize'], await instruction('a 8 8'));
+    });
+  });
+
+  describe('.cpu', function() {
+    it('should report the supported instruction sets', async function() {
+      await test(['a .cpu'], await instruction('a 3')); // 6502 and 6502X
+    });
+
+    it('should be usable in an .if condition', async function() {
+      await test(['.if .cpu .bitand 2', // CPU_ISET_6502X
+            'yep',
+            '.else',
+            'nope',
+            '.endif'],
+           await instruction('yep'));
+    });
+
+    it('should not consume parentheses', async function() {
+      // ca65 rejects `.cpu()`, so the parens must survive as themselves.
+      await test(['a .cpu ( 1 )'], await instruction('a 3 ( 1 )'));
+    });
+  });
+
   describe('.ref/.referenced', function() {
     it('should report an unreferenced symbol as 0', async function() {
       await test(['a .referencedsymbol(foo)'], await instruction('a 0'));
