@@ -22,6 +22,20 @@ const MAX_STACK_DEPTH = 100;
  */
 const JS65_VERSION = 0x0213; // matches ca65 version 2.19
 
+/**
+ * Value reported by `.cpu`.
+ * The set of instruction sets the current CPU supports, using ca65's bit numbering
+ * where bit 0 is the base 6502 set and bit 1 the undocumented "6502X" opcodes
+ * We always compile with 6502x as the default.
+ */
+const JS65_CPU_ISET = 0x03;
+
+/**
+ * Value reported by `.asize` and `.isize`.  js65 assembles for the 6502, whose
+ * accumulator and index registers are always 8 bits wide.
+ */
+const REGISTER_SIZE = 8;
+
 // interface TokenSource {
 //   next(): Token[];
 //   include(file: string): Promise<void>;
@@ -276,6 +290,11 @@ export class Preprocessor implements Tokens.Source {
         return this.pseudoVariable(line, i, Math.floor(Date.now() / 1000));
       case '.version':
         return this.pseudoVariable(line, i, JS65_VERSION);
+      case '.asize':
+      case '.isize':
+        return this.pseudoVariable(line, i, REGISTER_SIZE);
+      case '.cpu':
+        return this.pseudoVariable(line, i, JS65_CPU_ISET);
     }
     return i + 1;
   }
