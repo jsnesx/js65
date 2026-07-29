@@ -124,8 +124,8 @@ export function evaluate(expr: Expr): Expr {
         return {op: 'num', num: expr.num! + meta.org!, meta};
       }
       return expr;
-    case '.max': return sameChunk(expr, Math.max);
-    case '.min': return sameChunk(expr, Math.min);
+    case '.max': return varArg(expr, Math.max);
+    case '.min': return varArg(expr, Math.min);
     default: // fall through to later checks
   }
 
@@ -138,7 +138,13 @@ export function evaluate(expr: Expr): Expr {
       case '!': return unary(expr, x => +!x);
       case '<': return unary(expr, x => x & 0xff);
       case '>': return unary(expr, x => (x >> 8) & 0xff);
-      case '^': return num(expr.args![0].meta?.bank) ?? expr;
+      case '^': {
+        // Minor diff between js65, but if you use `^` on an addr instead of
+        // a number, then we load the `.bank` value instead of the upper bits
+        // 16-23 of the number like ca65 .bankbyte
+        const bank = num(expr.args![0].meta?.bank);
+        return bank ?? unary(expr, x => (x >>> 16) & 0xff);
+      }
       case '.sizeof': {
         const arg = expr.args![0];
         return arg.op === 'sym' ? expr : arg;
@@ -177,22 +183,29 @@ export function evaluate(expr: Expr): Expr {
     case '+': return plus(expr);
     case '-': return minus(expr);
     case '*': return binary(expr, (a, b) => a * b);
-    case '/': return binary(expr, (a, b) => Math.floor(a / b));
-    case '.mod': return binary(expr, (a, b) => a % b);
+    case '/': return binary(expr, (a, b) => {
+      if (b === 0) throw new Error('Division by zero');
+      return Math.trunc(a / b); // ca65 truncates toward zero
+    });
+    case '.mod': return binary(expr, (a, b) => {
+      if (b === 0) throw new Error('Modulo operation with zero');
+      return a % b;
+    });
     case '&': return binary(expr, (a, b) => a & b);
     case '|': return binary(expr, (a, b) => a | b);
     case '^': return binary(expr, (a, b) => a ^ b);
-    case '<<': return binary(expr, (a, b) => a << b);
-    case '>>': return binary(expr, (a, b) => a >>> b);
+    case '<<': return binary(expr, shift((a, b) => a << b));
+    case '>>': return binary(expr, shift((a, b) => a >>> b));
     case '<': return binary(expr, (a, b) => +(a < b));
     case '<=': return binary(expr, (a, b) => +(a <= b));
     case '>': return binary(expr, (a, b) => +(a > b));
     case '>=': return binary(expr, (a, b) => +(a >= b));
     case '=': return binary(expr, (a, b) => +(a == b));
     case '<>': return binary(expr, (a, b) => +(a != b));
-    case '&&': return binary(expr, (a, b) => a && b);
-    case '||': return binary(expr, (a, b) => a || b);
-    case '.xor': return binary(expr, (a, b) => !a && b || !b && a || 0);
+    // The boolean operators always reduce to 0 or 1, never to an operand.
+    case '&&': return binary(expr, (a, b) => +(!!a && !!b));
+    case '||': return binary(expr, (a, b) => +(!!a || !!b));
+    case '.xor': return binary(expr, (a, b) => +(!!a !== !!b));
     case '.strat': {
       const [s, idx] = expr.args!;
       if (s.op !== 'str') throw new Error('.strat requires a string literal');
@@ -491,10 +504,14 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
 }
 
 
-// works on absolute numbers, or relative numbers if all in same chunk.
-// may not mix relative + absolute.
-function sameChunk(_expr: Expr, _f: (...nums: number[]) => number): Expr {
-  throw new Error();
+/** ca65 evaluates expressions as signed 32-bit integers, so we do too. */
+function i32(x: number): number {
+  return x | 0;
+}
+
+/** Wrap the shift so that counts outside 0..31 produce 0. */
+function shift(f: (x: number, n: number) => number): (x: number, n: number) => number {
+  return (x, n) => (n >>> 0) >= 32 ? 0 : f(x, n);
 }
 
 function num(num: number|undefined): Expr|undefined {
@@ -506,7 +523,7 @@ function unary(expr: Expr, f: (x: number) => number): Expr {
   // require absolute
   const arg = expr.args![0];
   if (!isAbs(arg)) return expr;
-  const num = f(arg.num!);
+  const num = i32(f(i32(arg.num!)));
   return {op: 'num', num, meta: size(num)};
 }
 
@@ -514,7 +531,15 @@ function binary(expr: Expr, f: (x: number, y: number) => number): Expr {
   // require both to be absolute
   const [a, b] = expr.args!;
   if (!isAbs(a) || !isAbs(b)) return expr;
-  const num = f(a.num!, b.num!);
+  const num = i32(f(i32(a.num!), i32(b.num!)));
+  return {op: 'num', num, meta: size(num)};
+}
+
+/** `.max`/`.min`: works on absolute numbers only. */
+function varArg(expr: Expr, f: (...nums: number[]) => number): Expr {
+  const args = expr.args!;
+  if (!args.length || !args.every(isAbs)) return expr;
+  const num = i32(f(...args.map(a => i32(a.num!))));
   return {op: 'num', num, meta: size(num)};
 }
 
@@ -590,51 +615,58 @@ function compareOp(top: OperatorMeta, next: OperatorMeta): number {
 type OperatorMeta = readonly [number, number, number];
 const BINARY = 2;
 const UNARY = 1;
+
+// Precedence follows ca65's table in section 5.5 of its manual.
+// The numbers here are opposite of what ca65 uses, but that is fine as long
+// as they are the same relative to each other.
+const LEFT = 1;
+const RIGHT = -1;
 export const BINOPS = new Map<string, OperatorMeta>([
   // Scoping operator
-  // ['::', [8, 1, BINARY]],
+  // ['::', [8, LEFT, BINARY]],
   // Memory hints
   //[':', [6, 0]],
-  // Multiplicative operators: note that bitwise and arithmetic cannot associate
-  ['*', [5, 4, BINARY]],
-  ['/', [5, 4, BINARY]],
-  ['.mod', [5, 3, BINARY]],
-  ['&', [5, 2, BINARY]],
-  ['^', [5, 1, BINARY]],
-  ['<<', [5, 0, BINARY]],
-  ['>>', [5, 0, BINARY]],
-  // Arithmetic operators: note that bitwise and arithmetic cannot associate
-  ['+', [4, 2, BINARY]],
-  ['-', [4, 2, BINARY]],
-  ['|', [4, 1, BINARY]],
+  // Multiplicative and bitwise operators
+  ['*', [6, LEFT, BINARY]],
+  ['/', [6, LEFT, BINARY]],
+  ['.mod', [6, LEFT, BINARY]],
+  ['&', [6, LEFT, BINARY]],
+  ['^', [6, LEFT, BINARY]],
+  ['<<', [6, LEFT, BINARY]],
+  ['>>', [6, LEFT, BINARY]],
+  // Arithmetic operators
+  ['+', [5, LEFT, BINARY]],
+  ['-', [5, LEFT, BINARY]],
+  ['|', [5, LEFT, BINARY]],
   // Comparison operators
-  ['<', [3, 0, BINARY]],
-  ['<=', [3, 0, BINARY]],
-  ['>', [3, 0, BINARY]],
-  ['>=', [3, 0, BINARY]],
-  ['=', [3, 0, BINARY]],
-  ['<>', [3, 0, BINARY]],
-  // Logical operators: different kinds cannot associate
-  ['&&', [2, 3, BINARY]],
-  ['.xor', [2, 2, BINARY]],
-  ['||', [2, 1, BINARY]],
+  ['<', [4, LEFT, BINARY]],
+  ['<=', [4, LEFT, BINARY]],
+  ['>', [4, LEFT, BINARY]],
+  ['>=', [4, LEFT, BINARY]],
+  ['=', [4, LEFT, BINARY]],
+  ['<>', [4, LEFT, BINARY]],
+  // Boolean and/xor have more precedence than boolean or
+  ['&&', [3, LEFT, BINARY]],
+  ['.xor', [3, LEFT, BINARY]],
+  ['||', [2, LEFT, BINARY]],
   // Comma
   //[',', [1, 1]],
 ]);
 
 const PREFIXOPS = new Map<string, OperatorMeta>([
-  // ['::', [9, -1, UNARY]], // global scope
-  ['+', [9, -1, UNARY]],
-  ['-', [9, -1, UNARY]],
-  ['~', [9, -1, UNARY]],
-  ['<', [9, -1, UNARY]],
-  ['>', [9, -1, UNARY]],
-  ['^', [9, -1, UNARY]],
-  ['!', [2, -1, UNARY]],
+  // ['::', [7, RIGHT, UNARY]], // global scope
+  ['+', [7, RIGHT, UNARY]],
+  ['-', [7, RIGHT, UNARY]],
+  ['~', [7, RIGHT, UNARY]],
+  ['<', [7, RIGHT, UNARY]],
+  ['>', [7, RIGHT, UNARY]],
+  ['^', [7, RIGHT, UNARY]],
+  // Boolean not has less precedence than everything else, so `!a && b` is `!(a && b)`.
+  ['!', [1, RIGHT, UNARY]],
   // The following operations force the value to use a certain addresing mode
-  // ['z:', [2, -1, UNARY]], // direct/zeropage
-  // ['a:', [2, -1, UNARY]], // absolute
-  // ['f:', [2, -1, UNARY]], // far
+  // ['z:', [2, RIGHT, UNARY]], // direct/zeropage
+  // ['a:', [2, RIGHT, UNARY]], // absolute
+  // ['f:', [2, RIGHT, UNARY]], // far
 ]);
 
 // TODO - skip1 and skip2 macros
