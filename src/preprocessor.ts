@@ -123,7 +123,11 @@ export class Preprocessor implements Tokens.Source {
           // Possibilities: (1) label, (2) instruction/assign, (3) macro
           // Labels get split out.  We don't distinguish assigns yet.
           if (Tokens.eq(line[1], Tokens.COLON)) {
-            this.outQueue.push(line.splice(0, 2));
+            const label = line.splice(0, 2);
+            // Remember that data followed the label on its source line, since
+            // that's what `.sizeof(label)` measures and the split loses it.
+            if (line.length) label[0] = {...front, labelsData: true};
+            this.outQueue.push(label);
             break;
           }
           if (Tokens.eq(line[1], Tokens.ASSIGN)) {

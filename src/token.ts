@@ -63,6 +63,11 @@ export interface StringToken {
   rawStr?: string; // Original possibly aliased form for CS tokens
   char?: boolean; // marks a difference between char single quotes and string double quotes.
   source?: SourceInfo;
+  /**
+   * Set on a label the preprocessor split off a line that still had content, so
+   * the assembler can attribute that line's data to the label for `.sizeof`.
+   */
+  labelsData?: boolean;
 }
 export interface NumberToken {
   token: NumberTok;
