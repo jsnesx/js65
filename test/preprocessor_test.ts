@@ -26,13 +26,13 @@ describe('Preprocessor', function() {
     expect(out).toEqual(want);
   }
 
-  function testError(lines: string[], msg: RegExp) {
+  async function testError(lines: string[], msg: RegExp) {
     const code = lines.join('\n');
     const toks = new TokenStream();
     toks.enter(new Tokenizer(code, 'input.s'));
     // deno-lint-ignore no-explicit-any
     const preprocessor = new Preprocessor(toks, {} as any);
-    expect((async () => { while (await preprocessor.next()); })())
+    await expect((async () => { while (await preprocessor.next()); })())
         .rejects.toThrow(msg);
   }
 
@@ -523,6 +523,42 @@ describe('Preprocessor', function() {
     it('should not find a plain symbol', async function() {
       await test(['foo = 1', 'a .definedmacro(foo)'],
            await assign('foo = 1'), await instruction('a 0'));
+    });
+  });
+
+  describe('.delmacro', function() {
+    it('should delete a .macro definition', async function() {
+      await test(['.macro foo', '  nop', '.endmacro', '.delmacro foo', 'foo'],
+           await instruction('foo'));
+    });
+
+    it('should accept the .delmac spelling', async function() {
+      await test(['.macro foo', '  nop', '.endmacro', '.delmac foo', 'foo'],
+           await instruction('foo'));
+    });
+
+    it('should allow redefining the macro afterwards', async function() {
+      await test(['.macro foo', '  nop', '.endmacro',
+            '.delmacro foo',
+            '.macro foo', '  rts', '.endmacro',
+            'foo'],
+           await instruction('rts'));
+    });
+
+    it('should reject a .define style macro', async function() {
+      await testError(['.define foo bar', '.delmacro foo'],
+                      /Not a \.macro: foo/);
+    });
+
+    it('should reject an unknown name', async function() {
+      await testError(['.delmacro foo'], /Not defined: foo/);
+    });
+  });
+
+  describe('.undefine', function() {
+    it('should reject a .macro style macro', async function() {
+      await testError(['.macro foo', '  nop', '.endmacro', '.undefine foo'],
+                      /Not a \.define macro: foo/);
     });
   });
 

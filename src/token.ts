@@ -128,6 +128,7 @@ export const CS_TOKEN_ALIAS_MAP = new Map([
   ['.bank', '.bankbyte'],
   ['.byt', '.byte'],
   ['.def', '.defined'],
+  ['.delmac', '.delmacro'],
   ['.endmac', '.endmacro'],
   ['.endrep', '.endrepeat'],
   ['.exitmac', '.exitmacro'],

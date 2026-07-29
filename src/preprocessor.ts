@@ -236,9 +236,10 @@ export class Preprocessor implements Tokens.Source {
 
   private expandDirective(directive: string, line: Token[], i: number): number {
     switch (directive) {
-      case '.define': 
-      case '.ifdef':  
-      case '.ifndef': 
+      case '.define':
+      case '.delmacro':
+      case '.ifdef':
+      case '.ifndef':
       case '.undefine':
         return this.skipIdentifier(line, i);
       case '.skip': return this.skip(line, i);
@@ -531,7 +532,7 @@ export class Preprocessor implements Tokens.Source {
 
   /**
    * If the following is an identifier, skip it.  This is used when
-   * expanding .define, .undefine, .defined, .ifdef, and .ifndef.
+   * expanding .define, .undefine, .delmacro, .defined, .ifdef, and .ifndef.
    * Does not skip scoped identifiers, since macros can't be scoped.
    */
   private skipIdentifier(line: Token[], i: number): number {
@@ -586,6 +587,7 @@ export class Preprocessor implements Tokens.Source {
 
   private readonly runDirectives: Record<string, (ts: Token[]) => Promise<void>> = {
     '.define': (line) => this.parseDefine(line),
+    '.delmacro': (line) => this.parseDelMacro(line),
     '.undefine': (line) => this.parseUndefine(line),
     '.else': ([cs]) => badClose('.if', cs),
     '.elseif': ([cs]) => badClose('.if', cs),
@@ -643,8 +645,30 @@ export class Preprocessor implements Tokens.Source {
     const [cs, ident, eol] = line;
     const name = Tokens.expectIdentifier(ident, cs);
     Tokens.expectEol(eol);
-    if (!this.macros.has(name)) {
+    const prev = this.macros.get(name);
+    if (!prev) {
       Tokens.fail(`Not defined: ${Tokens.nameOf(ident)}`, ident);
+    }
+    // ca65 only deletes .define-style macros here
+    // they should use .delmacro for the classic .macro-style ones.
+    if (prev instanceof Macro) {
+      Tokens.fail(`Not a .define macro: ${Tokens.nameOf(ident)}`, ident);
+    }
+    this.macros.delete(name);
+    return await Promise.resolve();
+  }
+
+  /** `.delmacro` deletes a classic `.macro` the counterpart of `.undefine`. */
+  private async parseDelMacro(line: Token[]) {
+    const [cs, ident, eol] = line;
+    const name = Tokens.expectIdentifier(ident, cs);
+    Tokens.expectEol(eol);
+    const prev = this.macros.get(name);
+    if (!prev) {
+      Tokens.fail(`Not defined: ${Tokens.nameOf(ident)}`, ident);
+    }
+    if (!(prev instanceof Macro)) {
+      Tokens.fail(`Not a .macro: ${Tokens.nameOf(ident)}`, ident);
     }
     this.macros.delete(name);
     return await Promise.resolve();
