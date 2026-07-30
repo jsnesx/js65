@@ -1509,6 +1509,45 @@ describe('Assembler', function() {
         symbols: [], segments: [],
       });
     });
+
+    it('should not emit an empty chunk when opened outside a segment', async function() {
+      const m = await assembleModule(`
+.scope Constants
+  FOO = 1
+  BAR = 2
+.endscope
+.struct Point
+  xc .byte
+  yc .byte
+.endstruct
+.segment "DATA"
+  .byte Constants::FOO, Constants::BAR
+  .byte .sizeof(Point)
+`);
+      // Check that the only chunk is from the DATA segment
+      expect(m.chunks!.map(c => ({segments: c.segments, data: c.data}))).toEqual([
+        {segments: ['DATA'], data: Uint8Array.of(1, 2, 2)},
+      ]);
+    });
+
+    it('should emit no chunks at all for a source that only declares a scope',
+       async function() {
+      const m = await assembleModule(`.scope Constants\n  FOO = 1\n.endscope\n`);
+      expect(m.chunks).toEqual([]);
+    });
+
+    // The size of a scope still has to be measured from the first byte the scope
+    // actually emits, even though the chunk doesn't exist when the scope opens.
+    it('should size a scope that opens before its chunk exists', async function() {
+      const m = await assembleModule(`
+.segment "DATA"
+.scope Sized
+  .byte 1, 2, 3
+.endscope
+  .byte .sizeof(Sized)
+`);
+      expect(m.chunks!.map(c => c.data)).toEqual([Uint8Array.of(1, 2, 3, 3)]);
+    });
   });
 
   describe('.import', function() {

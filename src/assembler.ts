@@ -408,8 +408,7 @@ export class Assembler {
       // Check the current segments right now to see if we know if this
       // chunk is landing in ZP or ABS. If all of the possible segments for this
       // chunk are labelled as ZP, then this chunk should be in ZP too.
-      if (this.segments.length &&
-          this.segments.every(s => this.segmentData.get(s)?.addressing === 1)) {
+      if (this.segmentsAreZeropage()) {
         this._chunk.zeropage = true;
       }
       this.chunks.push(this._chunk);
@@ -457,12 +456,34 @@ export class Assembler {
   //   return this._org + this.offset;
   // }
 
+  /**
+   * NOTICE: `pc()` should NOT call `this.chunk()` which would in
+   * turn call ensureChunk and materialize a chunk. Users can inadvertently
+   * call `pc()` through opening a scope or struct, and if there hasn't been
+   * any segments started, this can lead to zero size chunks to get created
+   * (which then break linking.) Instead of patching around that in the linker
+   * I think it makes more sense to work around it here, by not starting
+   * a chunk at `pc()` but set it up to reference whatever the first chunk
+   * will be when it's created.
+   */
   pc(): Expr {
-    const num = this.chunk.data.length; // NOTE: before counting chunks
-    const meta: Exprs.Meta = {rel: true, chunk: this.chunks.length - 1};
-    if (this._chunk?.org != null) meta.org = this._chunk.org;
-    if (this._chunk?.zeropage) meta.zeropage = true;
+    const num = this._chunk?.data.length ?? 0;
+    const meta: Exprs.Meta = {
+      rel: true,
+      chunk: this._chunk ? this.chunks.length - 1 : this.chunks.length,
+    };
+    const org = this._chunk?.org ?? this._org;
+    if (org != null) meta.org = org;
+    if (this._chunk ? this._chunk.zeropage : this.segmentsAreZeropage()) {
+      meta.zeropage = true;
+    }
     return Exprs.evaluate({op: 'num', num, meta});
+  }
+
+  /** Whether every segment currently selected is a zeropage segment. */
+  private segmentsAreZeropage(): boolean {
+    return this.segments.length > 0 &&
+        this.segments.every(s => this.segmentData.get(s)?.addressing === 1);
   }
 
   // Returns an expr resolving to a symbol name (e.g. a label)
@@ -549,6 +570,13 @@ export class Assembler {
     if (first === last) return {op: '-', args: [endPc, startPc]};
     if (first == null || last == null) {
       this.fail(`Cannot determine size across chunks`, this.errorToken);
+    }
+    // `pc()` names the chunk the next byte would go into, which may not exist yet, so
+    // the start isn't guaranteed to precede the end. It can be a chunk that never got
+    // any data, or `.popseg` may have rewound us to an earlier chunk.
+    if (first! >= this.chunks.length || first! > last!) {
+      const total = this.offsetIn(endPc, last!);
+      return {op: 'num', num: total, meta: Exprs.size(total)};
     }
     // If a scope spans across chunks, then we sum up the sizes across all of the chunks
     // that it touches, stopping at the start of the final chunk.
