@@ -1940,8 +1940,6 @@ export class Assembler {
           case 'fill': seg.fill = this.parseConst(val, 0); break;
           case 'out': seg.out = this.parseOptionalStr(val, 0) ?? '%O'; break;
           case 'overlay': seg.overlay = this.parseStr(val, 0); break;
-          // TODO allow setting free space
-          // case 'free': seg.free = this.parseConst(val, 0); break;
           case 'zp': case 'zeropage': seg.addressing = 1; break;
           default: this.fail(`Unknown segment attr: ${key}`);
         }
