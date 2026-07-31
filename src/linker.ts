@@ -507,6 +507,13 @@ function fail(msg: string): never {
   throw new Error(msg);
 }
 
+/** Rounds up to the next multiple of `align`, which must be positive. */
+function alignUp(value: number, align: number): number {
+  // NOTE: arithmetic rather than bit twiddling, since offsets in RAM segments
+  // are past the 32-bit sign bit (see LinkSegment.RAM_OFFSET).
+  return align > 1 ? Math.ceil(value / align) * align : value;
+}
+
 class LinkSegment {
   readonly name: string;
   readonly bank: number;
@@ -516,6 +523,8 @@ class LinkSegment {
   readonly addressing: number;
   /** Byte to fill unused space with, or undefined to leave it alone. */
   readonly fill: number|undefined;
+  /** Whether chunks placed here may share bytes with identical data. */
+  readonly dedupe: boolean;
   readonly isRam: boolean;
 
   constructor(segment: Segment) {
@@ -534,6 +543,7 @@ class LinkSegment {
     // Allow memory offset to be null for non-prg segments
     this.memory = segment.memory ?? 0;
     this.fill = segment.fill;
+    this.dedupe = segment.dedupe ?? false;
   }
 
   // offset = org + delta
@@ -554,8 +564,6 @@ class LinkChunk {
   subs = new Set<Substitution>();
   selfSubs = new Set<Substitution>();
 
-  /** Global IDs of chunks needed to locate before we can complete this one. */
-  deps = new Set<number>();
   /** Symbols that are imported into this chunk (these are also deps). */
   imports = new Set<string>();
   // /** Symbols that are exported from this chunk. */
@@ -740,7 +748,6 @@ class LinkChunk {
   addDep(sub: Substitution, dep: number) {
     if (dep === this.index && this.subs.delete(sub)) this.selfSubs.add(sub);
     this.linker.chunks[dep].follow.set(sub, this);
-    this.deps.add(dep);
   }
 
   // Returns a list of dependent chunks, or undefined if successful.
@@ -791,18 +798,6 @@ class LinkChunk {
     }
     if (del) {
       this.subs.delete(sub) || this.selfSubs.delete(sub);
-      if (!this.subs.size) { // NEW: ignores self-subs now
-      // if (!this.subs.size || (deps.size === 1 && deps.has(this.index)))  {
-        // add to resolved queue - ready to be placed!
-        // Question: should we place it right away?  We place the fixed chunks
-        // immediately in the ctor, but there's no choice to defer.  For reloc
-        // chunks, it's better to wait until we've resolved as much as possible
-        // before placing anything.  Fortunately, placing a chunk will
-        // automatically resolve all deps now!
-        if (this.linker.unresolvedChunks.delete(this)) {
-          this.linker.insertResolved(this);
-        }
-      }
     }
   }
 
@@ -882,18 +877,18 @@ class Link {
   rawSegments = new Map<string, Segment[]>();
   segments = new Map<string, LinkSegment>();
 
-  resolvedChunks: LinkChunk[] = [];
-  unresolvedChunks = new Set<LinkChunk>();
+  /**
+   * Names of the segments in the order they are filled.
+   * This comes from first, the order they appear in the ld65 linker script,
+   * and then second the order they appear in object files (parsed in the
+   * order they are passed into the link command)
+   */
+  segmentOrder: string[] = [];
+  private segmentIndex = new Map<string, number>();
 
   watches: number[] = []; // debugging aid: offsets to watch.
   placed: Array<[number, LinkChunk]> = [];
   initialReport = '';
-
-  // TODO - deferred - store some sort of dependency graph?
-
-  insertResolved(chunk: LinkChunk) {
-    binaryInsert(this.resolvedChunks, c => c.size, chunk);
-  }
 
   base(data: Uint8Array, offset = 0) {
     this.data.set(offset, data);
@@ -977,6 +972,12 @@ class Link {
   }
 
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
+    // Preserve the order that the segments are declared
+    for (const name of [...this.segmentOrder, ...this.rawSegments.keys()]) {
+      if (this.segmentIndex.has(name)) continue;
+      this.segmentIndex.set(name, this.segmentIndex.size);
+    }
+    this.segmentOrder = [...this.segmentIndex.keys()];
     // Build up the LinkSegment objects
     for (const [name, segments] of this.rawSegments) {
       let s = segments[0];
@@ -1032,82 +1033,42 @@ class Link {
       c.resolveSubs(true);
     }
 
-    // TODO - fill (un)resolvedChunks
-    //   - gets 
-
-    const chunks = [...this.chunks];
-    chunks.sort((a, b) => b.size - a.size);
-
-    for (const chunk of chunks) {
+    // Resolve everything that can be resolved without knowing where the
+    // relocatable chunks will land.
+    for (const chunk of this.chunks) {
       chunk.resolveSubs();
-      if (chunk.subs.size) {
-        this.unresolvedChunks.add(chunk);
-      } else {
-        this.insertResolved(chunk);
-      }
     }
 
-    let count = this.resolvedChunks.length + 2 * this.unresolvedChunks.size;
-    while (count) {
-      if (signal?.aborted) throw new Error('Compilation cancelled');
-      const c = this.resolvedChunks.pop();
-      if (c) {
-        this.placeChunk(c);
-      } else {
-        // resolve all the first unresolved chunks' deps
-        const [first] = this.unresolvedChunks;
-        for (const dep of first.deps) {
-          const chunk = this.chunks[dep];
-          if (chunk.org == null) this.placeChunk(chunk);
-        }
+    // Now place them. Segments are filled by declaration order first,
+    // and within the segment, filled from largest to smalled. Anything that
+    // still depends on a different segment can be resolved later.
+    const candidates = new Map<string, LinkChunk[]>();
+    for (const chunk of this.chunks) {
+      if (chunk.org != null) continue;  // already placed by initialPlacement
+      const [first] = this.eligibleSegments(chunk);
+      if (first == null) continue;      // no segment at all: reported below
+      let list = candidates.get(first);
+      if (!list) candidates.set(first, list = []);
+      list.push(chunk);
+    }
+    for (const name of this.segmentOrder) {
+      const list = candidates.get(name);
+      if (!list) continue;
+      list.sort((a, b) => b.size - a.size || a.index - b.index);
+      for (const chunk of list) {
+        if (signal?.aborted) throw new Error('Compilation cancelled');
+        chunk.resolveSubs();
+        this.placeChunk(chunk);
       }
-      const next = this.resolvedChunks.length + 2 * this.unresolvedChunks.size;
-      if (next === count) {
-        console.error(this.resolvedChunks, this.unresolvedChunks);
-        throw new Error(`Not making progress`);
-      }
-      count = next;
+    }
+    // Anything eligible for no segment at all never got a chance above, so
+    // let placeChunk report it.
+    for (const chunk of this.chunks) {
+      if (chunk.org == null) this.placeChunk(chunk);
     }
 
-    // if (!chunk.org && !chunk.subs.length) this.placeChunk(chunk);
 
-    // At this point the dep graph is built - now traverse it.
-
-    // const place = (i: number) => {
-    //   const chunk = this.chunks[i];
-    //   if (chunk.org != null) return;
-    //   // resolve first
-    //   const remaining: Substitution[] = [];
-    //   for (const sub of chunk.subs) {
-    //     if (this.resolveSub(chunk, sub)) remaining.push(sub);
-    //   }
-    //   chunk.subs = remaining;
-    //   // now place the chunk
-    //   this.placeChunk(chunk); // TODO ...
-    //   // update the graph; don't bother deleting form blocked.
-    //   for (const revDep of revDeps[i]) {
-    //     const fwd = fwdDeps[revDep];
-    //     fwd.delete(i);
-    //     if (!fwd.size) insert(unblocked, revDep);
-    //   }
-    // }
-    // while (unblocked.length || blocked.length) {
-    //   let next = unblocked.shift();
-    //   if (next) {
-    //     place(next);
-    //     continue;
-    //   }
-    //   next = blocked[0];
-    //   for (const rev of revDeps[next]) {
-    //     if (this.chunks[rev].org != null) { // already placed
-    //       blocked.shift();
-    //       continue;
-    //     }
-    //     place(rev);
-    //   }
-    // }
     // At this point, everything should be placed, so do one last resolve.
-
     const patch = new SparseByteArray();
     // Before placing the data, add the fill bytes to segments with fill
     for (const [_name, seg] of this.segments) {
@@ -1133,29 +1094,53 @@ class Link {
     return patch;
   }
 
+  /**
+   * The segments a chunk may go in, ordered by segment declaration.
+   * The chunk is placed in the first one it fits in, and defers to the rest in turn.
+   * A chunk that named no segment at all falls back to the default segment.
+   */
+  eligibleSegments(chunk: LinkChunk): readonly string[] {
+    let segments = chunk.segments;
+    if (!segments.length) {
+      // if this chunk doesn't have a predefined segment, and there is a default segment defined, then use that one
+      for (const [name, raw] of this.rawSegments) {
+        if (raw.some(s => s.default)) {
+          chunk.segments = segments = [name];
+          break;
+        }
+      }
+    }
+    if (segments.length < 2) return segments;
+    const order = (name: string) =>
+        this.segmentIndex.get(name) ?? this.segmentIndex.size;
+    return [...segments].sort((a, b) => order(a) - order(b));
+  }
+
   placeChunk(chunk: LinkChunk) {
     if (chunk.org != null) return; // don't re-place.
-    // if this chunk doesn't have a predefined segment, and there is a default segment defined, then use that one
-    if (chunk.segments.length == 0) {
-      this.rawSegments.forEach((segments, name) => {
-        for (const seg of segments) {
-          if (seg.default) {
-            chunk.segments = [ name ];
-            break;
-          }
-        }
-      })
-    }
     const size = chunk.size;
-    // Hueristic, don't search for duplicates for large chunk sizes
-    if (chunk.size < 256 && !chunk.subs.size && !chunk.selfSubs.size) {
+    const align = chunk.align ?? 1;
+    const segments = this.eligibleSegments(chunk);
+    // An empty chunk like a bare label needs no space at all, 
+    // so place it at the start of its segment.
+    // TODO is there a better way to handle this case?
+    if (!size && segments.length) {
+      const segment = this.segment(segments[0]);
+      chunk.place(segment.memory, segment);
+      chunk.overlaps = true;
+      return;
+    }
+    // Check if the chunk can be deduped but placing it at a data segment that overlaps
+    // Hueristic, don't search for duplicates for large chunk sizes.
+    if (align === 1 && size < 256 && !chunk.subs.size && !chunk.selfSubs.size) {
       // chunk is resolved: search for an existing copy of it first
       const pattern = this.data.pattern(chunk.data);
-      for (const name of chunk.segments) {
-        const segment = this.segments.get(name) ?? fail(`Segment not found with name: ${name}`);
+      for (const name of segments) {
+        const segment = this.segment(name);
+        if (!segment.dedupe) continue;
         if (segment.isRam) continue;  // Skip pattern matching for RAM segments
-        const start = segment.offset!;
-        const end = start + segment.size!;
+        const start = segment.offset;
+        const end = start + segment.size;
         const index = pattern.search(start, end);
         if (index < 0) continue;
         chunk.place(index - segment.delta, segment);
@@ -1165,20 +1150,24 @@ class Link {
     }
     // either unresolved, or didn't find a match; just allocate space.
     // look for the smallest possible free block.
-    for (const name of chunk.segments) {
-      const segment = this.segments.get(name) ?? fail(`Segment not found with name: ${name}`);
+    for (const name of segments) {
+      const segment = this.segment(name);
       // For RAM segments, free space is tracked with RAM_OFFSET added to memory addresses
       // For ROM segments, free space is tracked in file offset coordinates
-      const s0 = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset!;
-      const s1 = s0 + segment.size!;
+      const s0 = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset;
+      const s1 = s0 + segment.size;
       let found: number|undefined;
       let smallest = Infinity;
       for (const [f0, f1] of this.free.tail(s0)) {
         if (f0 >= s1) break;
-        const df = Math.min(f1, s1) - f0;
-        if (df < size) continue;
+        const end = Math.min(f1, s1);
+        // Find an org address for the data that matches its alignment.
+        // Any space from skipping bytes for alignment remain free so we can use it later.
+        const start = alignUp(f0 - segment.delta, align) + segment.delta;
+        if (start + size > end) continue;
+        const df = end - f0;
         if (df < smallest) {
-          found = f0;
+          found = start;
           smallest = df;
         }
       }
@@ -1192,8 +1181,14 @@ class Link {
     }
     if (DEBUG) console.log(`Initial:\n${this.initialReport}`);
     const name = chunk.name ? `${chunk.name} ` : '';
-    throw new Error(`Could not find space for ${size}-byte chunk ${name} in ${
-                     chunk.segments.join(', ')}`);
+    const where = segments.length ? segments.join(', ') : '(no segment)';
+    const aligned = align > 1 ? `${align}-byte aligned ` : '';
+    throw new Error(`Could not find space for ${aligned}${size}-byte chunk ${name}in ${where}`);
+  }
+
+  segment(name: string): LinkSegment {
+    return this.segments.get(name) ??
+        fail(`Segment not found with name: ${name}`);
   }
 
   resolveSymbols(expr: Expr): Expr {
