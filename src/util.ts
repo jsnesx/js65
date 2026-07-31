@@ -495,3 +495,27 @@ export function hash(o: object): string {
 export function assertNever(x: never): never {
   throw new Error(`non-exhaustive check: ${x}`);
 }
+
+const PATH_SEP = /[\\/]/;
+
+/** Directory portion of a path ('a/b/c.s' -> 'a/b', 'x.s' -> '', 'a\b\c.s' -> 'a/b'). */
+export function dirOf(p: string): string {
+  const parts = p.split(PATH_SEP);
+  parts.pop();
+  return parts.join('/');
+}
+
+/** Combine two paths together and handle `.` and `..` when joining */
+export function joinDir(base: string, rel: string): string {
+  const combined = !base ? rel : !rel ? base : `${base}/${rel}`;
+  // A leading separator means a POSIX absolute path and we want to keep the leading
+  // root `/` if we are working with an absolute path
+  const root = PATH_SEP.test(combined.charAt(0)) ? '/' : '';
+  const out: string[] = [];
+  for (const part of combined.split(PATH_SEP)) {
+    if (part === '' || part === '.') continue;
+    if (part === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+    else out.push(part);
+  }
+  return root + out.join('/');
+}

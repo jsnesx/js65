@@ -664,3 +664,54 @@ describe('fromByteString' , function() {
       .toEqual(fromHexString('41 42 43 31 32 33 00 27 22 5C 0A 0D 09 A9 FF'))
   });
 });
+
+describe('dirOf', function() {
+  it('returns the directory portion', function() {
+    expect(util.dirOf('a/b/c.s')).toBe('a/b');
+    expect(util.dirOf('bhop/bhop.s')).toBe('bhop');
+  });
+
+  it('returns empty for a bare filename', function() {
+    expect(util.dirOf('x.s')).toBe('');
+    expect(util.dirOf('')).toBe('');
+  });
+
+  it('accepts backslash separators and normalizes them', function() {
+    expect(util.dirOf('a\\b\\c.s')).toBe('a/b');
+    expect(util.dirOf('a/b\\c.s')).toBe('a/b');
+  });
+
+  it('keeps an absolute root', function() {
+    expect(util.dirOf('/opt/inc/x.s')).toBe('/opt/inc');
+  });
+});
+
+describe('joinDir', function() {
+  it('joins a base and a relative path', function() {
+    expect(util.joinDir('bhop', 'bhop')).toBe('bhop/bhop');
+  });
+
+  it('passes either side through when the other is empty', function() {
+    expect(util.joinDir('', 'sub')).toBe('sub');
+    expect(util.joinDir('base', '')).toBe('base');
+    expect(util.joinDir('', '')).toBe('');
+  });
+
+  it('collapses . and ..', function() {
+    expect(util.joinDir('a/b', '../c')).toBe('a/c');
+    expect(util.joinDir('a/b', './c')).toBe('a/b/c');
+    // Can't climb above the start of a relative path, so the extra .. is kept.
+    expect(util.joinDir('a', '../../b')).toBe('../b');
+    expect(util.joinDir('', './')).toBe('');
+  });
+
+  it('normalizes backslash separators', function() {
+    expect(util.joinDir('a\\b', 'c\\d')).toBe('a/b/c/d');
+    expect(util.joinDir('vendor\\inc', '..\\other')).toBe('vendor/other');
+  });
+
+  it('keeps an absolute base absolute', function() {
+    expect(util.joinDir('/opt/inc', 'sub')).toBe('/opt/inc/sub');
+    expect(util.joinDir('/opt/inc/detail', '..')).toBe('/opt/inc');
+  });
+});

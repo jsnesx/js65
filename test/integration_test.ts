@@ -52,16 +52,21 @@ async function expectCompileError(source: string, errorMatch?: string | RegExp):
 }
 
 // Simple mock filesystem for testing path resolution
+// Stands in for the host's path resolution. Both separators are accepted, the way
+// std::filesystem (hermes), node's path (bun) and .NET all behave on Windows, and a
+// leading separator stays put so absolute paths don't silently become relative ones.
 function normalize(p: string): string {
   const out: string[] = [];
-  for (const part of p.split('/')) {
+  for (const part of p.split(/[\\/]/)) {
     if (part === '' || part === '.') continue;
     if (part === '..' && out.length && out[out.length - 1] !== '..') out.pop();
     else out.push(part);
   }
-  return out.join('/');
+  return (/^[\\/]/.test(p) ? '/' : '') + out.join('/');
 }
 function resolve(base: string, rel: string): string {
+  // An absolute include path ignores the base it was joined onto, as path joins do.
+  if (/^[\\/]/.test(rel)) return normalize(rel);
   return normalize(base ? `${base}/${rel}` : rel);
 }
 
@@ -492,6 +497,75 @@ TestLabel:
       const found = (mod.chunks ?? []).some(c =>
         Array.from(c.data).join() === [0xAA, 0xBB, 0xCC].join());
       expect(found).toBe(true);
+    });
+
+    it('resolves a top-level file\'s includes against that file\'s directory', async () => {
+      // `js65 bhop/bhop.s` run from the parent of bhop/: `.include "bhop/commands.asm"`
+      // has to land on bhop/bhop/commands.asm, not on the cwd-relative bhop/commands.asm.
+      const fs = makeFs({
+        'bhop/bhop/commands.asm': 'lda #1\n',
+        'bhop/bhop/util.asm': '.include "helpers.inc"\n',
+        'bhop/bhop/helpers.inc': 'lda #2\n',
+      });
+      const result = await asmObject(
+        {type: 'source',
+         code: '.include "bhop/commands.asm"\n.include "bhop/util.asm"\n',
+         name: 'bhop/bhop.s'},
+        {}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts backslash separators in the source name and in -I directories', async () => {
+      const fs = makeFs({
+        'prg/sub/inner.inc': '.include "leaf.inc"\n',
+        'prg/sub/leaf.inc': 'lda #1\n',
+        'vendor/inc/common.inc': 'lda #2\n',
+      });
+      const result = await asmObject(
+        {type: 'source',
+         code: '.include "sub/inner.inc"\n.include "common.inc"\n',
+         name: 'prg\\stub.s'},
+        {includePaths: ['vendor\\inc']}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('resolves an include relative to an -I directory it was found in', async () => {
+      // common.inc is only reachable via -I; its own `.include` is relative to itself,
+      // so the search has to remember which base the file actually came from.
+      const fs = makeFs({
+        'vendor/common.inc': '.include "detail/impl.inc"\n',
+        'vendor/detail/impl.inc': '.include "leaf.inc"\n',
+        'vendor/detail/leaf.inc': 'lda #3\n',
+      });
+      const result = await asmObject(
+        {type: 'source', code: '.include "common.inc"\n', name: 'main.s'},
+        {includePaths: ['vendor']}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('keeps absolute -I directories absolute when resolving nested includes', async () => {
+      const fs = makeFs({
+        '/opt/inc/common.inc': '.include "leaf.inc"\n',
+        '/opt/inc/leaf.inc': 'lda #4\n',
+      });
+      const result = await asmObject(
+        {type: 'source', code: '.include "common.inc"\n', name: 'main.s'},
+        {includePaths: ['/opt/inc']}, fs);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(result.success).toBe(true);
+    });
+
+    it('lists each include directory once in the diagnostic', async () => {
+      const fs = makeFs({});
+      const result = await asmObject(
+        {type: 'source', code: '.include "nope.inc"\n', name: 'inc/main.s'},
+        {includePaths: ['inc', 'inc', 'other']}, fs);
+      expect(result.success).toBe(false);
+      const msg = result.messages.find(m => /Could not find file nope\.inc/.test(m.message));
+      expect(msg?.message).toContain('inc,other');
     });
 
     it('reports the search list when a file is genuinely missing', async () => {

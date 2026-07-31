@@ -6,6 +6,7 @@ import { Base64 } from './base64.ts'
 import {type Token} from './token.ts'
 import {Tokenizer, type Options} from './tokenizer.ts'
 import {type ErrorCollector} from './assembler.ts';
+import {dirOf, joinDir} from './util.ts';
 import * as Tokens from './token.ts';
 // TODO: import raw text files seems painful right now.
 import * as Common from './macpack/common.ts'
@@ -26,22 +27,22 @@ type Frame = {
 // but low enough to catch issues quickly.
 const MAX_DEPTH = 256;
 
-/** Directory portion of a POSIX-style path ('a/b/c.s' -> 'a/b', 'x.s' -> ''). */
-function dirOf(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i < 0 ? '' : p.substring(0, i);
-}
-
-/** Combine two paths together and handle `.` and `..` when joining */
-function joinDir(base: string, rel: string): string {
-  const combined = !base ? rel : !rel ? base : `${base}/${rel}`;
+/**
+ * Build the directory list a `.include`/`.incbin` is searched in.
+ * The first location to search is always the current directory,
+ * then we search any -I directories. All of these are normalized to
+ * POSIX style paths and deduplicated.
+ */
+function searchList(dir: string | undefined, paths: readonly string[]): string[] {
   const out: string[] = [];
-  for (const part of combined.split('/')) {
-    if (part === '' || part === '.') continue;
-    if (part === '..' && out.length && out[out.length - 1] !== '..') out.pop();
-    else out.push(part);
+  const seen = new Set<string>();
+  for (const p of dir != null ? [dir, ...paths] : paths) {
+    const key = joinDir('', p);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
   }
-  return out.join('/');
+  return out;
 }
 
 const MACPACK: Map<string, string> = new Map(
@@ -91,20 +92,17 @@ export class TokenStream implements Tokens.Source {
     Tokens.fail(`Could not find file ${path} in include directories: ${bases.join(",")}`, at);
   }
 
-  /** Search list for a `.include`. Including file's dir first, then -I dirs. 
+  /** Search list for a `.include`. Including file's dir first, then -I dirs.
    * TODO: Support the other include path things like the CA65_INC env var
   */
   private includeSearch(): string[] {
-    const dir = this.currentDir();
-    const paths = this.opts?.includePaths ?? ['./'];
-    return dir != null ? [dir, ...paths] : [...paths];
+    return searchList(this.currentDir(), this.opts?.includePaths ?? ['./']);
   }
 
   /** Search list for a `.incbin`. Including file's dir first, then --bin-include-dir. */
   private binIncludeSearch(): string[] {
-    const dir = this.currentDir();
-    const paths = this.opts?.binIncludePaths ?? this.opts?.includePaths ?? ['./'];
-    return dir != null ? [dir, ...paths] : [...paths];
+    return searchList(this.currentDir(),
+                      this.opts?.binIncludePaths ?? this.opts?.includePaths ?? ['./']);
   }
 
   async next(): Promise<Token[]|undefined> {
@@ -206,7 +204,7 @@ export class TokenStream implements Tokens.Source {
         frameDir = this.stack[this.stack.length - 1].dir;
       } else {
         const file = (tokens as {file?: string} | undefined)?.file;
-        frameDir = file && file.includes('/') ? dirOf(file) : '';
+        frameDir = file ? dirOf(file) : '';
       }
     }
     const frame: Frame = {source:tokens, queue:[], dir:frameDir};

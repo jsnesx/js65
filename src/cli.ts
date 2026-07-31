@@ -7,6 +7,7 @@ import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
 import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
+import { dirOf } from './util.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -147,10 +148,10 @@ export class Cli {
       } else if (arg === '--ips') {
         out.patch = "ips";
         out.options.outputFormat = 'ips';
+      } else if (arg.startsWith('--include-dir=')) {
+        out.options.includePaths!.push(arg.substring('--include-dir='.length));
       } else if (arg.startsWith('-I')) {
         out.options.includePaths!.push(arg.substring('-I'.length));
-      } else if (arg.startsWith('--include-dir')) {
-        out.options.includePaths!.push(arg.substring('--include-dir'.length));
       } else if (arg === '--target') {
         out.options.target = args[++i];
       } else if (arg.startsWith('--target=')) {
@@ -207,11 +208,13 @@ export class Cli {
         inputs.push(await this.readInput(file));
       }
 
-      // Seed the include path with the first file's directory
-      args.options.includePaths = args.files[0] ? [
-        args.files[0].substring(0, args.files[0].lastIndexOf("/")),
-        ...(args.options.includePaths ?? [])
-      ] : (args.options.includePaths ?? []);
+      // Seed the include path with each input file's directory, so a file given as
+      // `ABC/xyz.s` finds its siblings in folder `ABC` even when the assembler is
+      // run from elsewhere.
+      args.options.includePaths = [
+        ...args.files.filter(f => f !== Cli.STDIN).map(dirOf),
+        ...(args.options.includePaths ?? []),
+      ];
 
       // Load base ROM if specified
       let baseRom: Uint8Array | undefined;
@@ -393,6 +396,12 @@ optional arguments:
   --no-debuginfo          Disable debug info generation.
   --dbgfile FILE          Output debug symbols to the specified file.
   -m FILE/--mapfile=FILE  Output a linker map (free space / placed chunks) to the specified file. Cannot be used with --compileonly.
+  -I DIR/--include-dir=DIR
+                          Add DIR to the \`.include\` search path. Directories are
+                          searched in the order given, after the directory of the file doing the
+                          including and the directories of the input files. Repeatable.
+  --bin-include-dir=DIR   Add DIR to the \`.incbin\` search path. If none are given,
+                          \`.incbin\` falls back to the -I directories. Repeatable.
   -h/--help               Print this help text and exit.
 
 ===
