@@ -1915,6 +1915,29 @@ export class Assembler {
     return undefined;
   }
 
+  /**
+   * A boolean segment attribute. If a param is not provided, it defaults to true
+   * otherwise is uses the value after it (as a const value).
+   */
+  parseFlag(tokens: Token[], key: string): boolean {
+    if (!tokens.length) return true;
+    const val = this.parseConst(tokens, 0);
+    if (val !== 0 && val !== 1) {
+      this.fail(`Segment attr ${key} must be 0 or 1: ${val}`, tokens[0]);
+    }
+    return val !== 0;
+  }
+
+  /** An alignment segment attribute which must be a positive power of two. */
+  parseAlign(tokens: Token[], key: string): number {
+    if (!tokens.length) this.fail(`Segment attr ${key} needs a value`);
+    const val = this.parseConst(tokens, 0);
+    if (val < 1 || (val & (val - 1)) !== 0) {
+      this.fail(`Segment attr ${key} must be a power of two: ${val}`, tokens[0]);
+    }
+    return val;
+  }
+
   parseSegmentList(tokens: Token[], start: number, allowEmptySegmentList: boolean): Array<string|mod.Segment> {
     if (tokens.length < start + 1) {
       if (allowEmptySegmentList) {
@@ -1937,10 +1960,22 @@ export class Assembler {
           case 'size': seg.size = this.parseConst(val, 0); break;
           case 'off': seg.offset = this.parseConst(val, 0); break;
           case 'mem': seg.memory = this.parseConst(val, 0); break;
-          case 'fill': seg.fill = this.parseConst(val, 0); break;
+          // `:fill` with no value fills with zeros, like ld65's `fill = yes`.
+          case 'fill': seg.fill = val.length ? this.parseConst(val, 0) : 0; break;
           case 'out': seg.out = this.parseOptionalStr(val, 0) ?? '%O'; break;
-          case 'overlay': seg.overlay = this.parseStr(val, 0); break;
-          case 'zp': case 'zeropage': seg.addressing = 1; break;
+          case 'align': seg.align = this.parseAlign(val, key); break;
+          case 'alignload': seg.alignLoad = this.parseAlign(val, key); break;
+          case 'load': seg.load = this.parseStr(val, 0); break;
+          case 'run': seg.run = this.parseStr(val, 0); break;
+          // ld65's `type = zp` is both an addressing size and a bss segment.
+          case 'zp': case 'zeropage': seg.addressing = 1; seg.bss = true; break;
+          case 'bss': seg.bss = this.parseFlag(val, key); break;
+          case 'define': seg.define = this.parseFlag(val, key); break;
+          case 'optional': seg.optional = this.parseFlag(val, key); break;
+          case 'dedupe': seg.dedupe = this.parseFlag(val, key); break;
+          case 'default': seg.default = this.parseFlag(val, key); break;
+          // js65 has no read-only concept, so accept and ignore ld65's types.
+          case 'ro': case 'rw': break;
           default: this.fail(`Unknown segment attr: ${key}`);
         }
       }

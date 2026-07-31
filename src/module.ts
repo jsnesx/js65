@@ -105,8 +105,22 @@ export interface Segment {
   fill?: number;
   /** Output file for the segment. Use "%O" for the main output file, or a filename. Empty/undefined means no output. */
   out?: string;
-  /** Name of the segment that this should be placed inside. */
-  overlay?: string;
+  /** Segment name where the output data foes. Lets you imitate the MEMORY/SEGMENT split from ca65 */
+  load?: string;
+  /** Similar to load but for the `org` address to write to. */
+  run?: string;
+  /** Alignment (a power of two) the segment start must satisfy. */
+  align?: number;
+  /** Alignment of the load position, when load != run. */
+  alignLoad?: number;
+  /** Occupies address space but emits no bytes (ld65 `type = bss`/`zp`). */
+  bss?: boolean;
+  /** Emit START/SIZE/LAST/LOAD/RUN/FILEOFFS symbols */
+  define?: boolean;
+  /** Drop the segment entirely if no chunks land in it. */
+  optional?: boolean;
+  /** Opt in to byte-pattern sharing during placement (js65 extension). */
+  dedupe?: boolean;
   /** True if this segment is the "default" segment to use if no segment is defined */
   default?: boolean;
   /** Unallocated ranges (org), half-open [a, b). */

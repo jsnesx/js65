@@ -161,6 +161,8 @@ function validateChunk(v: unknown, path: string): Chunk {
   if (name !== undefined) out.name = name;
   const org = optNumber(v.org, `${path}.org`);
   if (org !== undefined) out.org = org;
+  const align = optNumber(v.align, `${path}.align`);
+  if (align !== undefined) out.align = align;
   if (v.subs !== undefined) {
     out.subs = reqArray(v.subs, `${path}.subs`)
       .map((s, i) => validateSubstitution(s, `${path}.subs[${i}]`));
@@ -208,8 +210,22 @@ function validateSegment(v: unknown, path: string): Segment {
   if (fill !== undefined) out.fill = fill;
   const o = optString(v.out, `${path}.out`);
   if (o !== undefined) out.out = o;
-  const overlay = optString(v.overlay, `${path}.overlay`);
-  if (overlay !== undefined) out.overlay = overlay;
+  const load = optString(v.load, `${path}.load`);
+  if (load !== undefined) out.load = load;
+  const run = optString(v.run, `${path}.run`);
+  if (run !== undefined) out.run = run;
+  const align = optNumber(v.align, `${path}.align`);
+  if (align !== undefined) out.align = align;
+  const alignLoad = optNumber(v.alignLoad, `${path}.alignLoad`);
+  if (alignLoad !== undefined) out.alignLoad = alignLoad;
+  const bss = optBoolean(v.bss, `${path}.bss`);
+  if (bss !== undefined) out.bss = bss;
+  const define = optBoolean(v.define, `${path}.define`);
+  if (define !== undefined) out.define = define;
+  const optional = optBoolean(v.optional, `${path}.optional`);
+  if (optional !== undefined) out.optional = optional;
+  const dedupe = optBoolean(v.dedupe, `${path}.dedupe`);
+  if (dedupe !== undefined) out.dedupe = dedupe;
   const def = optBoolean(v.default, `${path}.default`);
   if (def !== undefined) out.default = def;
   if (v.free !== undefined) {
