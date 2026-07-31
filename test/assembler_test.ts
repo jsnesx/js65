@@ -1219,6 +1219,54 @@ describe('Assembler', function() {
         }]});
     });
 
+    it('should parse the ld65-compatible attributes', async function() {
+      const m = await assembleModule(`
+.segment "ROM" :mem $8000 :size $2000 :out "rom.bin" :fill $ff :define
+.segment "CODE" :load "ROM" :run "RAM" :align $100 :alignload $10 :optional
+.segment "VARS" :mem $300 :size $100 :bss :dedupe
+.segment "ZP" :mem $10 :size $80 :zeropage
+`);
+      expect(m.segments).toEqual([{
+        name: 'ROM',
+        memory: 0x8000, size: 0x2000, offset: 0,
+        out: 'rom.bin', fill: 0xff, define: true,
+        free: [[0x8000, 0xa000]],
+      }, {
+        name: 'CODE',
+        load: 'ROM', run: 'RAM',
+        align: 0x100, alignLoad: 0x10, optional: true,
+      }, {
+        name: 'VARS',
+        memory: 0x300, size: 0x100, bss: true, dedupe: true,
+      }, {
+        name: 'ZP',
+        memory: 0x10, size: 0x80, addressing: 1, bss: true,
+      }]);
+    });
+
+    it('should default :fill to zero', async function() {
+      const m = await assembleModule(`.segment "ROM" :mem $8000 :size $10 :fill\n`);
+      expect(m.segments).toEqual([{
+        name: 'ROM', memory: 0x8000, size: 0x10, fill: 0,
+        free: [[0x8000, 0x8010]],
+      }]);
+    });
+
+    it('should ignore ld65 read-only attributes', async function() {
+      const m = await assembleModule(`.segment "ROM" :mem $8000 :size $10 :ro\n`);
+      expect(m.segments).toEqual([{name: 'ROM', memory: 0x8000, size: 0x10}]);
+    });
+
+    it('should reject a non-power-of-two alignment', async function() {
+      await expect(assembleModule(`.segment "CODE" :align 3\n`))
+          .rejects.toThrow(/align must be a power of two: 3/);
+    });
+
+    it('should reject an unknown segment attribute', async function() {
+      await expect(assembleModule(`.segment "CODE" :overlay "ROM"\n`))
+          .rejects.toThrow(/Unknown segment attr: overlay/);
+    });
+
     it('should allow setting a prefix', async function() {
       const a = new Assembler(Cpu.P02);
       a.segmentPrefix('cr:');

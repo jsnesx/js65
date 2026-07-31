@@ -514,7 +514,8 @@ class LinkSegment {
   readonly offset: number;
   readonly memory: number;
   readonly addressing: number;
-  readonly fill: number;
+  /** Byte to fill unused space with, or undefined to leave it alone. */
+  readonly fill: number|undefined;
   readonly isRam: boolean;
 
   constructor(segment: Segment) {
@@ -522,15 +523,17 @@ class LinkSegment {
     this.bank = segment.bank ?? 0;
     this.addressing = segment.addressing ?? 2;
     this.size = segment.size ?? fail(`Size must be specified: ${name}`);
-    // A segment is RAM if it has no output file and no offset specified
-    // If out is specified (any string), it outputs. If offset is specified without out, it outputs to main file.
-    this.isRam = !segment.out && segment.offset == null;
+    // A segment is RAM if it emits no bytes, declared `bss`/`zp`, or
+    // (the legacy heuristic) it has no output file and no offset specified.
+    // If out is specified (any string), it outputs.
+    // If offset is specified without out, it outputs to main file.
+    this.isRam = segment.bss ?? (!segment.out && segment.offset == null);
     // For RAM segments, offset defaults to memory (so delta=0, org space = tracking space)
     this.offset = segment.offset ?? (this.isRam ? segment.memory ?? 0 : fail(`Offset must be specified: ${name}`));
     // this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
     // Allow memory offset to be null for non-prg segments
     this.memory = segment.memory ?? 0;
-    this.fill = segment.fill ?? 0;
+    this.fill = segment.fill;
   }
 
   // offset = org + delta
@@ -543,6 +546,8 @@ class LinkSegment {
 class LinkChunk {
   readonly name: string|undefined;
   readonly size: number;
+  /** Alignment (a power of two) for placing this chunk. */
+  readonly align: number|undefined;
   segments: readonly string[];
   asserts: Expr[];
 
@@ -585,6 +590,7 @@ class LinkChunk {
               symbolOffset: number) {
     this.name = chunk.name;
     this.size = chunk.data.length;
+    this.align = chunk.align;
     this.segments = chunk.segments;
     this.labelIndex = chunk.labelIndex && new Map(chunk.labelIndex);
     this.sourceMap = chunk.sourceMap && new Map(chunk.sourceMap);
@@ -1106,7 +1112,7 @@ class Link {
     // Before placing the data, add the fill bytes to segments with fill
     for (const [_name, seg] of this.segments) {
       if (seg.isRam) continue;  // RAM segments don't need fill
-      if (seg.fill) {
+      if (seg.fill != null) {  // NOTE: fill = 0 still fills.
         const buf = new Uint8Array(new ArrayBuffer(seg.size));
         buf.fill(seg.fill);
         patch.set(seg.offset, buf);
