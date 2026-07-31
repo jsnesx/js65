@@ -191,7 +191,7 @@ describe('Tokenizer.line', function() {
   it('should tokenize all kinds of numbers', async function() {
     expect(await tokenize('123 0123 %10110 $123d')).toEqual([
       [{token: 'num', num: 123},
-       {token: 'num', num: 0o123},
+       {token: 'num', num: 123},
        {token: 'num', num: 0b10110, width: 1},
        {token: 'num', num: 0x123d, width: 2}],
     ]);
@@ -261,8 +261,8 @@ describe('Tokenizer.line', function() {
     await expectSourceError(tokenize('  12a'), /Bad decimal.*near '12a'/s, 1, 2);
   });
 
-  it('should fail to parse a bad octal number', async function() {
-    await expectSourceError(tokenize('  018'), /Bad octal.*near '018'/s, 1, 2);
+  it('should fail to parse a bad leading-zero number', async function() {
+    await expectSourceError(tokenize('  01a'), /Bad decimal.*near '01a'/s, 1, 2);
   });
 
   it('should fail to parse a bad binary number', async function() {
@@ -305,5 +305,46 @@ describe('Tokenizer.line', function() {
 
   it('should not parse .2 as a directive', async function() {
     await expectSourceError(tokenize(' .2'), /Syntax error/s, 1, 1);
+  });
+
+  // Verify that the original js65 tokenizer uses the original behavior
+  describe('js65 token override checks', function() {
+    it('should lex % as a binary literal prefix', async function() {
+      expect(await tokenize('  .byte %0101, %11111111\n')).toEqual([[
+        {token: 'cs', str: '.byte', rawStr: '.byte'},
+        {token: 'num', num: 0b0101, width: 1},
+        {token: 'op', str: ','},
+        {token: 'num', num: 0b11111111, width: 1},
+      ]]);
+    });
+
+    it('should treat ; as a comment to end of line', async function() {
+      expect(await tokenize('  lda #1 ; sta $2\n  nop\n')).toEqual([
+        [{token: 'ident', str: 'lda'}, {token: 'op', str: '#'},
+         {token: 'num', num: 1}],
+        [{token: 'ident', str: 'nop'}],
+      ]);
+    });
+
+    it('should treat newlines as statement terminators', async function() {
+      expect(await tokenize('  nop\n  nop\n')).toEqual([
+        [{token: 'ident', str: 'nop'}],
+        [{token: 'ident', str: 'nop'}],
+      ]);
+    });
+
+    it('should read a leading-zero number as decimal', async function() {
+      expect(await tokenize('  .byte 010\n')).toEqual([[
+        {token: 'cs', str: '.byte', rawStr: '.byte'},
+        {token: 'num', num: 10},
+      ]]);
+    });
+
+    it('should lex # as an operator', async function() {
+      expect(await tokenize('  lda #$12\n')).toEqual([[
+        {token: 'ident', str: 'lda'}, {token: 'op', str: '#'},
+        {token: 'num', num: 0x12, width: 1},
+      ]]);
+    });
   });
 });
