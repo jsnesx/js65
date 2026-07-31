@@ -196,6 +196,98 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/Could not find space/);
   });
 
+  it('should honor a chunk alignment and leave the skipped bytes free',
+     function() {
+    const m = {
+      chunks: [{
+        segments: ['a'],
+        data: new Uint8Array(13).fill(1),
+      }, {
+        segments: ['a'],
+        align: 16,
+        data: Uint8Array.of(2, 2, 2, 2),
+      }, {
+        segments: ['a'],
+        data: Uint8Array.of(3, 3, 3),
+      }],
+      segments: [{
+        name: 'a', size: 128, offset: 0, memory: 0,
+        free: [[0, 128]],
+      }],
+    };
+    // Chunks are packed largest-first, so the 13-byte chunk lands at 0 and the
+    // aligned one skips to 16 rather than 13 - and the three bytes it skipped
+    // stay free for the 3-byte chunk that comes after it.
+    expect([...link(m).chunks()])
+        .toEqual([[0, [...new Array(13).fill(1), 3, 3, 3, 2, 2, 2, 2]]]);
+  });
+
+  it('should align a chunk on its org, not its offset', function() {
+    const m = {
+      chunks: [{
+        segments: ['a'],
+        align: 0x100,
+        data: Uint8Array.of(2, 4, 6, 8),
+      }],
+      segments: [{
+        name: 'a', size: 0x400, offset: 0x10, memory: 0xc000,
+        free: [[0xc001, 0xc400]],
+      }],
+    };
+    // $c100, i.e. file offset $110 - the offset itself is not a multiple of
+    // $100, so aligning in offset space would land somewhere else entirely.
+    expect([...link(m).chunks()]).toEqual([[0x110, [2, 4, 6, 8]]]);
+  });
+
+  it('should pack the biggest chunks in a segment first', function() {
+    const m = {
+      chunks: [{
+        segments: ['a'],
+        data: Uint8Array.of(1, 1),
+      }, {
+        segments: ['a'],
+        data: Uint8Array.of(2, 2, 2, 2),
+      }, {
+        segments: ['a'],
+        data: Uint8Array.of(3, 3, 3),
+      }],
+      segments: [{
+        name: 'a', size: 10, offset: 0, memory: 0,
+        free: [[0, 10]],
+      }],
+    };
+    // Size order, not the order the chunks were read.
+    expect([...link(m).chunks()])
+        .toEqual([[0, [2, 2, 2, 2, 3, 3, 3, 1, 1]]]);
+  });
+
+  it('should defer to a later segment when the first one is full', function() {
+    const m = {
+      chunks: [{
+        segments: ['a', 'b'],
+        data: Uint8Array.of(1, 2, 3, 4),
+      }, {
+        segments: ['b', 'a'],
+        data: Uint8Array.of(5, 6, 7, 8),
+      }, {
+        segments: ['b', 'a'],
+        data: Uint8Array.of(9),
+      }],
+      segments: [{
+        name: 'a', size: 5, offset: 0, memory: 0,
+        free: [[0, 5]],
+      }, {
+        name: 'b', size: 5, offset: 5, memory: 5,
+        free: [[5, 10]],
+      }],
+    };
+    // All three prefer 'a', since eligibility is ordered by segment
+    // declaration rather than by the order the chunk lists them.  'a' only
+    // fits two of them, so the 4-byte chunk that loses the race moves to 'b'.
+    expect([...link(m).chunks()])
+        .toEqual([[0, [1, 2, 3, 4, 9, 5, 6, 7, 8]]]);
+  });
+
   it('should choose an eligible segment for .reloc chunks', function() {
     const m = {
       chunks: [{
@@ -220,6 +312,9 @@ describe('Linker', function() {
   });
 
   it('should overlap segments with common bytes', function() {
+    // Sharing bytes only sees data that is already placed, and segments are
+    // filled in declaration order, so 'b' has to be declared before 'a' for
+    // the shared chunk to find the copy inside the 5-byte chunk.
     const m = {
       chunks: [{
         segments: ['a', 'b'],
@@ -233,15 +328,43 @@ describe('Linker', function() {
         subs: [{offset: 0, size: 2, expr: off(0, 0)}],
       }],
       segments: [{
-        name: 'a', size: 100, offset: 0, memory: 0,
-        free: [[0, 100]],
-      }, {
         name: 'b', size: 100, offset: 100, memory: 100,
-        free: [[100, 200]],
+        free: [[100, 200]], dedupe: true,
+      }, {
+        name: 'a', size: 100, offset: 0, memory: 0,
+        free: [[0, 100]], dedupe: true,
       }],
     };
     expect([...link(m).chunks()])
         .toEqual([[0, [101, 0]], [100, [1, 3, 5, 7, 9]]]);
+  });
+
+  it('should only share bytes in segments that opt in', function() {
+    const m = () => ({
+      chunks: [{
+        segments: ['a'],
+        data: Uint8Array.of(1, 3, 5, 7, 9),
+      }, {
+        segments: ['a'],
+        data: Uint8Array.of(3, 5, 7),
+      }, {
+        segments: ['a'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 2, expr: off(1, 0)}],
+      }],
+      segments: [{
+        name: 'a', size: 100, offset: 0, memory: 0,
+        free: [[0, 100]], dedupe: false,
+      }],
+    });
+    // Without :dedupe the 3-byte chunk gets its own space after the 5-byte one.
+    expect([...link(m()).chunks()])
+        .toEqual([[0, [1, 3, 5, 7, 9, 3, 5, 7, 5, 0]]]);
+    // With it, it aliases onto the copy inside the 5-byte chunk at $01.
+    const shared = m();
+    shared.segments[0].dedupe = true;
+    expect([...link(shared).chunks()])
+        .toEqual([[0, [1, 3, 5, 7, 9, 1, 0]]]);
   });
 
   it('should share with existing data', function() {
@@ -262,10 +385,10 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'a', size: 100, offset: 0, memory: 0x8000,
-        free: [[0x8005, 0x800a]],
+        free: [[0x8005, 0x800a]], dedupe: true,
       }],
     };
-    const patch = new Linker().base(base, 10).read(m).link();      
+    const patch = new Linker().base(base, 10).read(m).link();
     expect([...patch.chunks()]).toEqual([[5, [21, 0x80]]]);
   });
 
@@ -347,8 +470,10 @@ describe('Linker', function() {
         free: [[0x8000, 0x8064]],
       }],
     };
+    // Chunks are placed segment by segment, largest first, so the 6-byte chunk
+    // takes the front of segment 'a' and the 2-byte one follows it at $8006.
     expect([...link(m).chunks()]).toEqual([
-      [0, [2, 4, 9, 0, 0x80, 8, 0, 0x80]],
+      [0, [9, 0, 0x80, 8, 6, 0x80, 2, 4]],
       [100, [1, 3, 5, 7, 9]],
     ]);
   });
@@ -422,8 +547,11 @@ describe('Linker', function() {
         free: [[0x8000, 0xa000]],
       }],
     };
+    // Placement order is fixed (largest first) rather than following the
+    // dependency graph, so the cycle is broken by placing the 6-byte chunk
+    // first and letting the 4-byte one resolve against it afterwards.
     expect([...link(m).chunks()])
-        .toEqual([[0, [2, 0x04, 0x80, 4, 3, 5, 0x00, 0x80, 7, 9]]]);
+        .toEqual([[0, [3, 5, 0x06, 0x80, 7, 9, 2, 0x00, 0x80, 4]]]);
   });
 
   // RAM segment tests

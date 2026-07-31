@@ -796,6 +796,25 @@ ValidLabel:
       expect(result[16]).toBe(0xff);
     });
 
+    it('.align constrains where the linker puts a relocatable chunk', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $40 :mem $8000 :off $0000 :fill $ff
+.reloc
+  .byte $01, $01, $01
+.reloc
+  .align $10
+  .byte $02, $02
+.reloc
+  .byte $03, $03, $03, $03, $03, $03, $03, $03
+`;
+      const result = await compileSource(source);
+      // Biggest chunk first, then the 3-byte one, and the aligned chunk skips
+      // to $8010 - leaving the bytes in between to the segment's fill.
+      expect(Array.from(result.slice(0, 18))).toEqual([
+        3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 2, 2,
+      ]);
+    });
+
     it('.struct members yield byte offsets and .sizeof reports the total', async function() {
       const source = `
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
