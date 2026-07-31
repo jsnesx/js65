@@ -116,6 +116,8 @@ export const WORD: Token = {token: 'cs', str: '.word'};
 export const COLON: Token = {token: 'op', str: ':'};
 //export const DCOLON: Token = {token: 'op', str: '::'};
 export const COMMA: Token = {token: 'op', str: ','};
+/** Statement terminator in an ld65 linker config. We don't use this for asm */
+export const SEMI: Token = {token: 'op', str: ';'};
 export const STAR: Token = {token: 'op', str: '*'};
 export const IMMEDIATE: Token = {token: 'op', str: '#'};
 export const ASSIGN: Token = {token: 'op', str: '='};

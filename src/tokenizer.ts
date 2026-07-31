@@ -22,56 +22,73 @@ export class Tokenizer implements Tokens.Source {
   }
 
   async next(): Promise<Token[]|undefined> {
-    return await new Promise( (resolve) => {
-      let tok = this.token();
-      while (Tokens.eq(tok, Tokens.EOL)) {
-        // Skip EOLs at beginning of line.
-        tok = this.token();
-      }
-      // Group curly brace groups into a single effective Tokens.
-      const stack: Token[][] = [[]];
-      let depth = 0;
-      while (!Tokens.eq(tok, Tokens.EOL) && !Tokens.eq(tok, Tokens.EOF)) {
-        if (Tokens.eq(tok, Tokens.LC)) {
-          stack[depth++].push(tok);
-          stack.push([]);
-        } else if (Tokens.eq(tok, Tokens.RC)) {
-          if (!depth) {
-            // Missing open curly - record error and skip the close brace
-            this.errorCollector?.add('error', `Missing open curly`, tok.source);
-          } else {
-            const inner = stack.pop()!;
-            const source = stack[--depth].pop()!.source;
-            const token: Token = {token: 'grp', inner};
-            if (source) token.source = source;
-            stack[depth].push(token);
-          }
-        } else {
-          stack[depth].push(tok);
-        }
-        tok = this.token();
-      }
-      // Auto-close any unclosed braces at EOL
-      while (depth > 0) {
-        const open = stack[depth - 1].pop()!;
-        this.errorCollector?.add('error', `Missing close curly`, open.source);
-        const inner = stack.pop()!;
-        const source = open.source;
-        const token: Token = {token: 'grp', inner};
-        if (source) token.source = source;
-        stack[--depth].push(token);
-      }
-      resolve(stack[0].length ? stack[0] : undefined);
-    });
+    return this.nextSync();
   }
 
-  private token(): Token {
-    // skip whitespace
+  protected nextSync(): Token[]|undefined {
+    let tok = this.token();
+    while (Tokens.eq(tok, Tokens.EOL)) {
+      // Skip EOLs at beginning of line.
+      tok = this.token();
+    }
+    // Group curly brace groups into a single effective Tokens.
+    const stack: Token[][] = [[]];
+    let depth = 0;
+    while (!Tokens.eq(tok, Tokens.EOL) && !Tokens.eq(tok, Tokens.EOF)) {
+      if (Tokens.eq(tok, Tokens.LC)) {
+        stack[depth++].push(tok);
+        stack.push([]);
+      } else if (Tokens.eq(tok, Tokens.RC)) {
+        if (!depth) {
+          // Missing open curly - record error and skip the close brace
+          this.errorCollector?.add('error', `Missing open curly`, tok.source);
+        } else {
+          const inner = stack.pop()!;
+          const source = stack[--depth].pop()!.source;
+          const token: Token = {token: 'grp', inner};
+          if (source) token.source = source;
+          stack[depth].push(token);
+        }
+      } else {
+        stack[depth].push(tok);
+      }
+      tok = this.token();
+    }
+    // Auto-close any unclosed braces at EOL
+    while (depth > 0) {
+      const open = stack[depth - 1].pop()!;
+      this.errorCollector?.add('error', `Missing close curly`, open.source);
+      const inner = stack.pop()!;
+      const source = open.source;
+      const token: Token = {token: 'grp', inner};
+      if (source) token.source = source;
+      stack[--depth].push(token);
+    }
+    return stack[0].length ? stack[0] : undefined;
+  }
+
+  /**
+   * Overridable because a linker config uses `;` as a line terminator, so
+   * what gets ignored is different between the two.
+   */
+  protected skipIgnored(): void {
     while (this.buffer.space() ||
            this.buffer.token(/^;.*/) ||
            (this.opts.lineContinuations && this.buffer.token(/^\\(\r\n|\n|\r)/))) {
             // intentionally empty
            }
+  }
+
+  /** `%` is a binary literal prefix in ca65, but used for special `%O` and `%S` flags in linkercfg. */
+  protected numberRegex(): RegExp { return /^[$%]?[0-9a-z_]+/i; }
+
+  protected operatorRegex(): RegExp {
+    return /^(:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/;
+  }
+
+  protected token(): Token {
+    // skip whitespace
+    this.skipIgnored();
     if (this.buffer.eof()) return Tokens.EOF;
 
     // remember position of non-whitespace
@@ -96,7 +113,7 @@ export class Tokenizer implements Tokens.Source {
     }
   }
 
-  private tokenInternal(): Token {
+  protected tokenInternal(): Token {
     if (this.buffer.newline()) return {token: 'eol'};
     if (this.buffer.token(/^@+[a-z0-9_]*/i) ||
         this.buffer.token(/^((::)?[a-z_][a-z0-9_]*)+/i)) {
@@ -104,7 +121,7 @@ export class Tokenizer implements Tokens.Source {
     }
     if (this.buffer.token(/^\.[a-z][a-z0-9]*/i)) return this.csTok();
     if (this.buffer.token(/^:([+-]\d+|[-+]+|<+rts|>*rts)/)) return this.strTok('ident');
-    if (this.buffer.token(/^(:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/)) {
+    if (this.buffer.token(this.operatorRegex())) {
       const op = this.strTok('op');
       // the := is just like = but it marks it as a label in the dbg file.
       // which we don't support so just treat it as = for now.
@@ -118,7 +135,7 @@ export class Tokenizer implements Tokens.Source {
     if (this.buffer.token('}')) return {token: 'rc'};
     if (this.buffer.token(')')) return {token: 'rp'};
     if (this.buffer.token(/^["']/)) return this.tokenizeStr();
-    if (this.buffer.token(/^[$%]?[0-9a-z_]+/i)) return this.tokenizeNum();
+    if (this.buffer.token(this.numberRegex())) return this.tokenizeNum();
     throw new Error(`Syntax error`);
   }
 
@@ -167,7 +184,7 @@ export class Tokenizer implements Tokens.Source {
     this.errorCollector.add('error', message, source);
   }
 
-  private strTok(token: Tokens.StringToken['token']): Token {
+  protected strTok(token: Tokens.StringToken['token']): Token {
     return {token, str: this.buffer.group()!};
   }
 
@@ -180,11 +197,10 @@ export class Tokenizer implements Tokens.Source {
     };
   }
 
-  private tokenizeNum(str: string = this.buffer.group()!): Token {
+  protected tokenizeNum(str: string = this.buffer.group()!): Token {
     if (this.opts.numberSeparators) str = str.replace(/_/g, '');
     if (str[0] === '$') return parseHex(str.substring(1));
     if (str[0] === '%') return parseBin(str.substring(1));
-    if (str[0] === '0') return parseOct(str);
     return parseDec(str);
   }
 }
@@ -197,11 +213,6 @@ function parseHex(str: string): Token {
 function parseDec(str: string): Token {
   if (!/^[0-9]+$/.test(str)) throw new Error(`Bad decimal number: ${str}`);
   return {token: 'num', num: Number.parseInt(str, 10)};
-}
-
-function parseOct(str: string): Token {
-  if (!/^[0-7]+$/.test(str)) throw new Error(`Bad octal number: ${str}`);
-  return {token: 'num', num: Number.parseInt(str, 8)};
 }
 
 function parseBin(str: string): Token {
