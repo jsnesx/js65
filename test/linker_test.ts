@@ -177,7 +177,9 @@ describe('Linker', function() {
         .toEqual([[0x0210, [2, 4, 0x00, 0xc2, 1, 3, 0x02, 0xc2]]]);
   });
 
-  it('should fail to relocate chunks with no free allocations', function() {
+  it('should fail to relocate chunks that do not fit', function() {
+    // A segment with no free ranges of its own is free in its entirety, so
+    // running out of space means declaring a segment too small to hold them.
     const m = {
       chunks: [{
         segments: ['code'],
@@ -190,10 +192,25 @@ describe('Linker', function() {
       }],
       segments: [{
         name: 'code',
-        size: 0x400, offset: 0x0010, memory: 0xc000,
+        size: 4, offset: 0x0010, memory: 0xc000,
       }],
     };
     expect(() => link(m)).toThrow(/Could not find space/);
+  });
+
+  it('should fill a segment with no free ranges of its own', function() {
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        data: Uint8Array.of(2, 4, 0xff, 0xff),
+        subs: [{offset: 2, size: 2, expr: off(0, 0)}],
+      }],
+      segments: [{
+        name: 'code',
+        size: 0x400, offset: 0x0010, memory: 0xc000,
+      }],
+    };
+    expect([...link(m).chunks()]).toEqual([[0x10, [2, 4, 0x00, 0xc0]]]);
   });
 
   it('should honor a chunk alignment and leave the skipped bytes free',
@@ -286,6 +303,218 @@ describe('Linker', function() {
     // fits two of them, so the 4-byte chunk that loses the race moves to 'b'.
     expect([...link(m).chunks()])
         .toEqual([[0, [1, 2, 3, 4, 9, 5, 6, 7, 8]]]);
+  });
+
+  it('should measure a hosted segment and pack it into its host', function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 1, 1, 1),
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(2, 2, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'CODE', load: 'PRG'},
+        {name: 'DATA', load: 'PRG'},
+      ],
+    };
+    // Neither hosted segment declares a size, so each one is measured from its
+    // contents and they pack tight against each other in the host.
+    expect([...link(m).chunks()]).toEqual([[0x10, [1, 1, 1, 1, 2, 2, 2]]]);
+  });
+
+  it('should measure a hosted segment independently of its host', function() {
+    const m = (memory: number) => ({
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 1, 1, 1),
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(2, 2, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory, out: '%O'},
+        {name: 'CODE', load: 'PRG'},
+        {name: 'DATA', load: 'PRG'},
+      ],
+    });
+    // Sizing is segment-relative, so moving the host does not change it.
+    expect([...link(m(0x8000)).chunks()]).toEqual([...link(m(0x9000)).chunks()]);
+  });
+
+  it('should align a hosted segment within its host', function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 1, 1),
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(2, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'CODE', load: 'PRG'},
+        {name: 'DATA', load: 'PRG', align: 16},
+      ],
+    };
+    // DATA's alignment bumps the host cursor from $8003 to $8010.
+    expect([...link(m).chunks()])
+        .toEqual([[0x10, [1, 1, 1]], [0x20, [2, 2]]]);
+  });
+
+  it('should run a hosted segment somewhere it does not load', function() {
+    const m = {
+      chunks: [{
+        segments: ['BOOT'],
+        data: Uint8Array.of(0xaa, 0xbb, 0xff, 0xff),
+        subs: [{offset: 2, size: 2, expr: off(0, 0)}],
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'RAM', size: 0x100, memory: 0x300},
+        {name: 'BOOT', load: 'PRG', run: 'RAM'},
+        {name: 'CODE', load: 'PRG'},
+      ],
+    };
+    // BOOT's labels resolve against its run address in RAM ($300), but its
+    // bytes are written into the file space PRG gave it - and PRG is charged
+    // for them, so CODE starts after BOOT rather than on top of it.
+    expect([...link(m).chunks()])
+        .toEqual([[0x10, [0xaa, 0xbb, 0x00, 0x03, 1, 2]]]);
+  });
+
+  it('should align a hosted segment\'s load without moving its run address',
+     function() {
+    const m = {
+      chunks: [{
+        segments: ['A'],
+        data: Uint8Array.of(0xff, 0xff, 7),
+        subs: [{offset: 0, size: 2, expr: off(1, 0)}],
+      }, {
+        segments: ['B'],
+        data: Uint8Array.of(2, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'RAM', size: 0x100, memory: 0x300},
+        {name: 'A', load: 'PRG', run: 'RAM'},
+        {name: 'B', load: 'PRG', run: 'RAM', alignLoad: 16},
+      ],
+    };
+    // B still runs tight against A at $303, but loads at the next multiple of
+    // 16 in the file.
+    expect([...link(m).chunks()])
+        .toEqual([[0x10, [0x03, 0x03, 7]], [0x20, [2, 2]]]);
+  });
+
+  it('should give a bss segment address space but no output', function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(0xa5, 0xff, 0xa5, 0xff),
+        subs: [
+          {offset: 1, size: 1, expr: off(1, 0)},
+          {offset: 3, size: 1, expr: off(2, 0)},
+        ],
+      }, {
+        segments: ['VARS'],
+        data: new Uint8Array(4),
+      }, {
+        segments: ['MORE'],
+        data: new Uint8Array(2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'ZP', size: 0x100, memory: 0x00},
+        {name: 'CODE', load: 'PRG'},
+        {name: 'VARS', run: 'ZP'},
+        {name: 'MORE', run: 'ZP'},
+      ],
+    };
+    // The two zero page segments stack up in address space and emit nothing.
+    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x00, 0xa5, 0x04]]]);
+  });
+
+  it('should throw when a hosted segment overflows its host', function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 1, 1, 1),
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(2, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 4, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'CODE', load: 'PRG'},
+        {name: 'DATA', load: 'PRG'},
+      ],
+    };
+    expect(() => link(m)).toThrow(/Segment DATA .* does not fit in PRG/);
+  });
+
+  it('should throw when a hosted segment holds a .org chunk with no address',
+     function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        org: 0x8000,
+        data: Uint8Array.of(1, 1),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'CODE', load: 'PRG'},
+      ],
+    };
+    expect(() => link(m)).toThrow(/no address of its own/);
+  });
+
+  it('should size a hosted segment around a .org chunk', function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        org: 0x8004,
+        data: Uint8Array.of(1, 1),
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(2, 2),
+      }],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'CODE', load: 'PRG', memory: 0x8000},
+        {name: 'DATA', load: 'PRG'},
+      ],
+    };
+    // CODE is measured out to the end of its .org chunk, so DATA starts after
+    // it rather than on top of it.
+    expect([...link(m).chunks()]).toEqual([[0x14, [1, 1, 2, 2]]]);
+  });
+
+  it('should hand out file offsets in declaration order', function() {
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 1, 1, 1),
+      }, {
+        segments: ['FTR'],
+        data: Uint8Array.of(9, 9),
+      }],
+      segments: [
+        {name: 'HDR', size: 0x10, offset: 0, memory: 0, out: '%O'},
+        {name: 'PRG', size: 0x100, memory: 0x8000, out: '%O'},
+        {name: 'FTR', size: 0x20, memory: 0, out: '%O'},
+        {name: 'CODE', load: 'PRG'},
+      ],
+    };
+    // PRG takes the cursor left by the header, and since it has no fill it
+    // only advances the cursor by the four bytes CODE actually needed - so
+    // FTR starts at $14 rather than at the end of PRG's declared size.
+    expect([...link(m).chunks()]).toEqual([[0x10, [1, 1, 1, 1, 9, 9]]]);
   });
 
   it('should choose an eligible segment for .reloc chunks', function() {

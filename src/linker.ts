@@ -885,6 +885,8 @@ class Link {
    */
   segmentOrder: string[] = [];
   private segmentIndex = new Map<string, number>();
+  /** Names of mapped segments that other unmapped segments are written to. */
+  private segmentMappings = new Set<string>();
 
   watches: number[] = []; // debugging aid: offsets to watch.
   placed: Array<[number, LinkChunk]> = [];
@@ -978,24 +980,45 @@ class Link {
       this.segmentIndex.set(name, this.segmentIndex.size);
     }
     this.segmentOrder = [...this.segmentIndex.keys()];
-    // Build up the LinkSegment objects
+    // Merge all segments (mapped and unmapped) into a single Segment each.
+    // Note that we intentionally copy the segments into `s` so we don't overwrite
+    // the original data.
+    const merged = new Map<string, Segment>();
     for (const [name, segments] of this.rawSegments) {
-      let s = segments[0];
+      let s = {...segments[0]};
       for (let i = 1; i < segments.length; i++) {
         s = Segment.merge(s, segments[i]);
       }
+      merged.set(name, s);
+    }
+    // Resolve unmapped segments and hand out file offsets, so that everything
+    // below sees plain memory/offset/size.
+    this.lowerSegments(merged);
+
+    // Build up the LinkSegment objects
+    for (const [name, s] of merged) {
       this.segments.set(name, new LinkSegment(s));
     }
     // Add the free space
-    for (const [name, segments] of this.rawSegments) {
-      const s = this.segments.get(name)!;
-      for (const segment of segments) {
-        const free = segment.free;
-        // Add the free space
-        for (const [start, end] of free || []) {
+    for (const [name, s] of this.segments) {
+      // Check to see if the user has declared any space free in the segment,
+      // if not then we treat the entire segment as free'd
+      const explicit =
+          (this.rawSegments.get(name) ?? []).flatMap(seg => seg.free ?? []);
+      if (explicit.length) {
+        for (const [start, end] of explicit) {
+          if (end <= start) continue;
           this.free.add(start + s.delta, end + s.delta);
+          // Only an explicitly declared free range takes its bytes out of the
+          // base image - a synthesized one would wipe out the very bytes a
+          // patch build searches for.
           this.data.splice(start + s.delta, end - start);
         }
+      } else if (s.size > 0 && !this.segmentMappings.has(name)) {
+        // Mark the entire segment as free if it was originally a mapped segment
+        // We don't want originally unmapped segments to be automatically
+        // freed since they don't "own" the space.
+        this.free.add(s.memory + s.delta, s.memory + s.size + s.delta);
       }
     }
     // Set up all the initial placements.
@@ -1092,6 +1115,183 @@ class Link {
     }
     if (DEBUG) console.log(this.report(true));
     return patch;
+  }
+
+  /**
+   * We have two basic types of segments which share the `segment` name.
+   * The first acts as a MEMORY section in the ld65, but where the user can still use it
+   * as a segment and put data into it. In ld65 terms, doing `.segment :mem ...` creates
+   * both a MEMORY and SEGMENT section that can had data added to it.
+   * These are referred to as `mapped` segments.
+   * 
+   * The second type `.segment :load` gets converted/mapped into the first type
+   * to allow the same style of `1 : N` memory : segment mapping that ld65 supports.
+   * These are referred to as `unmapped` segments.
+   * 
+   * Things get complicated when supporting different load / run addresses.
+   * We need to place the data at a `load` address, but set the pc at the run address.
+   * This is the mega function that maps the unmapped type of segments into the mapped
+   * typed which greatly simplifies the later linking code, since we will have actual
+   * file offsets / :mem addresses to use.
+   * 
+   * If a segment already has the :mem/:size etc, then this phase doesn't do anything.
+   * Its just for lowering the `:load/:run` type segments to fill out the :mem for them.
+   */
+  private lowerSegments(merged: Map<string, Segment>) {
+    const order = this.segmentOrder.filter(name => merged.has(name));
+    const needsLowering = (s: Segment) => s.load != null || s.run != null;
+
+    // Build a map of segment names -> chunks with the chunks preferring
+    // to land in the first segment that it lists.
+    const contents = new Map<string, LinkChunk[]>();
+    const referenced = new Set<string>();
+    for (const chunk of this.chunks) {
+      const eligible = this.eligibleSegments(chunk);
+      for (const name of eligible) referenced.add(name);
+      const [first] = eligible;
+      if (first == null) continue;
+      let list = contents.get(first);
+      if (!list) contents.set(first, list = []);
+      list.push(chunk);
+    }
+
+    // Phase 1: measure each unmapped segment against its contents.
+    // Sizing isn't dependant on final org, its just using the relative size
+    // of the chunks in it.
+    const sizes = new Map<string, number>();
+    const aligns = new Map<string, number>();
+    const unmapped: Segment[] = [];
+    for (const name of order) {
+      const seg = merged.get(name)!;
+      if (!needsLowering(seg)) continue;
+      const chunks = contents.get(name) ?? [];
+      if (seg.optional && !referenced.has(name)) {
+        merged.delete(name);
+        continue;
+      }
+      unmapped.push(seg);
+      // Enforcing the widest chunk alignment on the segment start is what
+      // makes a segment-relative chunk alignment equal an absolute one.
+      let align = seg.align ?? 1;
+      for (const c of chunks) align = Math.max(align, c.align ?? 1);
+      aligns.set(name, align);
+      let size = seg.size;
+      if (size == null) {
+        let cursor = 0;
+        const bySize =
+            [...chunks].sort((a, b) => b.size - a.size || a.index - b.index);
+        for (const c of bySize) {
+          cursor = alignUp(cursor, c.align ?? 1) + c.size;
+        }
+        size = cursor;
+      }
+      for (const c of chunks) {
+        if (c.org == null) continue;
+        if (seg.memory == null) {
+          fail(`Segment ${name} holds a .org chunk${
+              c.name ? ` (${c.name})` : ''} but has no address of its own. ${''
+              }.org can only be used in segments with :mem`);
+        }
+        size = Math.max(size, c.org + c.size - seg.memory);
+      }
+      sizes.set(name, size);
+    }
+
+    const used = new Map<string, number>(); // mapped seg name -> # of allocated bytes
+    const runs = new Map<string, number>(); // mapped seg name -> next start addr for RUN
+    const loads = new Map<string, number>(); // mapped seg name -> next start addr for LOAD
+    // Helper function to validate and find the mapped segment that backs
+    // this unmapped segment.
+    const mappingOf = (seg: Segment, which: 'load'|'run'): Segment => {
+      const name = (which === 'load' ? seg.load ?? seg.run : seg.run ?? seg.load)!;
+      const mapped = merged.get(name);
+      if (!mapped) {
+        fail(`Segment ${seg.name} has ${which} "${name}", which is not a segment`);
+      }
+      if (needsLowering(mapped)) {
+        fail(`Segment ${seg.name} has ${which} "${name}", which is already mapped to memory`);
+      }
+      this.segmentMappings.add(name);
+      return mapped;
+    };
+    // Helper function that adds the unmapped segments data to the `used` map for
+    // the mapped segment. We will go through this `used` map later to build out the
+    // :mem and other related fields for mapping the unmapped segment.
+    // The goal is to allocate a chunk of space from the mapped segment so we can place
+    // in this allocated space later (effectively creates a :mem :start pair for this segment)
+    const allocate = (seg: Segment, mapped: Segment, size: number, align: number,
+                      memory?: number): number => {
+      const base = mapped.memory ?? 0;
+      const start = memory ?? alignUp(base + (used.get(mapped.name) ?? 0), align);
+      if (start < base ||
+          (mapped.size != null && start + size > base + mapped.size)) {
+        fail(`Segment ${seg.name} ($${size.toString(16)} bytes at $${
+             start.toString(16)}) does not fit in ${mapped.name}`);
+      }
+      used.set(mapped.name,
+               Math.max(used.get(mapped.name) ?? 0, start + size - base));
+      return start;
+    };
+    
+    // Build out the new mappings for the unmapped segments, tracking the total
+    // size of data needed in the other segment, and also keep track of where the
+    // load/run addresses end up at.
+    for (const seg of unmapped) {
+      const size = sizes.get(seg.name)!;
+      const align = aligns.get(seg.name)!;
+      const runSeg = mappingOf(seg, 'run');
+      const loadSeg = mappingOf(seg, 'load');
+      // An explicit :mem places the run address instead of allocating one.
+      const run = allocate(seg, runSeg, size, align, seg.memory);
+      const load = loadSeg === runSeg ?
+          run : allocate(seg, loadSeg, size, seg.alignLoad ?? align);
+      runs.set(seg.name, run);
+      loads.set(seg.name, load);
+    }
+
+    // Now start building out the file offsets `:off` that we will give to unmapped segments.
+    // Map of file out name -> next start addr as an offset into the segment (or :size if its :fill)
+    const fileLocations = new Map<string, number>();
+    for (const name of order) {
+      const seg = merged.get(name);
+      // Skip over unmapped segments here.
+      if (!seg || needsLowering(seg) || seg.bss) continue;
+      // Any anything without an output file nor an offset.
+      // These are RAM, which takes no file space.
+      if (seg.out == null && seg.offset == null) continue;
+      const file = seg.out || '%O';
+      let cursor = fileLocations.get(file) ?? 0;
+      if (seg.offset != null) {
+        cursor = seg.offset;
+      } else {
+        seg.offset = cursor;
+      }
+      // A filled segment writes its whole size, but an unfilled host only
+      // writes as far as the segments loaded into it actually reached.
+      const extent = seg.fill == null && this.segmentMappings.has(name) ?
+          (used.get(name) ?? 0) : (seg.size ?? 0);
+      fileLocations.set(file, cursor + extent);
+    }
+
+    // FINALLY we have all the data we need to map the segment to turn an unmapped
+    // segment into a mapped one. Add all of the :out/:fill/ etc data to map it.
+    for (const seg of unmapped) {
+      const runSeg = mappingOf(seg, 'run');
+      const loadSeg = mappingOf(seg, 'load');
+      // The loadSeg is what decides whether any bytes are emitted at all.
+      const emits = !loadSeg.bss && loadSeg.offset != null;
+      seg.size = sizes.get(seg.name)!;
+      seg.memory = runs.get(seg.name)!;
+      if (emits) {
+        seg.offset =
+            loadSeg.offset! + (loads.get(seg.name)! - (loadSeg.memory ?? 0));
+      }
+      seg.out = seg.out ?? loadSeg.out;
+      seg.bank = seg.bank ?? loadSeg.bank;
+      seg.fill = seg.fill ?? loadSeg.fill;
+      seg.addressing = seg.addressing ?? runSeg.addressing;
+      seg.bss = seg.bss ?? !emits;
+    }
   }
 
   /**
