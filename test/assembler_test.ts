@@ -1091,6 +1091,33 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.faraddr', function() {
+    it('should emit three little-endian bytes', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.faraddr'), num(1), COMMA, num(0x123456)]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(1, 0, 0, 0x56, 0x34, 0x12),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should support expressions with backward refs', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('q', 0x30507);
+      a.directive([cs('.faraddr'), ident('q')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(7, 5, 3),
+        }],
+        symbols: [], segments: []});
+    });
+  });
+
   describe('.dword', function() {
     it('should support numbers', function() {
       const a = new Assembler(Cpu.P02);
