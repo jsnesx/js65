@@ -636,18 +636,25 @@ describe('lowerLinkerConfig', function() {
         /Segment 'A' shares its name with a MEMORY area but does not load/);
     });
 
-    it('should reject a start that contradicts the area', function() {
-      expectRejected(`
+    it('should start where the segment says, inside the area', function() {
+      expect(lower(`
         MEMORY { A: start = $8000, size = $100; }
-        SEGMENTS { A: load = A, start = $8010; }`,
-        /Segment 'A' starts at \$8010 but shares its name/);
+        SEGMENTS { A: load = A, start = $8010; }`))
+          .toEqual([{name: 'A', memory: 0x8010, size: 0xf0}]);
     });
 
-    it('should reject an alignment the area cannot satisfy', function() {
-      expectRejected(`
+    it('should round the merged start up to the segment\'s alignment', function() {
+      expect(lower(`
         MEMORY { A: start = $8010, size = $100; }
-        SEGMENTS { A: load = A, align = $100; }`,
-        /Segment 'A' wants \$100-byte alignment/);
+        SEGMENTS { A: load = A, align = $100; }`))
+          .toEqual([{name: 'A', memory: 0x8100, size: 0x10}]);
+    });
+
+    it('should reject a start outside the area', function() {
+      expectRejected(`
+        MEMORY { A: start = $8000, size = $100; }
+        SEGMENTS { A: load = A, start = $9000; }`,
+        /Segment 'A' starts at \$9000, which is outside the MEMORY area/);
     });
   });
 

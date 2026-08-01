@@ -5,7 +5,7 @@ import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
-import { type LinkerConfig, lowerLinkerConfig, parseLinkerConfig } from './linkerconfig.ts';
+import { type CfgSymbols, type LinkerConfig, configSymbols, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
 import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
@@ -93,6 +93,10 @@ export class Linker {
 
   report(verbose = false): string {
     return this._link.report(verbose);
+  }
+
+  outputFiles(): Array<{name: string, data: Uint8Array}> {
+    return this._link.outputFiles();
   }
 
   exports(): Map<string, Export> {
@@ -292,14 +296,20 @@ export class Linker {
         ? this._link.chunks[meta.chunk]
         : undefined;
 
+      // A symbol defined over a label (`P1_HELD = Buttons+2`) is resolved
+      // before the chunk is placed, so its value is still relative to the
+      // chunk. Only the chunk knows where that ended up.
+      const value = chunk && meta?.rel ?
+          (chunk.org ?? 0) + (s.expr.num ?? 0) : (s.expr.num ?? 0);
+
       if (chunk?.segment?.isRam || !chunk) {
         // For chunks that are not output to the final ROM, use a heuristic to determine address
-        const result = Linker.getLabelTypeAndAddress(s.expr.num ?? 0);
+        const result = Linker.getLabelTypeAndAddress(value);
         labelType = result.type;
         addr = result.address;
       } else {
         // For chunks that are output, use the resolved address instead
-        const offsetInChunk: number = s.expr.num! - ((meta?.rel) ? 0 : (chunk.org ?? 0));
+        const offsetInChunk: number = value - (chunk.org ?? 0);
         const fileOffset = (chunk.offset ?? 0) + offsetInChunk;
         addr = fileOffset - prgBaseOffset;
         labelType = "NesPrgRom";
@@ -536,6 +546,8 @@ class LinkSegment {
   readonly addressing: number;
   /** Byte to fill unused space with, or undefined to leave it alone. */
   readonly fill: number|undefined;
+  /** Output file the segment's bytes go to, `%O` (or unset) being the main one. */
+  readonly out: string|undefined;
   /** Whether chunks placed here may share bytes with identical data. */
   readonly dedupe: boolean;
   readonly isRam: boolean;
@@ -563,6 +575,7 @@ class LinkSegment {
     // Allow memory offset to be null for non-prg segments
     this.memory = segment.memory ?? 0;
     this.fill = segment.fill;
+    this.out = segment.out;
     this.dedupe = segment.dedupe ?? false;
     this.used = used;
   }
@@ -910,6 +923,25 @@ class Link {
   private segmentMappings = new Set<string>();
   /** Track the `used` values for each mapped segment */
   private segmentUsed = new Map<string, number>();
+  /** Org ranges of each mapped segment that placement may still use. */
+  private segmentFree = new Map<string, Array<readonly [number, number]>>();
+  /**
+   * Address a lowered segment loads at, in its load mapping's address space.
+   * Only differs from the segment's own `memory` when load != run.
+   */
+  private segmentLoad = new Map<string, number>();
+  /** Bytes accounted for in each segment once its geometry was fixed. */
+  private segmentExtent = new Map<string, number>();
+  /** Effective alignment of each segment's start, for the map file. */
+  private segmentAlign = new Map<string, number>();
+  /** Internal offset base for each output file. The main file is always 0. */
+  private fileBases = new Map<string, number>([['%O', 0]]);
+  /** Bytes written to each output file, keyed the same way as `fileBases`. */
+  private outputs = new Map<string, SparseByteArray>();
+  /** The ld65 config in use, kept around for its SYMBOLS block. */
+  private config?: LinkerConfig;
+  /** Symbols the object files export, captured when the config was set. */
+  private objectExports: ReadonlySet<string> = new Set();
 
   watches: number[] = []; // debugging aid: offsets to watch.
   placed: Array<[number, LinkChunk]> = [];
@@ -1038,15 +1070,13 @@ class Link {
           this.data.splice(start + s.delta, end - start);
         }
       } else if (s.size > 0) {
-        // Mark the entire segment as free if it was originally a mapped
-        // segment. We don't want originally unmapped segments to be
-        // automatically freed since they don't "own" the space
-        // There is an exception to this, a mapped segment holding chunks of
-        // that the user wrote directly, owns whatever that data.
-        const from = this.segmentMappings.has(name) ?
-            this.segmentUsed.get(name) : 0;
-        if (from != null && from < s.size) {
-          this.free.add(s.memory + from + s.delta, s.memory + s.size + s.delta);
+        // Otherwise the whole segment is free, except that a mapped segment
+        // only owns what it did not hand out to the segments lowered into it.
+        // lowerSegments works out which parts of it those are.
+        const ranges = this.segmentFree.get(name) ??
+            [[s.memory, s.memory + s.size] as const];
+        for (const [start, end] of ranges) {
+          if (end > start) this.free.add(start + s.delta, end + s.delta);
         }
       }
     }
@@ -1067,6 +1097,10 @@ class Link {
         this.exports.set(symbol.export, i);
       }
     }
+    // Publish the linker's own symbols here: geometry is final, the object
+    // files' exports are all registered, and nothing has been resolved yet, so
+    // a forward reference into a later segment's defines just works.
+    this.defineConfigSymbols(this.defineSegmentSymbols(merged));
     // Resolve all the imports in all symbol and chunk.subs exprs.
     for (const symbol of this.symbols) {
       symbol.expr = this.resolveSymbols(symbol.expr!);
@@ -1121,14 +1155,17 @@ class Link {
 
 
     // At this point, everything should be placed, so do one last resolve.
-    const patch = new SparseByteArray();
+    // Each output file collects its own bytes, at offsets relative to itself
+    // rather than the internal space the linker placed them in.
+    const patch = this.output('%O');
     // Before placing the data, add the fill bytes to segments with fill
     for (const [_name, seg] of this.segments) {
       if (seg.isRam) continue;  // RAM segments don't need fill
       if (seg.fill != null) {  // NOTE: fill = 0 still fills.
         const buf = new Uint8Array(new ArrayBuffer(seg.size));
         buf.fill(seg.fill);
-        patch.set(seg.offset, buf);
+        this.output(seg.out).set(seg.offset - this.fileBase(seg.out || '%O'),
+                                 buf);
       }
     }
     for (const c of this.chunks) {
@@ -1140,7 +1177,10 @@ class Link {
       }
       if (c.overlaps) continue;
       if (c.segment?.isRam) continue;  // RAM chunks not in output
-      patch.set(c.offset!, Uint8Array.from(this.data.slice(c.offset!, c.offset! + c.size!)));
+      const base = this.fileBase(c.segment?.out || '%O');
+      this.output(c.segment?.out).set(
+          c.offset! - base,
+          Uint8Array.from(this.data.slice(c.offset!, c.offset! + c.size!)));
     }
     if (DEBUG) console.log(this.report(true));
     return patch;
@@ -1184,11 +1224,25 @@ class Link {
       list.push(chunk);
     }
 
+    /** Get a rough estimate for the size of the output */
+    const measure = (chunks: readonly LinkChunk[]): number => {
+      let cursor = 0;
+      const bySize =
+          [...chunks].sort((a, b) => b.size - a.size || a.index - b.index);
+      for (const c of bySize) {
+        if (c.org != null) continue;
+        cursor = alignUp(cursor, c.align ?? 1) + c.size;
+      }
+      return cursor;
+    };
+
     // Phase 1: measure each unmapped segment against its contents.
     // Sizing isn't dependant on final org, its just using the relative size
     // of the chunks in it.
     const sizes = new Map<string, number>();
     const aligns = new Map<string, number>();
+    /** Mapped segment -> room its own chunks need, when it holds any. */
+    const selfSizes = new Map<string, number>();
     const unmapped: Segment[] = [];
     for (const name of order) {
       const seg = merged.get(name)!;
@@ -1204,16 +1258,8 @@ class Link {
       let align = seg.align ?? 1;
       for (const c of chunks) align = Math.max(align, c.align ?? 1);
       aligns.set(name, align);
-      let size = seg.size;
-      if (size == null) {
-        let cursor = 0;
-        const bySize =
-            [...chunks].sort((a, b) => b.size - a.size || a.index - b.index);
-        for (const c of bySize) {
-          cursor = alignUp(cursor, c.align ?? 1) + c.size;
-        }
-        size = cursor;
-      }
+      this.segmentAlign.set(name, align);
+      let size = seg.size ?? measure(chunks);
       for (const c of chunks) {
         if (c.org == null) continue;
         if (seg.memory == null) {
@@ -1224,6 +1270,19 @@ class Link {
         size = Math.max(size, c.org + c.size - seg.memory);
       }
       sizes.set(name, size);
+    }
+
+    // Now do the same measurement for the chunks that are in a mapped segment itself,
+    // which is the room it has to be given before the next segment lowered into it.
+    for (const name of order) {
+      const seg = merged.get(name);
+      if (!seg || needsLowering(seg)) continue;
+      let align = seg.align ?? 1;
+      const own = contents.get(name) ?? [];
+      for (const c of own) align = Math.max(align, c.align ?? 1);
+      this.segmentAlign.set(name, align);
+      const size = measure(own);
+      if (size) selfSizes.set(name, size);
     }
 
     const used = new Map<string, number>(); // mapped seg name -> # of allocated bytes
@@ -1264,8 +1323,28 @@ class Link {
     
     // Build out the new mappings for the unmapped segments, tracking the total
     // size of data needed in the other segment, and also keep track of where the
-    // load/run addresses end up at.
-    for (const seg of unmapped) {
+    // load/run addresses end up at. A mapped segment that holds chunks of its
+    // own takes its turn here too, rather than being left whatever the segments
+    // lowered into it did not use.
+    const selfStarts = new Map<string, number>();
+    // Mapped segments that other segments are lowered into.
+    const backing = new Set<string>(
+        unmapped.flatMap(s => [s.load, s.run].filter(n => n != null)));
+    for (const name of this.allocationOrder(order)) {
+      const seg = merged.get(name);
+      if (!seg) continue;
+      if (!needsLowering(seg)) {
+        // Only worth reserving in a segment that is sharing its space.
+        const size = selfSizes.get(name);
+        const align = this.segmentAlign.get(name) ?? 1;
+        if (!size || !backing.has(name)) continue;
+        const base = seg.memory ?? 0;
+        const start = alignUp(base + (used.get(name) ?? 0), align);
+        const room = base + (seg.size ?? 0) - start;
+        if (room <= 0) continue;
+        selfStarts.set(name, allocate(seg, seg, Math.min(size, room), align));
+        continue;
+      }
       const size = sizes.get(seg.name)!;
       const align = aligns.get(seg.name)!;
       const runSeg = mappingOf(seg, 'run');
@@ -1276,6 +1355,20 @@ class Link {
           run : allocate(seg, loadSeg, size, seg.alignLoad ?? align);
       runs.set(seg.name, run);
       loads.set(seg.name, load);
+      this.segmentLoad.set(seg.name, load);
+      this.segmentExtent.set(seg.name, size);
+    }
+
+    // Build out a map of how far into each segment we've gotten so far
+    for (const name of order) {
+      const seg = merged.get(name);
+      if (!seg || needsLowering(seg)) continue;
+      let extent = used.get(name) ?? 0;
+      for (const c of contents.get(name) ?? []) {
+        if (c.org == null) continue;
+        extent = Math.max(extent, c.org + c.size - (seg.memory ?? 0));
+      }
+      this.segmentExtent.set(name, Math.min(extent, seg.size ?? extent));
     }
 
     // Now start building out the file offsets `:off` that we will give to unmapped segments.
@@ -1289,12 +1382,13 @@ class Link {
       // These are RAM, which takes no file space.
       if (seg.out == null && seg.offset == null) continue;
       const file = seg.out || '%O';
+      const base = this.fileBase(file);
       let cursor = fileLocations.get(file) ?? 0;
-      if (seg.offset != null) {
-        cursor = seg.offset;
-      } else {
-        seg.offset = cursor;
-      }
+      // An explicit `:off` is relative to the file it writes to, and puts the
+      // cursor there. Everything downstream sees the internal offset instead,
+      // which is the file's own base plus that.
+      if (seg.offset != null) cursor = seg.offset;
+      seg.offset = base + cursor;
       // A filled segment writes its whole size, but an unfilled mapped segment
       // only writes as far as the segments lowered into it actually reached.
       // Unless it holds chunks of its own, which can land anywhere it has space.
@@ -1325,10 +1419,160 @@ class Link {
       seg.bss = seg.bss ?? !emits;
     }
 
-    // A mapped segment that chunks name directly keeps whatever the segments
-    // lowered into it left over.
-    for (const name of this.segmentMappings) {
-      if (referenced.has(name)) this.segmentUsed.set(name, used.get(name) ?? 0);
+    // Finally, work out what part of each mapped segment is still up for grabs.
+    for (const name of order) {
+      const seg = merged.get(name);
+      if (!seg || needsLowering(seg)) continue;
+      const memory = seg.memory ?? 0;
+      const size = seg.size ?? 0;
+      if (!this.segmentMappings.has(name)) {
+        this.segmentFree.set(name, [[memory, memory + size]]);
+        continue;
+      }
+      const ranges: Array<readonly [number, number]> = [];
+      const self = selfStarts.get(name);
+      if (self != null) {
+        ranges.push([self, self + selfSizes.get(name)!]);
+        // Chunks are placed from `used` forward, so that is where its own
+        // space starts as far as the placer is concerned.
+        this.segmentUsed.set(name, self - memory);
+      } else {
+        this.segmentUsed.set(name, used.get(name) ?? 0);
+      }
+      ranges.push([memory + (used.get(name) ?? 0), memory + size]);
+      this.segmentFree.set(name, ranges);
+    }
+  }
+
+  /**
+   * The order segments are given room in the mapped segments they share.
+   * A linker config declares its MEMORY areas and its SEGMENTS separately, and
+   * it is the SEGMENTS order that decides who gets the front of an area - even
+   * for an entry merged into the area of the same name, whose place in
+   * `segmentOrder` is the area's (that order writes the output files).
+   */
+  private allocationOrder(order: readonly string[]): readonly string[] {
+    if (!this.config) return order;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const name of [...this.config.segments.map(s => s.name), ...order]) {
+      if (seen.has(name) || !order.includes(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+    return out;
+  }
+
+  /**
+   * Base of an output file in the linker's internal offset space.
+   *
+   * Every file's own offsets start at zero, but chunks, free space and the
+   * base image all share one address space here, so each extra file is handed
+   * a slice of its own well above anything a real ROM reaches. The main file
+   * keeps base 0 so a patch build's offsets stay the file offsets it read.
+   */
+  private fileBase(file: string): number {
+    let base = this.fileBases.get(file);
+    if (base == null) {
+      base = Link.FILE_SPACE * this.fileBases.size;
+      if (base >= LinkSegment.RAM_OFFSET) fail(`Too many output files`);
+      this.fileBases.set(file, base);
+    }
+    return base;
+  }
+
+  private static readonly FILE_SPACE = 0x1000000;
+
+  /** The bytes written to one output file, `undefined` meaning the main one. */
+  private output(file: string|undefined): SparseByteArray {
+    const name = file || '%O';
+    let out = this.outputs.get(name);
+    if (!out) this.outputs.set(name, out = new SparseByteArray());
+    return out;
+  }
+
+  /**
+   * Everything a `file =`/`:out` sent somewhere other than the main output,
+   * which `link()` returns. Only meaningful after `link()`.
+   */
+  outputFiles(): Array<{name: string, data: Uint8Array}> {
+    const out: Array<{name: string, data: Uint8Array}> = [];
+    for (const [name, bytes] of this.outputs) {
+      if (name === '%O') continue;
+      const data = new Uint8Array(bytes.length);
+      bytes.apply(data);
+      out.push({name, data});
+    }
+    return out;
+  }
+
+  /**
+   * Adds a symbol the linker itself defines (a segment `define`, or a config
+   * SYMBOLS entry). An object file's own definition always wins, since ld65
+   * treats these as defaults. Returns whether the symbol was actually added.
+   */
+  private addLinkerSymbol(name: string, value: number): boolean {
+    if (this.exports.has(name)) return false;
+    this.exports.set(name, this.symbols.length);
+    this.symbols.push({export: name, expr: {op: 'num', num: value}});
+    return true;
+  }
+
+  /**
+   * Creates the START/RUN/ETC symbols for each of the segments.
+   * This happens after mapping all segments, so it applies to all segment
+   * types (mapped, unmapped, ld65)
+   * Returns the symbols it defined, so a config SYMBOLS entry can refer to
+   * them.
+   */
+  private defineSegmentSymbols(merged: Map<string, Segment>): CfgSymbols {
+    const defined: CfgSymbols = new Map();
+    const define = (name: string, value: number) => {
+      if (this.addLinkerSymbol(name, value)) defined.set(name, value);
+    };
+    for (const name of this.segmentOrder) {
+      const seg = merged.get(name);
+      if (!seg?.define) continue;
+      const start = seg.memory ?? 0;
+      const size = seg.size ?? 0;
+      define(`__${name}_START__`, start);
+      define(`__${name}_RUN__`, start);
+      define(`__${name}_LOAD__`, this.segmentLoad.get(name) ?? start);
+      define(`__${name}_SIZE__`, size);
+      // _LAST__ is the end of what is actually used, which for a mapped
+      // segment is only as far as the geometry pass could account for.
+      define(`__${name}_LAST__`, start + (this.segmentExtent.get(name) ?? size));
+      if (!seg.bss && seg.offset != null) {
+        define(`__${name}_FILEOFFS__`, seg.offset);
+      }
+    }
+    return defined;
+  }
+
+  /**
+   * The config's SYMBOLS block. Entries resolve in declaration order against
+   * the earlier ones and against every segment `define`, so
+   * `value = __RAM_LAST__` works.
+   */
+  private defineConfigSymbols(defines: CfgSymbols) {
+    if (!this.config) return;
+    const symbols: CfgSymbols =
+        new Map([...configSymbols(this.config, this.objectExports), ...defines]);
+    for (const sym of this.config.symbols) {
+      if (sym.type === 'import') {
+        if (!this.exports.has(sym.name)) {
+          fail(`Symbol ${sym.name} is imported by the linker config but is ${
+               ''}never exported`);
+        }
+        continue;
+      }
+      // An object file's definition wins, which is what `weak` asks for and
+      // what js65 does for `export` too (ld65 would call that a conflict).
+      if (this.exports.has(sym.name)) continue;
+      const value =
+          resolveCfgExpr(sym.value!, symbols, `Value of '${sym.name}'`);
+      symbols.set(sym.name, value);
+      this.addLinkerSymbol(sym.name, value);
     }
   }
 
@@ -1497,6 +1741,8 @@ class Link {
     for (const symbol of this.symbols) {
       if (symbol.export != null) exported.add(symbol.export);
     }
+    this.config = cfg;
+    this.objectExports = exported;
     for (const segment of lowerLinkerConfig(cfg, exported)) {
       this.addRawSegment(segment);
       this.segmentOrder.push(segment.name);
@@ -1528,9 +1774,43 @@ class Link {
     return map;
   }
 
+  /**
+   * Bare bones segment list report used for comparing against ca65 built projects.
+   */
+  private segmentReport(): string {
+    if (!this.segments.size) return '';
+    const hex = (n: number, w = 6) => n.toString(16).toUpperCase().padStart(w, '0');
+    // How far the chunks actually placed in each segment reach. `Size` is what
+    // the segment was given, `Used` is what it needed - the two differ because
+    // a segment is measured before placement gets to backfill alignment gaps.
+    const used = new Map<string, number>();
+    for (const chunk of this.chunks) {
+      const seg = chunk.segment;
+      if (!seg || chunk.org == null) continue;
+      const end = chunk.org + chunk.size - seg.memory;
+      used.set(seg.name, Math.max(used.get(seg.name) ?? 0, end));
+    }
+    let out = 'Segment list:\n-------------\n';
+    out += 'Name                   Start     End    Size    Used  Align  FileOffs  File\n';
+    out += '----------------------------------------------------------------------------\n';
+    for (const name of this.segmentOrder) {
+      const s = this.segments.get(name);
+      if (!s) continue;
+      const end = s.memory + Math.max(s.size - 1, 0);
+      // A segment that emits nothing has no offset worth printing.
+      const file = s.isRam ? '' : (s.out || '%O');
+      const offs = s.isRam ?
+          '      ' : hex(s.offset - (this.fileBases.get(file) ?? 0));
+      out += `${name.padEnd(20)}  ${hex(s.memory)}  ${hex(end)}  ${
+             hex(s.size)}  ${hex(used.get(name) ?? 0)}  ${
+             hex(this.segmentAlign.get(name) ?? 1, 5)}  ${offs}  ${file}\n`;
+    }
+    return out + '\n';
+  }
+
   report(verbose = false): string {
     // TODO - accept a segment to filter?
-    let out = '';
+    let out = this.segmentReport();
     for (const [s, e] of this.free) {
       out += `Free: ${s.toString(16)}..${e.toString(16)}: ${e - s} bytes\n`;
     }

@@ -21,6 +21,9 @@ function op(op: string, ...args: Expr[]): Expr {
 function num(num: number): Expr {
   return {op: 'num', num};
 }
+function imp(sym: string): Expr {
+  return {op: 'im', sym};
+}
 
 describe('Linker', function() {
   it('should link a simple .org chunk', function() {
@@ -897,10 +900,14 @@ describe('Linker', function() {
 
 describe('Linker with an ld65 config', function() {
 
-  function linkCfg(cfg: string, ...modules: Module[]) {
+  function linkerCfg(cfg: string, ...modules: Module[]) {
     const linker = new Linker({linkerConfig: cfg, linkerConfigName: 'test.cfg'});
     for (const m of modules) linker.read(m);
-    return linker.link();
+    return linker;
+  }
+
+  function linkCfg(cfg: string, ...modules: Module[]) {
+    return linkerCfg(cfg, ...modules).link();
   }
 
   it('should lay out its areas in declaration order', function() {
@@ -1143,6 +1150,241 @@ describe('Linker with an ld65 config', function() {
     const m = {chunks: [{segments: ['CODE'], data: Uint8Array.of(1, 2, 3, 4)}]};
     expect(() => linkCfg(cfg, m))
         .toThrow(/Segment CODE .* does not fit in PRG/);
+  });
+
+  it('should give an area\'s own chunks their turn among the segments',
+     function() {
+    // The FDS disk header is written to the front of the same area the files
+    // that follow it are lowered into, so it cannot be left the leftovers.
+    const cfg = `
+      MEMORY { SIDE1: start = $0000, size = $20, file = %O; }
+      SEGMENTS {
+        SIDE1:     load = SIDE1;
+        FILE0_HDR: load = SIDE1;
+        FILE0_DAT: load = SIDE1;
+      }`;
+    const m = {
+      chunks: [
+        {segments: ['FILE0_DAT'], data: Uint8Array.of(3, 3, 3, 3)},
+        {segments: ['SIDE1'], data: Uint8Array.of(1, 1)},
+        {segments: ['FILE0_HDR'], data: Uint8Array.of(2, 2, 2)},
+      ],
+    };
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [1, 1, 2, 2, 2, 3, 3, 3, 3]]]);
+  });
+
+  it('should fill an area from the SEGMENTS order, not the MEMORY order',
+     function() {
+    // The merged segment holds the area's place in the file, but takes its
+    // turn to be filled where the SEGMENTS block puts it.
+    const cfg = `
+      MEMORY {
+        RAM: start = $10,   size = $20;
+        PRG: start = $8000, size = $8, file = %O;
+      }
+      SEGMENTS {
+        BSS:  load = RAM;
+        RAM:  load = RAM;
+        CODE: load = PRG;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['BSS'],
+        data: Uint8Array.of(0, 0, 0, 0),
+      }, {
+        segments: ['RAM'],
+        data: Uint8Array.of(0, 0),
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(0xa5, 0xff, 0xa5, 0xff),
+        subs: [
+          {offset: 1, size: 1, expr: off(0, 0)},
+          {offset: 3, size: 1, expr: off(1, 0)},
+        ],
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [0xa5, 0x10, 0xa5, 0x14]]]);
+  });
+
+  it('should write segments to more than one output file', function() {
+    const cfg = `
+      MEMORY {
+        HDR: start = $0000, size = $4, file = "%O_header";
+        PRG: start = $8000, size = $6, file = %O, fill = yes, fillval = $ff;
+      }
+      SEGMENTS {
+        HEADER: load = HDR, define = yes;
+        CODE:   load = PRG, define = yes;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['HEADER'],
+        data: Uint8Array.of(1, 2, 3, 0xff),
+        // Both files start their offsets at zero, so both segments are at 0.
+        subs: [{offset: 3, size: 1, expr: imp('__CODE_FILEOFFS__')}],
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(10, 11),
+      }],
+    };
+    const linker = linkerCfg(cfg, m);
+    const main = linker.link();
+    expect([...main.chunks()])
+        .toEqual([[0, [10, 11, 0xff, 0xff, 0xff, 0xff]]]);
+    const extra = linker.outputFiles();
+    expect(extra.length).toBe(1);
+    expect(extra[0].name).toBe('%O_header');
+    expect([...extra[0].data]).toEqual([1, 2, 3, 0]);
+  });
+
+  it('should define the geometry of a segment', function() {
+    const cfg = `
+      MEMORY { PRG: start = $8000, size = $20, file = %O; }
+      SEGMENTS {
+        CODE: load = PRG, define = yes;
+        DATA: load = PRG, define = yes;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(...new Array(10).fill(0xff)),
+        subs: [
+          {offset: 0, size: 2, expr: imp('__CODE_START__')},
+          {offset: 2, size: 2, expr: imp('__CODE_SIZE__')},
+          {offset: 4, size: 2, expr: imp('__CODE_LAST__')},
+          {offset: 6, size: 2, expr: imp('__CODE_FILEOFFS__')},
+          // A forward reference into a segment declared later, which is the
+          // shape of the FDS `.word __FILE0_DAT_RUN__` header pattern.
+          {offset: 8, size: 2, expr: imp('__DATA_RUN__')},
+        ],
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(1, 2),
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([
+      [0, [0x00, 0x80, 0x0a, 0x00, 0x0a, 0x80, 0x00, 0x00, 0x0a, 0x80, 1, 2]],
+    ]);
+  });
+
+  it('should define separate load and run addresses', function() {
+    const cfg = `
+      MEMORY {
+        RAM: start = $300,  size = $100;
+        PRG: start = $8000, size = $10, file = %O;
+      }
+      SEGMENTS {
+        BOOT: load = PRG, run = RAM, define = yes;
+        CODE: load = PRG;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['BOOT'],
+        data: Uint8Array.of(0xff, 0xff, 0xff, 0xff, 0xff, 0xff),
+        subs: [
+          // _LOAD__ is an address in PRG, not the file offset that _FILEOFFS__
+          // gives, and _RUN__ is the address in RAM the bytes get copied to.
+          {offset: 0, size: 2, expr: imp('__BOOT_LOAD__')},
+          {offset: 2, size: 2, expr: imp('__BOOT_RUN__')},
+          {offset: 4, size: 2, expr: imp('__BOOT_FILEOFFS__')},
+        ],
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(7),
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [0x00, 0x80, 0x00, 0x03, 0x00, 0x00, 7]]]);
+  });
+
+  it('should define an area\'s used extent as its _LAST__', function() {
+    const cfg = `
+      MEMORY { RAM: start = $200, size = $100, define = yes; }
+      SEGMENTS { BSS: load = RAM, type = bss; }`;
+    const m = {
+      chunks: [{
+        segments: ['BSS'],
+        data: Uint8Array.of(0, 0, 0, 0),
+      }, {
+        // The chunk that reads the defines has to live somewhere that emits.
+        segments: ['CODE'],
+        data: Uint8Array.of(0xff, 0xff, 0xff, 0xff, 0xff, 0xff),
+        subs: [
+          {offset: 0, size: 2, expr: imp('__RAM_START__')},
+          {offset: 2, size: 2, expr: imp('__RAM_SIZE__')},
+          {offset: 4, size: 2, expr: imp('__RAM_LAST__')},
+        ],
+      }],
+      segments: [{name: 'CODE', size: 8, offset: 0, memory: 0x9000}],
+    };
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [0x00, 0x02, 0x00, 0x01, 0x04, 0x02]]]);
+  });
+
+  it('should export a config symbol', function() {
+    const cfg = `
+      SYMBOLS { __STACKSIZE__: type = export, value = $200; }
+      MEMORY { PRG: start = $8000, size = $4, file = %O; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 2, expr: imp('__STACKSIZE__')}],
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x00, 0x02]]]);
+  });
+
+  it('should let an object file override a weak config symbol', function() {
+    const cfg = `
+      SYMBOLS { __STACKSIZE__: type = weak, value = $200; }
+      MEMORY { PRG: start = $8000, size = $4, file = %O; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 2, expr: imp('__STACKSIZE__')}],
+      }],
+      symbols: [{export: '__STACKSIZE__', expr: num(0x30)}],
+    };
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x30, 0x00]]]);
+  });
+
+  it('should resolve a config symbol against a segment define', function() {
+    const cfg = `
+      MEMORY {
+        RAM: start = $200, size = $100, define = yes;
+        PRG: start = $8000, size = $4, file = %O;
+      }
+      SEGMENTS {
+        BSS:  load = RAM, type = bss;
+        CODE: load = PRG;
+      }
+      SYMBOLS { __HEAP__: type = export, value = __RAM_LAST__; }`;
+    const m = {
+      chunks: [{
+        segments: ['BSS'],
+        data: Uint8Array.of(0, 0, 0),
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 2, expr: imp('__HEAP__')}],
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x03, 0x02]]]);
+  });
+
+  it('should require an imported config symbol to be exported', function() {
+    const cfg = `
+      SYMBOLS { __MAIN__: type = import; }
+      MEMORY { PRG: start = $8000, size = $4, file = %O; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const m = {chunks: [{segments: ['CODE'], data: Uint8Array.of(1)}]};
+    expect(() => linkCfg(cfg, m)).toThrow(/__MAIN__ is imported .* never exported/);
   });
 
   it('should report a config parse error against the config file', function() {

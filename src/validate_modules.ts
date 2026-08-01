@@ -421,6 +421,10 @@ function validateOptions(v: unknown, path: string): Js65Options {
   if (target !== undefined) out.target = target;
   const baseRomOffset = optNumber(v.baseRomOffset, `${path}.baseRomOffset`);
   if (baseRomOffset !== undefined) out.baseRomOffset = baseRomOffset;
+  const linkerConfig = optString(v.linkerConfig, `${path}.linkerConfig`);
+  if (linkerConfig !== undefined) out.linkerConfig = linkerConfig;
+  const linkerConfigName = optString(v.linkerConfigName, `${path}.linkerConfigName`);
+  if (linkerConfigName !== undefined) out.linkerConfigName = linkerConfigName;
   if (v.outputFormat !== undefined) {
     const fmt = reqString(v.outputFormat, `${path}.outputFormat`);
     if (!OUTPUT_FORMATS.has(fmt)) fail(`${path}.outputFormat`, 'expected one of binary|ips|object');

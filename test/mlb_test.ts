@@ -587,6 +587,30 @@ ptr: .res 2
       expect(ptr?.address).toBe('1-2');
     });
 
+    it('should resolve an equate over a relocatable RAM label', async function() {
+      // `held = buttons+2` is resolved before the chunk is placed, so its
+      // value is still relative to the chunk it names.
+      // The segment starts at $f1, so a chunk-relative value that never
+      // learned where its chunk landed would come out as 2 rather than $f3.
+      const source = `
+.segment "BIOSZP" :size $f :mem $00f1 :zp
+.segment "BIOSZP"
+buttons: .res 4
+held = buttons+2
+.segment "PRG"
+.org $8000
+  lda held
+`;
+      const entries = await assembleAndGetDebugInfo(source);
+      const buttons = entries.find(e => e.label === 'buttons');
+      const held = entries.find(e => e.label === 'held');
+
+      expect(buttons?.type).toBe("NesInternalRam");
+      expect(buttons?.address).toBe('f1-f4');
+      expect(held?.type).toBe("NesInternalRam");
+      expect(held?.address).toBe('f3');
+    });
+
     it('should generate NesSaveRam for SRAM labels in RAM segments', async function() {
       const source = `
 .segment "SRAM" :size $2000 :mem $6000

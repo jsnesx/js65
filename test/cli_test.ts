@@ -46,6 +46,98 @@ describe('CLI', function() {
     });
   });
 
+  describe('linker config', function() {
+    const cli = new Cli({
+      fsReadString: async () => '',
+      fsReadBytes: async () => new Uint8Array(0),
+      fsWriteString: async () => {},
+      fsWriteBytes: async () => {},
+      fsWalk: async () => {},
+      exit: () => {},
+    });
+
+    it('accepts every -C spelling', function() {
+      expect(cli.parseArgs(['-C', 'nes.cfg']).cfgfile).toBe('nes.cfg');
+      expect(cli.parseArgs(['--config', 'nes.cfg']).cfgfile).toBe('nes.cfg');
+      expect(cli.parseArgs(['--config=nes.cfg']).cfgfile).toBe('nes.cfg');
+    });
+
+    it('does not confuse -C with -c', function() {
+      const args = cli.parseArgs(['-c', 'main.s']);
+      expect(args.compileonly).toBe(true);
+      expect(args.cfgfile).toBe('');
+    });
+
+    it('rejects -C combined with --compileonly', async function() {
+      const files = {'main.s': 'lda #3\n', 'nes.cfg': 'MEMORY {}\n'};
+      await expect(build(files, ['-c', '-C', 'nes.cfg', 'main.s']))
+          .rejects.toThrow();
+    });
+
+    it('links with the config and writes its extra output files',
+       async function() {
+      const files = {
+        'main.s': '.segment "HEADER"\n.byte 1,2,3,4\n.segment "CODE"\nlda #3\n',
+        'nes.cfg': `
+          MEMORY {
+            HDR: start = $0000, size = $4, file = "%O_header";
+            PRG: start = $8000, size = $4, file = %O, fill = yes, fillval = $ff;
+          }
+          SEGMENTS {
+            HEADER: load = HDR;
+            CODE:   load = PRG;
+          }`,
+      };
+      const written = await build(files, ['-C', 'nes.cfg', '-o', 'rom.nes',
+                                          'main.s']);
+      expect([...written.get('rom.nes')!]).toEqual([0xa9, 3, 0xff, 0xff]);
+      // `%O` in the config's file name is the output file's name.
+      expect([...written.get('rom.nes_header')!]).toEqual([1, 2, 3, 4]);
+    });
+
+    it('reports a config parse error against the config file',
+       async function() {
+      const files = {
+        'main.s': '.segment "CODE"\nlda #3\n',
+        'nes.cfg': 'MEMORY {\n  PRG: start = $8000, size = $2\n}\n',
+      };
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      try {
+        await expect(build(files, ['-C', 'nes.cfg', 'main.s'])).rejects.toThrow();
+      } finally {
+        console.log = log;
+      }
+      // Loading the config through readSource is what buys the source snippet.
+      expect(lines.join('\n')).toContain("nes.cfg:2:30: error: Expected ';'");
+      expect(lines.join('\n')).toContain('PRG: start = $8000, size = $2');
+    });
+
+    /** Runs the CLI over a literal file tree, returning everything it wrote. */
+    async function build(files: Record<string, string>, args: string[]) {
+      const written = new Map<string, Uint8Array>();
+      let exitCode = 0;
+      const read = (path: string, filename: string) => {
+        const key = joinDir(path, filename);
+        if (!(key in files)) throw new Error(`ENOENT ${key}`);
+        return files[key];
+      };
+      const cli = new Cli({
+        fsReadString: async (path, filename) => read(path, filename),
+        fsReadBytes: async (path, filename) =>
+            new TextEncoder().encode(read(path, filename)),
+        fsWriteString: async () => {},
+        fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
+        fsWalk: async () => {},
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(args);
+      if (exitCode !== 0) throw new Error(`cli exited with code ${exitCode}`);
+      return written;
+    }
+  });
+
   describe('include directories', function() {
     const cli = new Cli({
       fsReadString: async () => '',
