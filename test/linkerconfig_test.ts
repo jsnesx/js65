@@ -3,8 +3,8 @@
 
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
-import {type CfgSymbols, configSymbols, parseLinkerConfig, resolveCfgExpr}
-    from '../src/linkerconfig.ts';
+import {type CfgSymbols, configSymbols, lowerLinkerConfig, parseLinkerConfig,
+        resolveCfgExpr} from '../src/linkerconfig.ts';
 import {SourceError} from '../src/token.ts';
 
 describe('parseLinkerConfig', function() {
@@ -421,6 +421,13 @@ FILES {
       ['a segment with neither load nor run',
        `MEMORY {\n  A: start = $0, size = $10;\n}\nSEGMENTS {\n  S: type = ro;\n}`,
        /needs at least one of 'load' or 'run'/],
+      ['a duplicated area',
+       `MEMORY {\n  A: start = $0, size = $10;\n  A: start = $20, size = $10;\n}`,
+       /Duplicate MEMORY entry: A/],
+      ['a duplicated segment',
+       `MEMORY {\n  A: start = $0, size = $10;\n}\n` +
+       `SEGMENTS {\n  S: load = A;\n  S: load = A;\n}`,
+       /Duplicate SEGMENTS entry: S/],
     ];
     for (const [name, cfg, message] of cases) {
       it(`should reject ${name}`, function() {
@@ -516,6 +523,152 @@ SEGMENTS {
       `);
       expect(cfg.segments[0]).toMatchObject({align: 64, alignLoad: 16});
     });
+  });
+});
+
+describe('lowerLinkerConfig', function() {
+
+  function lower(cfg: string) {
+    return lowerLinkerConfig(parseLinkerConfig(cfg, 'test.cfg'));
+  }
+
+  it('should lower an area into a free-standing segment', function() {
+    expect(lower(`MEMORY {
+      RAM: start = $0300, size = $0500;
+      PRG: start = $8000, size = $4000, file = %O, fill = yes, fillval = $FF,
+           bank = 1, define = yes;
+      CHR: start = $0000, size = $2000, file = "chr.bin";
+    }`)).toEqual([
+      {name: 'RAM', memory: 0x300, size: 0x500},
+      {name: 'PRG', memory: 0x8000, size: 0x4000, bank: 1, out: '%O',
+       fill: 0xff, define: true},
+      {name: 'CHR', memory: 0, size: 0x2000, out: 'chr.bin'},
+    ]);
+  });
+
+  it('should lower a segment into an unmapped segment', function() {
+    expect(lower(`
+      MEMORY {
+        PRG: start = $8000, size = $4000, file = %O;
+        RAM: start = $0300, size = $0500;
+      }
+      SEGMENTS {
+        CODE:     load = PRG, align = $100;
+        BOOT:     load = PRG, run = RAM, align_load = 16, fillval = $EA;
+        ZEROPAGE: load = RAM, type = zp;
+        BSS:      load = RAM, type = bss, optional = yes, define = yes;
+        VECTORS:  load = PRG, start = $BFFA;
+        TABLE:    load = PRG, offset = $200;
+      }`).slice(2)).toEqual([
+      {name: 'CODE', load: 'PRG', run: 'PRG', align: 0x100},
+      {name: 'BOOT', load: 'PRG', run: 'RAM', alignLoad: 16, fill: 0xea},
+      {name: 'ZEROPAGE', load: 'RAM', run: 'RAM', bss: true, addressing: 1},
+      {name: 'BSS', load: 'RAM', run: 'RAM', bss: true, define: true,
+       optional: true},
+      {name: 'VECTORS', load: 'PRG', run: 'PRG', memory: 0xbffa},
+      // `offset` is relative to the run area, unlike `start`.
+      {name: 'TABLE', load: 'PRG', run: 'PRG', memory: 0x8200},
+    ]);
+  });
+
+  describe('a segment sharing its area\'s name', function() {
+
+    function expectRejected(cfg: string, message: RegExp) {
+      let err: unknown;
+      try {
+        lower(cfg);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(SourceError);
+      expect((err as Error).message).toMatch(message);
+    }
+
+    it('should collapse into the area', function() {
+      // nrom.cfg declares both, and the segment is just the area's contents.
+      expect(lower(`
+        MEMORY {
+          ZEROPAGE: start = $00,   size = $100;
+          RAM:      start = $0300, size = $500;
+        }
+        SEGMENTS {
+          ZEROPAGE: load = ZEROPAGE, type = zp;
+          BSS:      load = RAM,      type = bss, align = $100;
+          RAM:      load = RAM,      type = bss, start = $0300;
+        }`)).toEqual([
+        {name: 'ZEROPAGE', memory: 0, size: 0x100, bss: true, addressing: 1},
+        {name: 'RAM', memory: 0x300, size: 0x500, bss: true},
+        {name: 'BSS', load: 'RAM', run: 'RAM', bss: true, align: 0x100},
+      ]);
+    });
+
+    it('should keep the area\'s place in the layout', function() {
+      // The area's declaration order is the order its file is written in, so
+      // the merged segment has to stay where the area was.
+      expect(lower(`
+        MEMORY {
+          HDR: start = $0000, size = $10,   file = %O;
+          PRG: start = $8000, size = $4000, file = %O;
+        }
+        SEGMENTS {
+          CODE: load = PRG;
+          HDR:  load = HDR;
+        }`).map(s => s.name)).toEqual(['HDR', 'PRG', 'CODE']);
+    });
+
+    it('should reject a segment that loads somewhere else', function() {
+      expectRejected(`
+        MEMORY {
+          A: start = $0000, size = $10;
+          B: start = $8000, size = $10;
+        }
+        SEGMENTS { A: load = B; }`,
+        /Segment 'A' shares its name with a MEMORY area but does not load/);
+    });
+
+    it('should reject a segment that runs somewhere else', function() {
+      expectRejected(`
+        MEMORY {
+          A: start = $0000, size = $10;
+          B: start = $8000, size = $10;
+        }
+        SEGMENTS { A: load = A, run = B; }`,
+        /Segment 'A' shares its name with a MEMORY area but does not load/);
+    });
+
+    it('should reject a start that contradicts the area', function() {
+      expectRejected(`
+        MEMORY { A: start = $8000, size = $100; }
+        SEGMENTS { A: load = A, start = $8010; }`,
+        /Segment 'A' starts at \$8010 but shares its name/);
+    });
+
+    it('should reject an alignment the area cannot satisfy', function() {
+      expectRejected(`
+        MEMORY { A: start = $8010, size = $100; }
+        SEGMENTS { A: load = A, align = $100; }`,
+        /Segment 'A' wants \$100-byte alignment/);
+    });
+  });
+
+  it('should resolve config symbols in area expressions', function() {
+    expect(lower(`
+      SYMBOLS { __SIZE__: type = weak, value = $2000; }
+      MEMORY { PRG: start = $10000 - __SIZE__, size = __SIZE__; }`))
+        .toEqual([{name: 'PRG', memory: 0xe000, size: 0x2000}]);
+  });
+
+  it('should let an object file override a weak config symbol', function() {
+    const cfg = parseLinkerConfig(`
+      SYMBOLS {
+        __STACK__: type = weak, value = $100;
+        __TOP__:   type = export, value = $200;
+      }
+      MEMORY { RAM: start = $200 - __STACK__, size = __TOP__; }`);
+    // The object file's own definition wins, which leaves nothing for the
+    // area's start to resolve against.
+    expect(() => lowerLinkerConfig(cfg, new Set(['__STACK__'])))
+        .toThrow(/MEMORY area 'RAM' start is not constant \(__STACK__/);
   });
 });
 

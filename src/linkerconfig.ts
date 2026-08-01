@@ -10,6 +10,7 @@
 
 import {type Expr} from './expr.ts';
 import * as Exprs from './expr.ts';
+import {type Segment} from './module.ts';
 import {type Token} from './token.ts';
 import * as Tokens from './token.ts';
 import {Tokenizer} from './tokenizer.ts';
@@ -330,12 +331,17 @@ function splitAttrs(stmt: Token[], start: number): Token[][] {
   return out;
 }
 
-function statementName(stmt: Token[]): string {
+function statementName(stmt: Token[], block: string,
+                       seen: {name: string}[]): string {
   const tok = stmt[0];
   if (tok.token !== 'ident' && tok.token !== 'str') {
     Tokens.fail(`Expected a name: ${Tokens.nameOf(tok)}`, tok);
   }
   Tokens.expect(Tokens.COLON, stmt[1], tok);
+  // Names have to be unique within a block
+  if (seen.some(s => s.name === tok.str)) {
+    Tokens.fail(`Duplicate ${block} entry: ${tok.str}`, tok);
+  }
   return tok.str;
 }
 
@@ -349,7 +355,7 @@ const SEGMENT_ATTRS = [
 
 function parseMemory(grp: Token[], at: Token, out: MemoryArea[]): void {
   for (const stmt of statements(grp, at)) {
-    const name = statementName(stmt);
+    const name = statementName(stmt, 'MEMORY', out);
     const attrs = new Attrs(splitAttrs(stmt, 2), stmt[0]);
     attrs.checkKnown(MEMORY_ATTRS, 'MEMORY');
     // file = "" means "do not write" so put it as undefined to mark that
@@ -372,7 +378,7 @@ function parseMemory(grp: Token[], at: Token, out: MemoryArea[]): void {
 
 function parseSegments(grp: Token[], at: Token, out: RawSegmentDef[]): void {
   for (const stmt of statements(grp, at)) {
-    const name = statementName(stmt);
+    const name = statementName(stmt, 'SEGMENTS', out);
     const attrs = new Attrs(splitAttrs(stmt, 2), stmt[0]);
     attrs.checkKnown(SEGMENT_ATTRS, 'SEGMENTS');
     const load = attrs.name('load');
@@ -407,7 +413,7 @@ interface RawSegmentDef extends Omit<SegmentDef, 'type'> {
 
 function parseFiles(grp: Token[], at: Token, out: FileDef[]): void {
   for (const stmt of statements(grp, at)) {
-    const name = statementName(stmt);
+    const name = statementName(stmt, 'FILES', out);
     const attrs = new Attrs(splitAttrs(stmt, 2), stmt[0]);
     attrs.checkKnown(['format'], 'FILES');
     // we don't support some of these, but we accept them as input. Probably should issue
@@ -419,7 +425,7 @@ function parseFiles(grp: Token[], at: Token, out: FileDef[]): void {
 
 function parseSymbols(grp: Token[], at: Token, out: SymbolDef[]): void {
   for (const stmt of statements(grp, at)) {
-    const name = statementName(stmt);
+    const name = statementName(stmt, 'SYMBOLS', out);
     const attrs = new Attrs(splitAttrs(stmt, 2), stmt[0]);
     attrs.checkKnown(['type', 'value', 'addrsize'], 'SYMBOLS');
     const type = (attrs.keyword('type', ['export', 'import', 'weak']) ??
@@ -484,9 +490,99 @@ export function parseLinkerConfig(text: string, file = 'linker.cfg',
             }, which is not a MEMORY area`, at);
       }
     }
+    // ld65 namespaces the memory and segments so they don't overlap, but I don't
+    // want to deal with that since we have just segments. Reject any segements
+    // with the same name that don't load+run into the other. If it does load+run
+    // into the other one, then merge them.
+    if (areas.has(rest.name) &&
+        (rest.load !== rest.name || rest.run !== rest.name)) {
+      Tokens.fail(`Segment '${rest.name}' shares its name with a MEMORY area ${
+          ''}but does not load and run there. Rename one of them or use the MEMORY segment directly`, at);
+    }
     // ld65 defaults a segment's type to that of the area it loads into.
     return {...rest, type: rest.type ?? areas.get(rest.load)!.type} as SegmentDef;
   });
 
   return {memory, segments, files, symbols};
+}
+
+/**
+ * Converts the ld65 linker config into the js65 linker types.
+ * 
+ * the `objectExports` param is all the symbols the object files export,
+ * used for checking if a weak symbol was replaced.
+ */
+export function lowerLinkerConfig(
+    cfg: LinkerConfig,
+    objectExports: ReadonlySet<string> = new Set()): Segment[] {
+  const symbols = configSymbols(cfg, objectExports);
+  const out: Segment[] = [];
+  const areas = new Map<string, Segment>();
+  const originalSegments = new Map(cfg.segments.map(s => [s.name, s]));
+
+  // Convert all of the memory items into segments.
+  for (const area of cfg.memory) {
+    const what = `MEMORY area '${area.name}'`;
+    const memory = resolveCfgExpr(area.start, symbols, `${what} start`);
+    const size = resolveCfgExpr(area.size, symbols, `${what} size`);
+    const seg: Segment = {name: area.name, memory, size};
+    if (area.bank != null) {
+      seg.bank = resolveCfgExpr(area.bank, symbols, `${what} bank`);
+    }
+    // An area with no file holds no bytes, which is how the linker recognizes
+    // RAM, so leave `out` unset rather than empty.
+    if (area.file != null) seg.out = area.file;
+    if (area.fill) seg.fill = area.fillval;
+    if (area.define) seg.define = true;
+    const segdef = originalSegments.get(area.name);
+    if (segdef) {
+      // if we have a memory item and segment item with the same name,
+      // try to merge them if its compatible. otherwise throw an error.
+      // this is different from ld65 behavior but i'm fine with that for now.
+      const start = segdef.start ?? (segdef.offset != null ? memory + segdef.offset
+                                                     : undefined);
+      if (start != null && start !== memory) {
+        fail(`Segment '${segdef.name}' starts at $${start.toString(16)} but ${
+             ''}shares its name with a MEMORY area at $${memory.toString(16)}`);
+      }
+      if (segdef.align != null && memory % segdef.align) {
+        fail(`Segment '${segdef.name}' wants $${segdef.align.toString(16)
+             }-byte alignment but shares its name with a MEMORY area at $${
+             memory.toString(16)}`);
+      }
+      applySegmentType(seg, segdef);
+      if (area.fill && segdef.fillval != null) seg.fill = segdef.fillval;
+      if (segdef.define) seg.define = true;
+    }
+    areas.set(area.name, seg);
+    out.push(seg);
+  }
+
+  // And also all of the segment items into segments.
+  for (const def of cfg.segments) {
+    if (areas.has(def.name)) continue; // already merged into its area
+    const seg: Segment = {name: def.name, load: def.load, run: def.run};
+    // `start` is an absolute address. `offset` is relative to the run area.
+    const memory = def.start ??
+        (def.offset != null ? areas.get(def.run)!.memory! + def.offset
+                            : undefined);
+    if (memory != null) seg.memory = memory;
+    if (def.align != null) seg.align = def.align;
+    if (def.alignLoad != null) seg.alignLoad = def.alignLoad;
+    if (def.fillval != null) seg.fill = def.fillval;
+    applySegmentType(seg, def);
+    if (def.define) seg.define = true;
+    if (def.optional) seg.optional = true;
+    out.push(seg);
+  }
+  return out;
+}
+
+function applySegmentType(seg: Segment, def: SegmentDef): void {
+  if (def.type === 'bss' || def.type === 'zp') seg.bss = true;
+  if (def.type === 'zp') seg.addressing = 1;
+}
+
+function fail(message: string): never {
+  throw new Tokens.SourceError(message);
 }
