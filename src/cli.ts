@@ -35,6 +35,7 @@ class Arguments {
   files : string[] = [];
   dbgfile = "";
   mapfile = "";
+  cfgfile = "";
   compileonly = false;
   patch : "ips" | "" = "";
   options: Js65Options = {
@@ -114,6 +115,12 @@ export class Cli {
         out.mapfile = args[++i];
       } else if (arg.startsWith('--mapfile=')) {
         out.mapfile = arg.substring('--mapfile='.length);
+      } else if (arg === '-C' || arg === '--config') {
+        if (out.cfgfile) this.usage();
+        out.cfgfile = args[++i];
+      } else if (arg.startsWith('--config=')) {
+        if (out.cfgfile) this.usage();
+        out.cfgfile = arg.substring('--config='.length);
       } else if (arg === '-g' || arg === '-g0') {
         out.options.debugLevel = 0; // Comments and labels only
         out.options.generateDebugInfo = true;
@@ -177,6 +184,8 @@ export class Cli {
         return this.usage(8, [new Error(`Cannot use --compileonly flag combined with --${args.patch}`)]);
       else if (args.mapfile)
         return this.usage(8, [new Error("Cannot use --compileonly flag combined with -m/--mapfile")]);
+      else if (args.cfgfile)
+        return this.usage(8, [new Error("Cannot use --compileonly flag combined with -C/--config")]);
     }
 
     if (args.mapfile) args.options.generateMapFile = true;
@@ -216,6 +225,13 @@ export class Cli {
         ...(args.options.includePaths ?? []),
       ];
 
+      // Load the ld65 linker config, if given. readSource caches the text so a
+      // parse error further in gets a source snippet like any other file.
+      if (args.cfgfile) {
+        args.options.linkerConfig = await this.readSource("", args.cfgfile);
+        args.options.linkerConfigName = args.cfgfile;
+      }
+
       // Load base ROM if specified
       let baseRom: Uint8Array | undefined;
       if (args.rom) {
@@ -244,6 +260,14 @@ export class Cli {
       const primary = result.outputs.find(o => o.type === 'binary' || o.type === 'object')
           ?? result.outputs[0];
       await this.callbacks.fsWriteBytes("", args.outfile, primary.data);
+
+      // A linker config can send segments to files of their own. Their names
+      // come from the config verbatim, so `%O` still has to be filled in.
+      for (const extra of result.outputs) {
+        if (extra === primary || extra.type !== 'binary') continue;
+        await this.callbacks.fsWriteBytes(
+            "", extra.name.replace(/%O/g, args.outfile), extra.data);
+      }
 
       // Write debug info if requested
       const debug = findOutput(result, 'debug');
@@ -396,6 +420,9 @@ optional arguments:
   --no-debuginfo          Disable debug info generation.
   --dbgfile FILE          Output debug symbols to the specified file.
   -m FILE/--mapfile=FILE  Output a linker map (free space / placed chunks) to the specified file. Cannot be used with --compileonly.
+  -C FILE/--config=FILE   Link using an ld65 linker config, in place of the built-in
+                          segment layout.
+                          Cannot be used with --compileonly.
   -I DIR/--include-dir=DIR
                           Add DIR to the \`.include\` search path. Directories are
                           searched in the order given, after the directory of the file doing the

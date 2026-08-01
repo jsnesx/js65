@@ -536,20 +536,24 @@ export function lowerLinkerConfig(
     if (area.define) seg.define = true;
     const segdef = originalSegments.get(area.name);
     if (segdef) {
-      // if we have a memory item and segment item with the same name,
-      // try to merge them if its compatible. otherwise throw an error.
-      // this is different from ld65 behavior but i'm fine with that for now.
-      const start = segdef.start ?? (segdef.offset != null ? memory + segdef.offset
-                                                     : undefined);
-      if (start != null && start !== memory) {
-        fail(`Segment '${segdef.name}' starts at $${start.toString(16)} but ${
-             ''}shares its name with a MEMORY area at $${memory.toString(16)}`);
+      // A MEMORY area and a SEGMENTS entry of the same name are separate
+      // things in ld65 but one segment here, so merge them. The segment may
+      // start partway into its area or ask for an alignment the area's start
+      // doesn't have. Either way, the merged segment covers from there to the
+      // end of the area.
+      const start = segdef.start ??
+          (segdef.offset != null ? memory + segdef.offset : undefined);
+      let from = start ?? memory;
+      if (segdef.align != null) {
+        from = Math.ceil(from / segdef.align) * segdef.align;
       }
-      if (segdef.align != null && memory % segdef.align) {
-        fail(`Segment '${segdef.name}' wants $${segdef.align.toString(16)
-             }-byte alignment but shares its name with a MEMORY area at $${
-             memory.toString(16)}`);
+      if (from < memory || from >= memory + size) {
+        fail(`Segment '${segdef.name}' starts at $${from.toString(16)}, which ${
+             ''}is outside the MEMORY area of the same name ($${
+             memory.toString(16)}..$${(memory + size).toString(16)})`);
       }
+      seg.memory = from;
+      seg.size = size - (from - memory);
       applySegmentType(seg, segdef);
       if (area.fill && segdef.fillval != null) seg.fill = segdef.fillval;
       if (segdef.define) seg.define = true;

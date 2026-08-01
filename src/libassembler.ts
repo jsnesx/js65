@@ -81,6 +81,10 @@ export interface LinkerOptions {
   target?: string;
   baseRom?: Uint8Array;
   baseRomOffset?: number;
+  /** Full text of an ld65 linker config, which replaces `target`. */
+  linkerConfig?: string;
+  /** Name to report `linkerConfig` parse errors against. */
+  linkerConfigName?: string;
   /** Debug level for debug info generation:
    * -1 = disabled
    *  0 = comments/labels only
@@ -112,6 +116,10 @@ export interface Js65Options {
   baseRomOffset?: number;
   outputFormat?: OutputFormat;
   generateMapFile?: boolean;
+  /** Full text of an ld65 linker config. Replaces `target` when given. */
+  linkerConfig?: string;
+  /** Name to report `linkerConfig` parse errors against. */
+  linkerConfigName?: string;
 }
 
 /**
@@ -354,6 +362,8 @@ export interface LinkResult {
   success: boolean;
   /** Binary output or IPS patch (empty if errors) */
   data: Uint8Array;
+  /** Any outputs named in a linker config that was the original %o output */
+  extraOutputs: {name: string, data: Uint8Array}[];
   /** Debug information in MLB format (empty string if sourceContents not provided or errors) */
   debugInfo: string;
   /** Linker map (empty unless requested or on errors) */
@@ -384,7 +394,11 @@ export function link(
   const allMessages = [...messages];
 
   try {
-    const linker = new Linker({ target: options?.target });
+    const linker = new Linker({
+      target: options?.target,
+      linkerConfig: options?.linkerConfig,
+      linkerConfigName: options?.linkerConfigName,
+    });
 
     // Load base ROM if provided and not generating IPS
     let data: Uint8Array | null = null;
@@ -398,10 +412,18 @@ export function link(
     }
 
     const out = linker.link(signal);
+    // A config can send segments to files of their own; only the main output
+    // is patched into the base ROM.
+    const extraOutputs = linker.outputFiles();
 
     // Generate output based on format
     let binaryData: Uint8Array;
     if (outputFormat === 'ips') {
+      if (extraOutputs.length) {
+        throw new Error(`Cannot write an IPS patch from a linker config with ${
+                        ''}more than one output file (${
+                        extraOutputs.map(o => o.name).join(', ')})`);
+      }
       binaryData = out.toIpsPatch();
     } else {
       if (!data) data = new Uint8Array(out.length);
@@ -417,6 +439,7 @@ export function link(
     return {
       success: !hasErrors,
       data: binaryData,
+      extraOutputs,
       debugInfo,
       mapFile,
       messages: allMessages
@@ -428,6 +451,7 @@ export function link(
     return {
       success: false,
       data: new Uint8Array(0),
+      extraOutputs: [],
       debugInfo: '',
       mapFile: '',
       messages: allMessages
@@ -584,6 +608,8 @@ export async function compile(
       baseRomOffset: options.baseRomOffset,
       debugLevel: options.debugLevel,
       generateMapFile: options.generateMapFile,
+      linkerConfig: options.linkerConfig,
+      linkerConfigName: options.linkerConfigName,
     };
     const outputFormat: OutputFormat = options.outputFormat ?? 'binary';
     const sourceContents = options.generateDebugInfo ? new SourceContents() : undefined;
@@ -620,7 +646,12 @@ export async function compile(
 
     const lr = link(asm.modules, linkerOpts, outputFormat, sourceContents, asm.messages, signal);
     const outputName = outputFormat === 'ips' ? 'out.ips' : 'out.nes';
+    // The main output comes first, so anything picking "the binary" out of the
+    // list still gets the ROM rather than one of the config's extra files.
     const outputs: OutputFile[] = [{ name: outputName, data: lr.data, type: 'binary' }];
+    for (const extra of lr.extraOutputs) {
+      outputs.push({ name: extra.name, data: extra.data, type: 'binary' });
+    }
     // Debug info rides as a sidecar output (type 'debug') rather than a separate field.
     if (lr.debugInfo) {
       outputs.push({ name: 'out.mlb', data: new TextEncoder().encode(lr.debugInfo), type: 'debug' });
