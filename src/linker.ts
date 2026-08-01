@@ -5,6 +5,7 @@ import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
+import { type LinkerConfig, lowerLinkerConfig, parseLinkerConfig } from './linkerconfig.ts';
 import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
@@ -75,9 +76,17 @@ export class Linker {
   }
 
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
-    const target = Targets.get(this.opts.target?.toLowerCase())
-    if (target) {
-      target.segments.forEach( seg => this._link.addRawSegment(seg) );
+    // An ld65 config replaces the built-in segment configuration.
+    // I don't think its worth trying to sort out using both for now.
+    // Maybe at some point we start issuing warnings if they mix the two.
+    if (this.opts.linkerConfig != null) {
+      this._link.setConfig(parseLinkerConfig(this.opts.linkerConfig,
+                                             this.opts.linkerConfigName));
+    } else {
+      const target = Targets.get(this.opts.target?.toLowerCase())
+      if (target) {
+        target.segments.forEach( seg => this._link.addRawSegment(seg) );
+      }
     }
     return this._link.link(signal);
   }
@@ -490,6 +499,10 @@ export class Linker {
 
 export interface Options {
   target?: string;
+  /** Full text of the linker config file. */
+  linkerConfig?: string;
+  /** Name to report `linkerConfig` parse errors against. */
+  linkerConfigName?: string;
 }
 
 // TODO - link-time only function for getting either the original or the
@@ -526,8 +539,15 @@ class LinkSegment {
   /** Whether chunks placed here may share bytes with identical data. */
   readonly dedupe: boolean;
   readonly isRam: boolean;
+  /**
+   * Space reserved by unmapped segments within a mapped segment.
+   * Only applies to a scenario where you have chunks directly written
+   * through an unmapped segment AND chunks written directly to this
+   * mapped segment.
+   */
+  readonly used: number;
 
-  constructor(segment: Segment) {
+  constructor(segment: Segment, used = 0) {
     const name = this.name = segment.name;
     this.bank = segment.bank ?? 0;
     this.addressing = segment.addressing ?? 2;
@@ -544,6 +564,7 @@ class LinkSegment {
     this.memory = segment.memory ?? 0;
     this.fill = segment.fill;
     this.dedupe = segment.dedupe ?? false;
+    this.used = used;
   }
 
   // offset = org + delta
@@ -887,6 +908,8 @@ class Link {
   private segmentIndex = new Map<string, number>();
   /** Names of mapped segments that other unmapped segments are written to. */
   private segmentMappings = new Set<string>();
+  /** Track the `used` values for each mapped segment */
+  private segmentUsed = new Map<string, number>();
 
   watches: number[] = []; // debugging aid: offsets to watch.
   placed: Array<[number, LinkChunk]> = [];
@@ -997,7 +1020,7 @@ class Link {
 
     // Build up the LinkSegment objects
     for (const [name, s] of merged) {
-      this.segments.set(name, new LinkSegment(s));
+      this.segments.set(name, new LinkSegment(s, this.segmentUsed.get(name)));
     }
     // Add the free space
     for (const [name, s] of this.segments) {
@@ -1014,11 +1037,17 @@ class Link {
           // patch build searches for.
           this.data.splice(start + s.delta, end - start);
         }
-      } else if (s.size > 0 && !this.segmentMappings.has(name)) {
-        // Mark the entire segment as free if it was originally a mapped segment
-        // We don't want originally unmapped segments to be automatically
-        // freed since they don't "own" the space.
-        this.free.add(s.memory + s.delta, s.memory + s.size + s.delta);
+      } else if (s.size > 0) {
+        // Mark the entire segment as free if it was originally a mapped
+        // segment. We don't want originally unmapped segments to be
+        // automatically freed since they don't "own" the space
+        // There is an exception to this, a mapped segment holding chunks of
+        // that the user wrote directly, owns whatever that data.
+        const from = this.segmentMappings.has(name) ?
+            this.segmentUsed.get(name) : 0;
+        if (from != null && from < s.size) {
+          this.free.add(s.memory + from + s.delta, s.memory + s.size + s.delta);
+        }
       }
     }
     // Set up all the initial placements.
@@ -1266,9 +1295,12 @@ class Link {
       } else {
         seg.offset = cursor;
       }
-      // A filled segment writes its whole size, but an unfilled host only
-      // writes as far as the segments loaded into it actually reached.
-      const extent = seg.fill == null && this.segmentMappings.has(name) ?
+      // A filled segment writes its whole size, but an unfilled mapped segment
+      // only writes as far as the segments lowered into it actually reached.
+      // Unless it holds chunks of its own, which can land anywhere it has space.
+      const extent =
+          seg.fill == null && this.segmentMappings.has(name) &&
+              !referenced.has(name) ?
           (used.get(name) ?? 0) : (seg.size ?? 0);
       fileLocations.set(file, cursor + extent);
     }
@@ -1291,6 +1323,12 @@ class Link {
       seg.fill = seg.fill ?? loadSeg.fill;
       seg.addressing = seg.addressing ?? runSeg.addressing;
       seg.bss = seg.bss ?? !emits;
+    }
+
+    // A mapped segment that chunks name directly keeps whatever the segments
+    // lowered into it left over.
+    for (const name of this.segmentMappings) {
+      if (referenced.has(name)) this.segmentUsed.set(name, used.get(name) ?? 0);
     }
   }
 
@@ -1353,9 +1391,13 @@ class Link {
     for (const name of segments) {
       const segment = this.segment(name);
       // For RAM segments, free space is tracked with RAM_OFFSET added to memory addresses
-      // For ROM segments, free space is tracked in file offset coordinates
-      const s0 = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset;
-      const s1 = s0 + segment.size;
+      // For ROM segments, free space is tracked in file offset coordinates.
+      // Adjacent free ranges merge, so the space a mapped segment handed to the
+      // ones lowered into it has to be excluded here rather than left out of
+      // `free`.
+      const base = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset;
+      const s0 = base + segment.used;
+      const s1 = base + segment.size;
       let found: number|undefined;
       let smallest = Infinity;
       for (const [f0, f1] of this.free.tail(s0)) {
@@ -1448,6 +1490,18 @@ class Link {
   //   // TODO - add all the things
   //   return patch;
   // }
+
+  setConfig(cfg: LinkerConfig) {
+    const exported = new Set<string>();
+    // Check the symbol exports here to see if any override linker weak symbols
+    for (const symbol of this.symbols) {
+      if (symbol.export != null) exported.add(symbol.export);
+    }
+    for (const segment of lowerLinkerConfig(cfg, exported)) {
+      this.addRawSegment(segment);
+      this.segmentOrder.push(segment.name);
+    }
+  }
 
   addRawSegment(segment: Segment) {
     let list = this.rawSegments.get(segment.name);

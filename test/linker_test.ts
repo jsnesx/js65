@@ -4,6 +4,8 @@
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
 import {Linker} from '../src/linker.ts';
+import {type Module} from '../src/module.ts';
+import {SourceError} from '../src/token.ts';
 import * as util from '../src/util.ts';
 
 const [_] = [util];
@@ -305,7 +307,7 @@ describe('Linker', function() {
         .toEqual([[0, [1, 2, 3, 4, 9, 5, 6, 7, 8]]]);
   });
 
-  it('should measure a hosted segment and pack it into its host', function() {
+  it('should measure an unmapped segment and pack it into the mapped one', function() {
     const m = {
       chunks: [{
         segments: ['CODE'],
@@ -320,12 +322,12 @@ describe('Linker', function() {
         {name: 'DATA', load: 'PRG'},
       ],
     };
-    // Neither hosted segment declares a size, so each one is measured from its
-    // contents and they pack tight against each other in the host.
+    // Neither unmapped segment declares a size, so each one is measured from its
+    // contents and they pack tight against each other in the mapped one.
     expect([...link(m).chunks()]).toEqual([[0x10, [1, 1, 1, 1, 2, 2, 2]]]);
   });
 
-  it('should measure a hosted segment independently of its host', function() {
+  it('should measure an unmapped segment independently of the mapped one', function() {
     const m = (memory: number) => ({
       chunks: [{
         segments: ['CODE'],
@@ -340,11 +342,11 @@ describe('Linker', function() {
         {name: 'DATA', load: 'PRG'},
       ],
     });
-    // Sizing is segment-relative, so moving the host does not change it.
+    // Sizing is segment-relative, so moving the mapped one does not change it.
     expect([...link(m(0x8000)).chunks()]).toEqual([...link(m(0x9000)).chunks()]);
   });
 
-  it('should align a hosted segment within its host', function() {
+  it('should align an unmapped segment within the mapped one', function() {
     const m = {
       chunks: [{
         segments: ['CODE'],
@@ -359,12 +361,12 @@ describe('Linker', function() {
         {name: 'DATA', load: 'PRG', align: 16},
       ],
     };
-    // DATA's alignment bumps the host cursor from $8003 to $8010.
+    // DATA's alignment bumps PRG's cursor from $8003 to $8010.
     expect([...link(m).chunks()])
         .toEqual([[0x10, [1, 1, 1]], [0x20, [2, 2]]]);
   });
 
-  it('should run a hosted segment somewhere it does not load', function() {
+  it('should run an unmapped segment somewhere it does not load', function() {
     const m = {
       chunks: [{
         segments: ['BOOT'],
@@ -388,7 +390,7 @@ describe('Linker', function() {
         .toEqual([[0x10, [0xaa, 0xbb, 0x00, 0x03, 1, 2]]]);
   });
 
-  it('should align a hosted segment\'s load without moving its run address',
+  it('should align an unmapped segment\'s load without moving its run address',
      function() {
     const m = {
       chunks: [{
@@ -440,7 +442,7 @@ describe('Linker', function() {
     expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x00, 0xa5, 0x04]]]);
   });
 
-  it('should throw when a hosted segment overflows its host', function() {
+  it('should throw when an unmapped segment overflows the mapped one', function() {
     const m = {
       chunks: [{
         segments: ['CODE'],
@@ -458,7 +460,7 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/Segment DATA .* does not fit in PRG/);
   });
 
-  it('should throw when a hosted segment holds a .org chunk with no address',
+  it('should throw when an unmapped segment holds a .org chunk with no address',
      function() {
     const m = {
       chunks: [{
@@ -474,7 +476,7 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/no address of its own/);
   });
 
-  it('should size a hosted segment around a .org chunk', function() {
+  it('should size an unmapped segment around a .org chunk', function() {
     const m = {
       chunks: [{
         segments: ['CODE'],
@@ -890,5 +892,268 @@ describe('Linker', function() {
     // The addresses should be different (allocated sequentially)
     const [_offset, data] = result[0];
     expect(data[1]).not.toBe(data[3]);  // Different addresses
+  });
+});
+
+describe('Linker with an ld65 config', function() {
+
+  function linkCfg(cfg: string, ...modules: Module[]) {
+    const linker = new Linker({linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+    for (const m of modules) linker.read(m);
+    return linker.link();
+  }
+
+  it('should lay out its areas in declaration order', function() {
+    const cfg = `
+      MEMORY {
+        ZP:  start = $00,   size = $100;
+        RAM: start = $200,  size = $100;
+        HDR: start = $0000, size = $4,  file = %O, fill = yes;
+        PRG: start = $8000, size = $20, file = %O, fill = yes, fillval = $ff;
+      }
+      SEGMENTS {
+        ZEROPAGE: load = ZP,  type = zp;
+        BSS:      load = RAM, type = bss;
+        HEADER:   load = HDR;
+        CODE:     load = PRG;
+        DATA:     load = PRG;
+      }`;
+    const m = {
+      chunks: [
+        {segments: ['HEADER'], data: Uint8Array.of(1, 2, 3)},
+        {segments: ['CODE'], data: Uint8Array.of(10, 11)},
+        {segments: ['DATA'], data: Uint8Array.of(20)},
+        {segments: ['BSS'], data: Uint8Array.of(0, 0)},
+      ],
+    };
+    // HDR takes the front of the file because it is declared first, and PRG
+    // follows it at $4.  Both areas fill their whole declared size; the RAM
+    // areas take no file space at all and the BSS chunk emits nothing.
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([
+      [0, [1, 2, 3, 0, 10, 11, 20, ...new Array(29).fill(0xff)]],
+    ]);
+  });
+
+  it('should collapse a segment into its same-named area', function() {
+    const cfg = `
+      MEMORY {
+        ZEROPAGE: start = $00,   size = $100;
+        PRG:      start = $8000, size = $8, file = %O;
+      }
+      SEGMENTS {
+        ZEROPAGE: load = ZEROPAGE, type = zp;
+        CODE:     load = PRG;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['ZEROPAGE'],
+        data: Uint8Array.of(0, 0),
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(0xa5, 0xff),  // lda $xx
+        subs: [{offset: 1, size: 1, expr: off(0, 0)}],
+      }],
+    };
+    // The two namespaces are separate in ld65, and nrom.cfg really does reuse
+    // ZEROPAGE for both.  js65 has one namespace, so the segment is the area.
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0xa5, 0x00]]]);
+  });
+
+  it('should fill a merged area around the segments lowered into it', function() {
+    const cfg = `
+      MEMORY {
+        RAM: start = $10,   size = $20;
+        PRG: start = $8000, size = $8, file = %O;
+      }
+      SEGMENTS {
+        BSS:  load = RAM, type = bss;
+        RAM:  load = RAM, type = bss;
+        CODE: load = PRG;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['BSS'],
+        data: Uint8Array.of(0, 0, 0, 0),
+      }, {
+        segments: ['RAM'],
+        data: Uint8Array.of(0, 0),
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(0xa5, 0xff, 0xa5, 0xff),
+        subs: [
+          {offset: 1, size: 1, expr: off(0, 0)},
+          {offset: 3, size: 1, expr: off(1, 0)},
+        ],
+      }],
+    };
+    // RAM is both the area BSS lives in and a segment of its own, so its own
+    // chunks go after the $4 bytes it handed to BSS rather than on top of them.
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [0xa5, 0x10, 0xa5, 0x14]]]);
+  });
+
+  it('should reserve a merged area\'s whole file space', function() {
+    const cfg = `
+      MEMORY {
+        A: start = $8000, size = $8, file = %O;
+        B: start = $9000, size = $4, file = %O;
+      }
+      SEGMENTS {
+        CODE: load = A;
+        A:    load = A;
+        DATA: load = B;
+      }`;
+    const m = {
+      chunks: [
+        {segments: ['CODE'], data: Uint8Array.of(1, 1)},
+        {segments: ['A'], data: Uint8Array.of(2, 2)},
+        {segments: ['DATA'], data: Uint8Array.of(3, 3)},
+      ],
+    };
+    // A's own chunks can land anywhere it has left, so B has to start past all
+    // of A rather than just past the segments lowered into it.
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [1, 1, 2, 2]], [8, [3, 3]]]);
+  });
+
+  it('should allocate segments in the order the config declares them',
+     function() {
+    const cfg = `
+      MEMORY { PRG: start = $8000, size = $10, file = %O; }
+      SEGMENTS {
+        DATA: load = PRG;
+        CODE: load = PRG;
+      }`;
+    const m = {
+      chunks: [
+        {segments: ['CODE'], data: Uint8Array.of(1, 2, 3, 4)},
+        {segments: ['DATA'], data: Uint8Array.of(9)},
+      ],
+    };
+    // DATA is declared first, so it goes first even though CODE is bigger.
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [9, 1, 2, 3, 4]]]);
+  });
+
+  it('should pin a segment with an explicit start', function() {
+    const cfg = `
+      MEMORY { PRG: start = $8000, size = $10, file = %O, fill = yes,
+                    fillval = $ff; }
+      SEGMENTS {
+        CODE:    load = PRG;
+        VECTORS: load = PRG, start = $800e;
+      }`;
+    const m = {
+      chunks: [
+        {segments: ['CODE'], data: Uint8Array.of(1, 2)},
+        {segments: ['VECTORS'], data: Uint8Array.of(0xaa, 0xbb)},
+      ],
+    };
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [1, 2, ...new Array(12).fill(0xff), 0xaa, 0xbb]]]);
+  });
+
+  it('should align a segment within its area', function() {
+    const cfg = `
+      MEMORY { PRG: start = $8000, size = $20, file = %O; }
+      SEGMENTS {
+        CODE: load = PRG;
+        DATA: load = PRG, align = $10;
+      }`;
+    const m = {
+      chunks: [
+        {segments: ['CODE'], data: Uint8Array.of(1, 1, 1)},
+        {segments: ['DATA'], data: Uint8Array.of(2, 2)},
+      ],
+    };
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [1, 1, 1]], [0x10, [2, 2]]]);
+  });
+
+  it('should run a segment somewhere it does not load', function() {
+    const cfg = `
+      MEMORY {
+        RAM: start = $300,  size = $100;
+        PRG: start = $8000, size = $8, file = %O;
+      }
+      SEGMENTS {
+        BOOT: load = PRG, run = RAM;
+        CODE: load = PRG;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['BOOT'],
+        data: Uint8Array.of(0xaa, 0xbb, 0xff, 0xff),
+        subs: [{offset: 2, size: 2, expr: off(0, 0)}],
+      }, {
+        segments: ['CODE'],
+        data: Uint8Array.of(1, 2),
+      }],
+    };
+    // BOOT's label resolves against $300 where it runs, but its bytes are
+    // written into - and charged to - the file space PRG handed it.
+    expect([...linkCfg(cfg, m).chunks()])
+        .toEqual([[0, [0xaa, 0xbb, 0x00, 0x03, 1, 2]]]);
+  });
+
+  it('should give a segment its area\'s bank', function() {
+    const cfg = `
+      MEMORY {
+        PRG0: start = $8000, size = $4, file = %O, bank = 8;
+        PRG1: start = $8000, size = $4, file = %O, bank = 9;
+      }
+      SEGMENTS {
+        CODE: load = PRG0;
+        DATA: load = PRG1;
+      }`;
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [
+          {offset: 0, size: 1, expr: op('^', off(0, 0))},
+          {offset: 1, size: 1, expr: op('^', off(1, 0))},
+        ],
+      }, {
+        segments: ['DATA'],
+        data: Uint8Array.of(7),
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [8, 9, 7]]]);
+  });
+
+  it('should resolve a config symbol in an area expression', function() {
+    const cfg = `
+      SYMBOLS { __PRGSTART__: type = weak, value = $8000; }
+      MEMORY { PRG: start = __PRGSTART__, size = $4, file = %O; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const m = {
+      chunks: [{
+        segments: ['CODE'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 2, expr: off(0, 0)}],
+      }],
+    };
+    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x00, 0x80]]]);
+  });
+
+  it('should throw when a segment overflows its area', function() {
+    const cfg = `
+      MEMORY { PRG: start = $8000, size = $2, file = %O; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const m = {chunks: [{segments: ['CODE'], data: Uint8Array.of(1, 2, 3, 4)}]};
+    expect(() => linkCfg(cfg, m))
+        .toThrow(/Segment CODE .* does not fit in PRG/);
+  });
+
+  it('should report a config parse error against the config file', function() {
+    const cfg = `MEMORY {\n  PRG: start = $8000, size = $2\n}`;
+    let err: unknown;
+    try {
+      linkCfg(cfg, {chunks: []});
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SourceError);
+    expect((err as SourceError).source).toMatchObject({file: 'test.cfg'});
   });
 });
