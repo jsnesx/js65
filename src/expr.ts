@@ -576,7 +576,7 @@ function plus(expr: Expr): Expr {
     }
   }
   if (!out.meta?.rel && out.meta?.size == null) {
-    (out.meta || (out.meta = {})).size = size(out.num!).size;
+    (out.meta || (out.meta = {})).size = foldedSize(out.num!, a, b);
   }
   return carryZeropage(out, '+', [a, b]);
 }
@@ -599,13 +599,18 @@ function minus(expr: Expr): Expr {
   }
   if (a.meta?.rel) out.meta = a.meta;
   if (!out.meta?.rel && out.meta?.size == null) {
-    (out.meta || (out.meta = {})).size = size(out.num!).size;
+    (out.meta || (out.meta = {})).size = foldedSize(out.num!, a, b);
   }
   // Preserve branch flag even for non-relative subtractions
   if (isBranch && out.op === 'num') {
     (out.meta || (out.meta = {})).branch = true;
   }
   return carryZeropage(out, '-', [a, b]);
+}
+
+function foldedSize(num: number, ...args: Expr[]): number {
+  return Math.max(size(num).size!,
+                  ...args.map(a => Number(a.meta?.size) || 0));
 }
 
 /** For +/- ops, we want things like ZP + 1 to also land in ZP */

@@ -504,10 +504,10 @@ export class Assembler {
   /**
    * When parsing symbols, we will need to be able to both resolve a symbol in the
    * scope, and also size a symbol. Instead of sticking zeropage in as a second
-   * param everywhere, we can just roll it together with the symbol lookup. 
+   * param everywhere, we can just roll it together with the symbol lookup.
    */
   private readonly symbolLookup: Exprs.SymbolLookup = {
-    get: (name: string) => this.currentScope.symbols.get(name),
+    get: (name: string) => this.lookupSymbol(name),
     zeropage: (name: string) => this.isZeropageRef(name),
   };
 
@@ -1254,12 +1254,14 @@ export class Assembler {
     if (m === 'add' || m === 'a,x' || m === 'a,y') {
       // Special case for address mnemonics
       let expr = arg[1]!;
-      // Attempt to resolve the expression first. If we are able to, then
-      // we can appropriately size the expression
+      // Before choosing an addressing mode, we need to try and fold any
+      // arithmetic to see if the address is known, and if its ZP or ABS
+      // This way, a value like $0f + 1 will end up in ZP, but something like
+      // $80 + $8000 will end up in ABS still.
+      if (expr.meta?.size == null && expr.args) {
+        expr = Exprs.traversePost(expr, Exprs.evaluate);
+      }
 
-      // console.log(`before resolving: ${JSON.stringify(expr)}`);
-      // expr = this.resolve(expr);
-      
       // If the size is unknown, fall back to the operand's address size, which
       // is zeropage only if it was tracked all the way here from the definition.
       const s = expr.meta?.size ?? (expr.meta?.zeropage ? 1 : 2);
@@ -1820,26 +1822,32 @@ export class Assembler {
 
   /**
    * Run through the scope tree looking for the named symbol without
-   * creating a forward reference if its not found. We are just interested
-   * in finding this information for sizing.
+   * creating a forward reference if its not found. We need to walk
+   * through the tree here to see if we can properly size the value
+   * now instead of deferring it to link time which would force this
+   * to get pessimized to an ABS addressing mode.
    */
   private lookupSymbol(name: string): Symbol|undefined {
-    try {
-      if (name.startsWith('@')) {
-        return this.cheapLocals.resolve(name, {allowForwardRef: false});
-      }
-      let scope: Scope|undefined = this.currentScope;
-      const unscoped = !name.includes('::');
-      do {
-        const sym = scope.resolve(name, {allowForwardRef: false});
+    if (name.startsWith('@')) return this.cheapLocals.symbols.get(name);
+    // This runs for every identifier in every expression, so shortcut
+    // checking for the symbol if it isn't explicitly scoped and jump
+    // straight to the symbol map lookup.
+    if (!name.includes('::')) {
+      for (let scope: Scope|undefined = this.currentScope; scope;
+           scope = scope.parent) {
+        const sym = scope.symbols.get(name);
         if (sym?.expr) return sym;
         if (sym?.scoped) return sym; // explicitly scoped: no outer name applies
-      } while (unscoped && (scope = scope.parent));
+      }
+      return undefined;
+    }
+    try {
+      return this.currentScope.resolve(name, {allowForwardRef: false});
     } catch {
       // An unresolvable explicit scope shouldn't throw here. The symbol
       // gets resolved for real (and fails there) once the operand is emitted.
+      return undefined;
     }
-    return undefined;
   }
 
   private declareGlobal(ident: string, kind: 'export'|'import'|'global', weak = false) {
