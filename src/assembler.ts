@@ -28,7 +28,16 @@ function isSizeOfSymbol(name: string): boolean {
 }
 
 /**
- * List of CPUs that we support. 
+ * ca65 has some predefined segments, and normally this doesn't matter except for
+ * using the .code/.bss shortcuts, but for zeropage, we need to also set the
+ * addressing mode to `zp` as well.
+ */
+const PREDECLARED_SEGMENTS = new Map<string, mod.Segment>([
+  ['ZEROPAGE', {name: 'ZEROPAGE', addressing: 1}],
+]);
+
+/**
+ * List of CPUs that we support.
  * We aren't very strict about the difference between 6502 and 6502x.
  */
 const SUPPORTED_CPUS = new Set(['6502', '6502x']);
@@ -333,8 +342,13 @@ export class Assembler {
 
   /** Alignment constraint to stamp on the next chunk, from a pending `.align`. */
   private _pendingAlign: number|undefined = undefined;
-  /** TODO: use this to actually fill the alignment later. */
+  /** Fill byte for the pending `.align`, if it specified one. */
   private _pendingFill: number|undefined = undefined;
+  /**
+   * Chunk that was open when the pending `.align` was seen. If nothing follows
+   * the `.align` in that segment, this is the chunk that gets padded.
+   */
+  private _alignChunk: Chunk|undefined = undefined;
 
   /** Prefix to prepend to all segment names. */
   private _segmentPrefix = '';
@@ -397,6 +411,7 @@ export class Assembler {
         this._chunk.align = this._pendingAlign;
         this._pendingAlign = undefined;
         this._pendingFill = undefined;
+        this._alignChunk = undefined;
       }
       this._chunk.overwrite = this.overwriteMode;
 
@@ -486,9 +501,20 @@ export class Assembler {
         this.segments.every(s => this.segmentData.get(s)?.addressing === 1);
   }
 
+  /**
+   * When parsing symbols, we will need to be able to both resolve a symbol in the
+   * scope, and also size a symbol. Instead of sticking zeropage in as a second
+   * param everywhere, we can just roll it together with the symbol lookup. 
+   */
+  private readonly symbolLookup: Exprs.SymbolLookup = {
+    get: (name: string) => this.currentScope.symbols.get(name),
+    zeropage: (name: string) => this.isZeropageRef(name),
+  };
+
   // Returns an expr resolving to a symbol name (e.g. a label)
   symbol(name: string): Expr {
-    return Exprs.evaluate(Exprs.parseOnly([{token: 'ident', str: name}], 0, this.currentScope.symbols));
+    return Exprs.evaluate(
+        Exprs.parseOnly([{token: 'ident', str: name}], 0, this.symbolLookup));
   }
 
   where(): string {
@@ -653,8 +679,9 @@ export class Assembler {
       this.symbols.push(sym);
     }
 
-    // console.log(`resolve 1: ${JSON.stringify(sym)}`);
-    return {op: 'sym', num: sym.id};
+    const out: Expr = {op: 'sym', num: sym.id};
+    if (symbol.meta?.zeropage) out.meta = {zeropage: true};
+    return out;
   }
 
   // No banks are resolved yet.
@@ -793,6 +820,8 @@ export class Assembler {
   }
 
   module(): Module {
+    // A `.align` at the very end of the source still pads its segment in ca65.
+    this.flushPendingAlign();
     this.closeScopes();
 
     // TODO - handle imports and exports out of the scope
@@ -1000,10 +1029,9 @@ export class Assembler {
           // NOTE: Will need to be actually implemented if 16-bit CPU support is added.
           return;
 
-        // Segment shorthands: ca65 predeclares these named segments.
-        // ZEROPAGE is predeclared with zeropage addressing, same as `:zeropage`.
-        case '.zeropage': return this.parseNoArgs(tokens, 1),
-          this.segment({name: 'ZEROPAGE', addressing: 1});
+        // ca65 predeclares these named segments. The attributes come from
+        // PREDECLARED_SEGMENTS, so `.zeropage` and `.segment "ZEROPAGE"` are the same thing.
+        case '.zeropage': return this.parseNoArgs(tokens, 1), this.segment('ZEROPAGE');
         case '.code': return this.parseNoArgs(tokens, 1), this.segment('CODE');
         case '.data': return this.parseNoArgs(tokens, 1), this.segment('DATA');
         case '.rodata': return this.parseNoArgs(tokens, 1), this.segment('RODATA');
@@ -1232,9 +1260,9 @@ export class Assembler {
       // console.log(`before resolving: ${JSON.stringify(expr)}`);
       // expr = this.resolve(expr);
       
-      // If the size is unknown, but it was declared zp through
-      // importzp/globalzp then we force it to 1 byte.
-      const s = expr.meta?.size ?? (this.isZeropageRef(expr) ? 1 : 2);
+      // If the size is unknown, fall back to the operand's address size, which
+      // is zeropage only if it was tracked all the way here from the definition.
+      const s = expr.meta?.size ?? (expr.meta?.zeropage ? 1 : 2);
       // console.log(`sizing up 'add' expr: ${JSON.stringify(expr)}`);
       if (m === 'add' && s === 1 && 'zpg' in ops) {
         return this.opcode(ops.zpg!, 1, expr);
@@ -1410,12 +1438,14 @@ export class Assembler {
       this._org + this._chunk.data.length === addr) {
       return; // nothing to do?
     }
+    this.flushPendingAlign();
     this._org = addr;
     this._chunk = undefined;
     this._name = name;
   }
 
   reloc(name?: string) {
+    this.flushPendingAlign();
     this._org = undefined;
     this._chunk = undefined;
     this._name = name;
@@ -1423,11 +1453,20 @@ export class Assembler {
 
   segment(...segments: Array<string|mod.Segment>) {
     // Usage: .segment "1a", "1b", ...
+    // A trailing `.align` belongs to the segment it appeared in, so pad it out
+    // here rather than letting it leak onto the next segment's chunk.
+    this.flushPendingAlign();
     this.segments = segments.map(s => typeof s === 'string' ? s : s.name);
     for (const s of segments) {
+      const name = typeof s === 'string' ? s : s.name;
+      let data = this.segmentData.get(name);
+      if (!data) {
+        // Copy, so that later merges/`.free` don't mutate the shared template.
+        const predeclared = PREDECLARED_SEGMENTS.get(name);
+        if (predeclared) this.segmentData.set(name, data = {...predeclared});
+      }
       if (typeof s === 'object') {
-        const data = this.segmentData.get(s.name) || {name: s.name};
-        this.segmentData.set(s.name, mod.Segment.merge(data, s));
+        this.segmentData.set(name, mod.Segment.merge(data || {name}, s));
       }
     }
     this._chunk = undefined;
@@ -1541,10 +1580,33 @@ export class Assembler {
       if (pad) this.res(pad, fill);
       return;
     }
-    // Relocatable mode means we just delay this until link time instead
+    // Relocatable mode means we just delay this until link time instead.
+    if (this._pendingAlign == null) this._alignChunk = this._chunk;
+    this._pendingAlign = Math.max(this._pendingAlign ?? 1, boundary);
+    this._pendingFill = fill ?? this._pendingFill;
     this._chunk = undefined;
-    this._pendingAlign = boundary;
-    this._pendingFill = fill;
+  }
+
+  /**
+   * If an `.align` was used at the end of a chunk, and no data follows it,
+   * then we need to align the current chunk. This needs to be called whenever
+   * starting a new chunk then to see if we need to align the old one, and then
+   * clearing the pending alignment.
+   */
+  private flushPendingAlign() {
+    const boundary = this._pendingAlign;
+    const fill = this._pendingFill;
+    const chunk = this._alignChunk;
+    this._pendingAlign = undefined;
+    this._pendingFill = undefined;
+    this._alignChunk = undefined;
+    if (boundary == null || !chunk?.data.length) return;
+    // A relocatable chunk that must end on a boundary must also start on one,
+    // so padding its length up to a multiple leaves the end aligned as well.
+    const pc = chunk.org != null ? chunk.org + chunk.data.length : chunk.data.length;
+    const pad = (boundary - (pc % boundary)) % boundary;
+    if (chunk.org == null) chunk.align = Math.max(chunk.align ?? 1, boundary);
+    for (let i = 0; i < pad; i++) chunk.data.push(fill ?? 0);
   }
 
   // CA65 compatible 1:1 character mapping. Given a single char byte or a byte literal,
@@ -1746,9 +1808,38 @@ export class Assembler {
     this._segmentPrefix = prefix;
   }
 
-  /** Whether an operand is a bare reference to a symbol declared zeropage. */
-  private isZeropageRef(expr: Expr): boolean {
-    return expr.op === 'sym' && expr.sym != null && this.zeropageGlobals.has(expr.sym);
+  /**
+   * Whether a reference to `name` from the current scope lands in the zeropage.
+   * Steps through the scope tree to try and find the symbol in parent scopes
+   * so we can properly size it.
+   */
+  private isZeropageRef(name: string): boolean {
+    if (this.zeropageGlobals.has(name)) return true;
+    return Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
+  }
+
+  /**
+   * Run through the scope tree looking for the named symbol without
+   * creating a forward reference if its not found. We are just interested
+   * in finding this information for sizing.
+   */
+  private lookupSymbol(name: string): Symbol|undefined {
+    try {
+      if (name.startsWith('@')) {
+        return this.cheapLocals.resolve(name, {allowForwardRef: false});
+      }
+      let scope: Scope|undefined = this.currentScope;
+      const unscoped = !name.includes('::');
+      do {
+        const sym = scope.resolve(name, {allowForwardRef: false});
+        if (sym?.expr) return sym;
+        if (sym?.scoped) return sym; // explicitly scoped: no outer name applies
+      } while (unscoped && (scope = scope.parent));
+    } catch {
+      // An unresolvable explicit scope shouldn't throw here. The symbol
+      // gets resolved for real (and fails there) once the operand is emitted.
+    }
+    return undefined;
   }
 
   private declareGlobal(ident: string, kind: 'export'|'import'|'global', weak = false) {
@@ -1837,6 +1928,7 @@ export class Assembler {
   }
 
   pushSeg(...segments: Array<string|mod.Segment>) {
+    this.flushPendingAlign();
     this.segmentStack.push([this.segments, this._chunk]);
     // If pushseg was called without any segments, just keep the current segment
     if (segments) {
@@ -1846,6 +1938,7 @@ export class Assembler {
 
   popSeg() {
     if (!this.segmentStack.length) this.fail(`.popseg without .pushseg`);
+    this.flushPendingAlign();
     [this.segments, this._chunk] = this.segmentStack.pop()!;
     this._org = this._chunk?.org;
   }
@@ -1899,7 +1992,7 @@ export class Assembler {
     Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {
-    return Exprs.parseOnly(tokens, start, this.currentScope.symbols, this.encodeChar);
+    return Exprs.parseOnly(tokens, start, this.symbolLookup, this.encodeChar);
   }
 
   /**

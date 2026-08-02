@@ -348,8 +348,15 @@ export function identifier(expr: Expr): string {
  */
 export type CharEncoder = (char: string) => number|undefined;
 
+export interface SymbolLookup {
+  /** Symbol table for already defined symbols. */
+  get(name: string): Symbol|undefined;
+  /** Check the scopes to size the symbol and return if its zeropage. */
+  zeropage?(name: string): boolean;
+}
+
 /** Parse a single expression, must occupy the rest of the line. */
-export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
+export function parseOnly(tokens: Token[], index = 0, symbols?: SymbolLookup,
                           charEncoder?: CharEncoder): Expr {
   const [expr, i] = parse(tokens, index, symbols, charEncoder);
   if (i < tokens.length) {
@@ -364,10 +371,8 @@ export function parseOnly(tokens: Token[], index = 0, symbols?: Map<string, Symb
 // Returns [undefined, -1] if a bad parse.
 // Give up on normal parsing, just use a shunting yard again...
 //  - but handle parens recursively.
-export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
+export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
                       charEncoder?: CharEncoder): [Expr|undefined, number] {
-//console.log('PARSE: tokens=', tokens, 'index=', index);
-//try { throw new Error(); } catch (e) { console.log(e.stack); }
   const ops: [string, OperatorMeta][] = [];
   const exprs: Expr[] = [];
 
@@ -434,7 +439,15 @@ export function parse(tokens: Token[], index = 0, symbols?: Map<string, Symbol>,
         // add symbol
         // use scope information to determine size
         const expr = symbols?.get(front.str)?.expr;
-        exprs.push((expr) ? expr : {op: 'sym', sym: front.str});
+        if (expr) {
+          exprs.push(expr);
+        } else {
+          // Nothing to inline, but the address size may still be known. Carry
+          // it on the reference so `+`/`-` and the operand sizing can see it.
+          const ref: Expr = {op: 'sym', sym: front.str};
+          if (symbols?.zeropage?.(front.str)) ref.meta = {zeropage: true};
+          exprs.push(ref);
+        }
         val = false;
       } else if (front.token === 'num') {
         // add number
@@ -565,7 +578,7 @@ function plus(expr: Expr): Expr {
   if (!out.meta?.rel && out.meta?.size == null) {
     (out.meta || (out.meta = {})).size = size(out.num!).size;
   }
-  return out;
+  return carryZeropage(out, '+', [a, b]);
 }
 
 function minus(expr: Expr): Expr {
@@ -592,7 +605,14 @@ function minus(expr: Expr): Expr {
   if (isBranch && out.op === 'num') {
     (out.meta || (out.meta = {})).branch = true;
   }
-  return out;
+  return carryZeropage(out, '-', [a, b]);
+}
+
+/** For +/- ops, we want things like ZP + 1 to also land in ZP */
+function carryZeropage(out: Expr, op: string, args: Expr[]): Expr {
+  if (out.meta?.zeropage || !isZeropage(op, args)) return out;
+  // Copy rather than mutate since `out.meta` may still be an operand's `meta`.
+  return {...out, meta: {...out.meta, zeropage: true}};
 }
 
 function isAbs(expr: Expr): boolean {
@@ -734,7 +754,29 @@ function fixSize(expr: Expr): Expr {
   const xform = SIZE_TRANSFORMS.get(expr.op);
   const size = xform?.(...expr.args!.map(e => Number(e.meta?.size)));
   if (size) (expr.meta || (expr.meta = {})).size = size;
+  if ((expr.op === '+' || expr.op === '-') && isZeropage(expr.op, expr.args!)) {
+    (expr.meta || (expr.meta = {})).zeropage = true;
+  }
   return expr;
+}
+
+function isAddress(expr: Expr): boolean {
+  switch (expr.op) {
+    case 'sym': case 'im': return true;
+    case 'num':
+      return Boolean(expr.meta?.rel || expr.meta?.zeropage ||
+                     expr.meta?.chunk != null);
+    case '+': case '-': return (expr.args ?? []).some(isAddress);
+    default: return false;
+  }
+}
+
+function isZeropage(op: string, args: Expr[]): boolean {
+  // Unary `-` negates, which no longer names an address; unary `+` is identity.
+  if (args.length === 1) return op === '+' && Boolean(args[0].meta?.zeropage);
+  if (op === '-' && isAddress(args[1])) return false;
+  const addrs = args.filter(isAddress);
+  return addrs.length === 1 && Boolean(addrs[0].meta?.zeropage);
 }
 
 export function size(num: number, token?: Token): Meta {
@@ -743,7 +785,3 @@ export function size(num: number, token?: Token): Meta {
   }
   return {size: 0 <= num && num < 256 ? 1 : 2};
 }
-
-// function fail(msg: string): never {
-//   throw new Error(msg);
-// }

@@ -1306,7 +1306,390 @@ describe('Assembler', function() {
           data: Uint8Array.of(0x4a),
         }],
         segments: [], symbols: [],
-      });          
+      });
+    });
+  });
+
+  describe('predeclared ZEROPAGE segment', function() {
+    function chunkIn(m: Module, segment: string) {
+      const chunk = (m.chunks ?? []).find(c => c.segments.includes(segment));
+      if (!chunk) throw new Error(`No chunk in segment ${segment}`);
+      return chunk;
+    }
+
+    it('should give `.segment "ZEROPAGE"` zeropage address size', async function() {
+      const m = await assembleModule(`.segment "ZEROPAGE"\nFoo: .res 1\n`);
+      expect(m.segments).toEqual([{name: 'ZEROPAGE', addressing: 1}]);
+    });
+
+    it('should mark a chunk in `.segment "ZEROPAGE"` as zeropage', async function() {
+      const m = await assembleModule(`.segment "ZEROPAGE"\nFoo: .res 1\n`);
+      expect(chunkIn(m, 'ZEROPAGE').zeropage).toBe(true);
+    });
+
+    it('should keep zeropage address size when the segment also carries ld65 attributes',
+       async function() {
+         // The memory placement usually comes from the linker config, but a source
+         // file is free to spell it out. Do not clear the address size in this case.
+         const m = await assembleModule(`.segment "ZEROPAGE" :mem $10 :size $80\nFoo: .res 1\n`);
+         expect(m.segments).toEqual([
+           {name: 'ZEROPAGE', addressing: 1, memory: 0x10, size: 0x80}]);
+         expect(chunkIn(m, 'ZEROPAGE').zeropage).toBe(true);
+       });
+
+    it('should report 1 from `.addrsize` for a label in `.segment "ZEROPAGE"`',
+       async function() {
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+  .byte .addrsize(Foo)
+`);
+         const code = chunkIn(m, 'CODE');
+         expect(Array.from(code.data)).toEqual([1]);
+       });
+
+    it('should leave other named segments absolute', async function() {
+      // Only ZEROPAGE is zeropage-addressed. The rest of ca65's predeclared
+      // segments must stay absolute.
+      const m = await assembleModule(`
+.segment "BSS"
+Foo: .res 1
+.segment "CODE"
+  sta Foo
+`);
+      const code = chunkIn(m, 'CODE');
+      expect(Array.from(code.data)).toEqual([0x8d, 0xff, 0xff]);
+    });
+  });
+
+  // Marking the chunk zeropage isn't enough on its own: the operand sizing in
+  // `instruction` only looks at `expr.meta.size` and the importzp/globalzp set,
+  // so a label whose only zeropage evidence is its chunk still assembles as
+  // absolute. Operands are relocated at link time, so what lands in the chunk is
+  // an $ff placeholder per byte -- one for zeropage, two for absolute.
+  describe('zeropage operand sizing', function() {
+    function codeOf(m: Module) {
+      const chunk = (m.chunks ?? []).find(c => c.segments.includes('CODE'));
+      if (!chunk) throw new Error('No chunk in segment CODE');
+      return Array.from(chunk.data);
+    }
+
+    it('should size a label in the `.zeropage` shorthand segment as zeropage',
+       async function() {
+         const m = await assembleModule(`
+.zeropage
+Foo: .res 1
+.segment "CODE"
+  sta Foo
+  lda Foo
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff, 0xa5, 0xff]);
+       });
+
+    it('should size a label in `.segment "ZEROPAGE"` as zeropage', async function() {
+      const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+  sta Foo
+  lda Foo
+`);
+      expect(codeOf(m)).toEqual([0x85, 0xff, 0xa5, 0xff]);
+    });
+
+    it('should size a label reached through a `.define`d segment name as zeropage',
+       async function() {
+         // How bhop names the segment: `.define BHOP_ZP_SEGMENT "ZEROPAGE"`.
+         const m = await assembleModule(`
+.define ZP_SEGMENT "ZEROPAGE"
+.segment ZP_SEGMENT
+Foo: .res 1
+.segment "CODE"
+  sta Foo
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
+    it('should size indexed operands on a zeropage label as zeropage', async function() {
+      const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+  lda Foo,x
+  ldx Foo,y
+`);
+      expect(codeOf(m)).toEqual([0xb5, 0xff, 0xb6, 0xff]);
+    });
+
+    it('should still size a forward reference as absolute', async function() {
+      // ca65 does the same here -- it can't know the address size yet, so it
+      // picks absolute and warns. This guards against "fixing" it too eagerly.
+      const m = await assembleModule(`
+.segment "CODE"
+  sta Foo
+.segment "ZEROPAGE"
+Foo: .res 1
+`);
+      expect(codeOf(m)).toEqual([0x8d, 0xff, 0xff]);
+    });
+
+    it('should still size a label in a non-zeropage segment as absolute',
+       async function() {
+         const m = await assembleModule(`
+.segment "BSS"
+Foo: .res 1
+.segment "CODE"
+  sta Foo
+`);
+         expect(codeOf(m)).toEqual([0x8d, 0xff, 0xff]);
+       });
+
+    it('should size an outer zeropage label referenced from a `.proc` as zeropage',
+       async function() {
+         // The reference resolves in the proc's scope, which doesn't have the
+         // symbol, so the address size has to come from walking out to where it
+         // is defined.
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+.proc p
+  sta Foo
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
+    it('should size an outer zeropage label referenced from a nested `.scope` as zeropage',
+       async function() {
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+.scope outer
+.scope inner
+  sta Foo
+.endscope
+.endscope
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
+    it('should keep zeropage address size across an offset', async function() {
+      // ca65 propagates address size through +/-, so `Ptr+1` is still zeropage.
+      const m = await assembleModule(`
+.segment "ZEROPAGE"
+Ptr: .res 2
+.segment "CODE"
+  sta Ptr+1
+  sta Ptr+0
+`);
+      expect(codeOf(m)).toEqual([0x85, 0xff, 0x85, 0xff]);
+    });
+
+    it('should keep zeropage address size across an offset from a `.proc`',
+       async function() {
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Ptr: .res 2
+.segment "CODE"
+.proc p
+  sta Ptr+1
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
+    it('should keep zeropage address size through an alias', async function() {
+      const m = await assembleModule(`
+.segment "ZEROPAGE"
+Ptr: .res 2
+.segment "CODE"
+Alias := Ptr
+  sta Alias
+  sta Alias+1
+`);
+      expect(codeOf(m)).toEqual([0x85, 0xff, 0x85, 0xff]);
+    });
+
+    it('should size an `.importzp` symbol offset as zeropage', async function() {
+      const m = await assembleModule(`
+.importzp Foo
+.segment "CODE"
+  sta Foo
+  sta Foo+1
+`);
+      expect(codeOf(m)).toEqual([0x85, 0xff, 0x85, 0xff]);
+    });
+
+    it('should stay absolute when an absolute label is offset by a zeropage one',
+       async function() {
+         // Nonsense arithmetic, but it must not silently become zeropage.
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Zp: .res 1
+.segment "BSS"
+Abs: .res 1
+.segment "CODE"
+  sta Abs+Zp
+`);
+         expect(codeOf(m)).toEqual([0x8d, 0xff, 0xff]);
+       });
+
+    it('should keep zeropage address size through an alias made inside a scope',
+       async function() {
+         // `:=` is handled as the preprocessor reads the line, so the alias is
+         // built while the scope is open and `Zp` is only reachable through a
+         // forward reference. That reference has to carry the address size, or
+         // everything downstream of the alias goes absolute.
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Zp: .res 1
+.segment "CODE"
+.proc p
+Alias := Zp
+  sta Alias
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
+    it('should keep zeropage address size when the offset gets folded away',
+       async function() {
+         // With an `.org` the label is no longer chunk-relative, so `Ptr+1`
+         // folds to a plain number during `:=` and has to keep the address size
+         // through the fold rather than riding along on the relative meta.
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+.org $20
+Ptr: .res 2
+.segment "CODE"
+Alias := Ptr+1
+  sta Alias
+`);
+         expect(codeOf(m)).toEqual([0x85, 0x21]);
+       });
+
+    it('should keep zeropage address size for an offset from a nested scope',
+       async function() {
+         // Both halves at once: the reference has to find the outer definition
+         // to get an address size, and the `+` has to carry it up.
+         const m = await assembleModule(`
+.segment "ZEROPAGE"
+Ptr: .res 2
+.segment "CODE"
+.scope outer
+.scope inner
+  sta Ptr+1
+.endscope
+.endscope
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+  });
+
+  // `.align` in relocatable mode defers to the linker by starting a new chunk
+  // with an alignment constraint. If the segment ends before any data follows,
+  // that constraint has to stay with the segment it was written in - ca65 pads
+  // at the point of the directive - instead of leaking onto the next segment.
+  describe('trailing .align', function() {
+    function chunksIn(m: Module, segment: string) {
+      return (m.chunks ?? []).filter(c => c.segments.includes(segment));
+    }
+
+    it('should pad the segment it appeared in', async function() {
+      const m = await assembleModule(`
+.segment "BBB"
+  .byte 4
+  .align 64
+.segment "AAA"
+  .byte 6,7,8
+`);
+      const [bbb] = chunksIn(m, 'BBB');
+      expect(Array.from(bbb.data)).toEqual([4, ...new Array(63).fill(0)]);
+      expect(bbb.align).toBe(64);
+    });
+
+    it('should not leak the alignment onto the next segment', async function() {
+      const m = await assembleModule(`
+.segment "BBB"
+  .byte 4
+  .align 64
+.segment "AAA"
+  .byte 6,7,8
+`);
+      const [aaa] = chunksIn(m, 'AAA');
+      expect(Array.from(aaa.data)).toEqual([6, 7, 8]);
+      expect(aaa.align).toBeUndefined();
+    });
+
+    it('should use the fill value it was given', async function() {
+      const m = await assembleModule(`
+.segment "BBB"
+  .byte 4
+  .align 8, $ff
+.segment "AAA"
+  .byte 6
+`);
+      const [bbb] = chunksIn(m, 'BBB');
+      expect(Array.from(bbb.data)).toEqual([4, ...new Array(7).fill(0xff)]);
+    });
+
+    it('should pad a segment left aligned at the end of the source', async function() {
+      const m = await assembleModule(`
+.segment "BBB"
+  .byte 4
+  .align 8
+`);
+      const [bbb] = chunksIn(m, 'BBB');
+      expect(Array.from(bbb.data)).toEqual([4, ...new Array(7).fill(0)]);
+      expect(bbb.align).toBe(8);
+    });
+
+    it('should keep deferring the alignment when data follows it', async function() {
+      // The normal case is unchanged: the alignment belongs to the new chunk,
+      // and the linker gets to place it wherever it fits.
+      const m = await assembleModule(`
+.segment "BBB"
+  .byte 4
+  .align 64
+  .byte 5
+`);
+      const chunks = chunksIn(m, 'BBB');
+      expect(chunks.map(c => Array.from(c.data))).toEqual([[4], [5]]);
+      expect(chunks.map(c => c.align)).toEqual([undefined, 64]);
+    });
+
+    it('should take the widest of several trailing alignments', async function() {
+      const m = await assembleModule(`
+.segment "BBB"
+  .byte 4
+  .align 8
+  .align 64
+  .align 2
+.segment "AAA"
+  .byte 6
+`);
+      const [bbb] = chunksIn(m, 'BBB');
+      expect(bbb.align).toBe(64);
+      expect(bbb.data.length).toBe(64);
+    });
+
+    it('should pad the pushed segment when `.popseg` ends it', async function() {
+      const m = await assembleModule(`
+.segment "AAA"
+  .byte 6
+.pushseg "BBB"
+  .byte 4
+  .align 8
+.popseg
+  .byte 7
+`);
+      const [bbb] = chunksIn(m, 'BBB');
+      expect(Array.from(bbb.data)).toEqual([4, ...new Array(7).fill(0)]);
+      expect(bbb.align).toBe(8);
+      expect(chunksIn(m, 'AAA').map(c => Array.from(c.data))).toEqual([[6, 7]]);
     });
   });
 
