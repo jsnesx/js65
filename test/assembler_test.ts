@@ -1363,11 +1363,6 @@ Foo: .res 1
     });
   });
 
-  // Marking the chunk zeropage isn't enough on its own: the operand sizing in
-  // `instruction` only looks at `expr.meta.size` and the importzp/globalzp set,
-  // so a label whose only zeropage evidence is its chunk still assembles as
-  // absolute. Operands are relocated at link time, so what lands in the chunk is
-  // an $ff placeholder per byte -- one for zeropage, two for absolute.
   describe('zeropage operand sizing', function() {
     function codeOf(m: Module) {
       const chunk = (m.chunks ?? []).find(c => c.segments.includes('CODE'));
@@ -1400,7 +1395,6 @@ Foo: .res 1
 
     it('should size a label reached through a `.define`d segment name as zeropage',
        async function() {
-         // How bhop names the segment: `.define BHOP_ZP_SEGMENT "ZEROPAGE"`.
          const m = await assembleModule(`
 .define ZP_SEGMENT "ZEROPAGE"
 .segment ZP_SEGMENT
@@ -1586,6 +1580,129 @@ Ptr: .res 2
 .endscope
 `);
          expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
+    // A constant defined outside a `.proc` is a value, not an address, so there
+    // is no address size to carry - the value itself has to make it in. ca65
+    // binds the name to the enclosing definition at the point of use, which
+    // means the number is already in hand when the operand gets sized.
+    it('should size a constant from an enclosing scope by its value',
+       async function() {
+         const m = await assembleModule(`
+BLANK_TILE = $af
+.segment "CODE"
+.proc p
+  lda BLANK_TILE
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0xa5, 0xaf]);
+       });
+
+    it('should size a constant from an enclosing scope through nested scopes',
+       async function() {
+         const m = await assembleModule(`
+BLANK_TILE = $af
+.segment "CODE"
+.scope outer
+.proc inner
+  lda BLANK_TILE
+.endproc
+.endscope
+`);
+         expect(codeOf(m)).toEqual([0xa5, 0xaf]);
+       });
+
+    it('should fold an offset from an enclosing scope\'s constant', async function() {
+      // Only worth anything if the value comes in rather than a reference: the
+      // `+` has to fold to a number before the operand can be sized from it.
+      const m = await assembleModule(`
+BLANK_TILE = $af
+.segment "CODE"
+.proc p
+  lda BLANK_TILE+1
+.endproc
+`);
+      expect(codeOf(m)).toEqual([0xa5, 0xb0]);
+    });
+
+    it('should go absolute when an offset carries the value out of the zeropage',
+       async function() {
+         // Both halves fit in a byte and the sum does not, so the address size
+         // cannot come from the operands alone.
+         const m = await assembleModule(`
+.segment "CODE"
+  lda $ff+$ff
+  lda $80+$80
+`);
+         expect(codeOf(m)).toEqual([0xad, 0xfe, 0x01, 0xad, 0x00, 0x01]);
+       });
+
+    it('should keep an offset absolute when an operand needs two bytes',
+       async function() {
+         const m = await assembleModule(`
+BIG = $1234
+.segment "CODE"
+.proc p
+  lda BIG-$1200
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0xad, 0x34, 0x00]);
+       });
+
+    it('should size an explicitly scoped constant by its value', async function() {
+      const m = await assembleModule(`
+.scope consts
+BLANK_TILE = $af
+.endscope
+.segment "CODE"
+.proc p
+  lda consts::BLANK_TILE
+.endproc
+`);
+      expect(codeOf(m)).toEqual([0xa5, 0xaf]);
+    });
+
+    it('should stay absolute for a constant from an enclosing scope that does not fit',
+       async function() {
+         const m = await assembleModule(`
+BIG = $1234
+.segment "CODE"
+.proc p
+  lda BIG
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0xad, 0x34, 0x12]);
+       });
+
+    it('should still size a constant defined after the reference as absolute',
+       async function() {
+         // Same rule as a forward-referenced label: nothing knows the value yet,
+         // so the operand has to assume the worst. Guards against widening the
+         // lookup into a second pass.
+         const m = await assembleModule(`
+.segment "CODE"
+.proc p
+  lda BLANK_TILE
+.endproc
+BLANK_TILE = $af
+`);
+         expect(codeOf(m)).toEqual([0xad, 0xff, 0xff]);
+       });
+
+    it('should bind to the enclosing constant when the local one comes later',
+       async function() {
+         // The first reference has only the outer `$af` to go on; the second is
+         // after the local definition and takes that instead.
+         const m = await assembleModule(`
+BLANK_TILE = $af
+.segment "CODE"
+.proc p
+  lda BLANK_TILE
+BLANK_TILE = $12
+  lda BLANK_TILE
+.endproc
+`);
+         expect(codeOf(m)).toEqual([0xa5, 0xaf, 0xa5, 0x12]);
        });
   });
 
@@ -2168,30 +2285,24 @@ Ptr: .res 2
     //     expect(err.message).toEqual("5000 doesn't fit in one byte");
     //   }
     // });
-    it('should use an abs value because foo is sized to 2 and the following foo value fits that size', async function() {
+    it('should use the outer foo when the inner one is not assigned until later', async function() {
       const a = new Assembler(Cpu.P02);
       a.assign('foo', 5000);
       a.scope();
       await a.instruction([ident('lda'), ident('foo')]);
       a.assign('foo', 5);
       a.endScope();
-      // We make a sized substitution for this and set that we'll sub in 5 later, which is good enough (TM)
+      // The reference binds to whatever `foo` names at the point of use, and at
+      // that point the only `foo` is the outer one. The inner assignment starts
+      // a new symbol that this instruction never sees.
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
           overwrite: 'allow',
           segments: [],
-          data: Uint8Array.of(0xad, 0xff, 0xff),
-          subs: [{
-            expr: { num: 0, op: "sym", },
-            offset: 1, size: 2,
-          }],
+          data: Uint8Array.of(0xad, 5000 & 0xff, 5000 >> 8),
         }],
-        symbols: [{
-          expr: {
-            meta: { size: 1 },
-            num: 5, op: "num"},
-        }],
+        symbols: [],
       });
     });
     it('should use an abs value because the symbol is undefined, so it is sized to 2 until the symbol is defined', async function() {
