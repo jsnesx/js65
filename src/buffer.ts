@@ -9,30 +9,8 @@ class State {
               readonly match: Match|undefined) {}
 }
 
-// Optimization for the buffer to keep from needing to slice the same string multiple time
-// The tokenizer tends to move forward across the tokens calling substring to move to the
-// next part. But on the hermes frontned, the substring calls seemed to make an internal
-// copy of the string each time, whereas in the V8/browser JS engines, they have an
-// optimization to lazily handle substrings to reuse the original string buffer.
-// The fix I went with is to use the `y` sticky flag in the Regex engine as a cheaper
-// substring. Instead of needing to substring, we can "resume" the search from the lastIndex
-// to stop from needing to scan again from the start. This ends up making a large performance
-// improvement for hermes when processing large files.
-const stickySearchCache = new Map<string, RegExp>();
-function sticky(re: RegExp): RegExp {
-  const key = re.flags + ' ' + re.source;
-  let s = stickySearchCache.get(key);
-  if (!s) {
-    // A leading '^' anchors at start-of-input. With the sticky flag the match
-    // is already anchored at lastIndex, and '^' would *fail* at any pos > 0,
-    // so strip it. Drop any existing g/y flag and force sticky mode.
-    const flags = re.flags.replace(/[gy]/g, '') + 'y';
-    const source = re.source.replace(/^\^/, '');
-    s = new RegExp(source, flags);
-    stickySearchCache.set(key, s);
-  }
-  return s;
-}
+const RE_SPACE = /[ \t]+/y;
+const RE_NEWLINE = /(\r\n|\n|\r)/y;
 
 export class Buffer {
   pos = 0;
@@ -53,14 +31,6 @@ export class Buffer {
     this.column += lines[lines.length - 1].length;
   }
 
-  // Run a regex anchored at the current position without using substring
-  // which seemingly caused a full copy on hermes.
-  private execAt(re: RegExp): Match|null {
-    const s = sticky(re);
-    s.lastIndex = this.pos;
-    return s.exec(this.content) as Match|null;
-  }
-
   saveState(): State {
     return new State(this.line, this.column, this.pos, this.lastMatch);
   }
@@ -73,39 +43,40 @@ export class Buffer {
   }
 
   skip(re: RegExp): boolean {
-    const match = this.execAt(re);
+    re.lastIndex = this.pos;
+    const match = re.exec(this.content) as Match|null;
     if (!match) return false;
     this.advance(match[0]);
     return true;
   }
-  space(): boolean { return this.skip(/^[ \t]+/); }
-  newline(): boolean { return this.skip(/^(\r\n|\n|\r)/); }
+  space(): boolean { return this.skip(RE_SPACE); }
+  newline(): boolean { return this.skip(RE_NEWLINE); }
 
   lookingAt(re: RegExp|string): boolean {
     if (typeof re === 'string') return this.content.startsWith(re, this.pos);
-    const s = sticky(re);
-    s.lastIndex = this.pos;
-    return s.test(this.content);
+    re.lastIndex = this.pos;
+    return re.test(this.content);
   }
 
-  // NOTE: re should always be rooted with /^/ at the start.
-  token(re: RegExp|string): boolean {
-    let match: Match|null;
-    if (typeof re === 'string') {
-      if (!this.content.startsWith(re, this.pos)) return false;
-      match = [re] as Match;
-    } else {
-      match = this.execAt(re);
-    }
+  // NOTE: re should always be used with the /y sticky flag.
+  token(re: RegExp): boolean {
+    re.lastIndex = this.pos;
+    const match = re.exec(this.content) as Match|null;
     if (!match) return false;
     match.line = this.line;
     match.column = this.column;
     this.lastMatch = match;
     this.advance(match[0]);
-
-//    console.log(`TOKEN: ${re} "${match[0]}"`);
-//try{throw Error();}catch(e){console.log(e);}
-
+    return true;
+  }
+  tokenStr(s: string): boolean {
+    let match: Match|null;
+    if (!this.content.startsWith(s, this.pos)) return false;
+    match = [s] as Match;
+    match.line = this.line;
+    match.column = this.column;
+    this.lastMatch = match;
+    this.advance(match[0]);
     return true;
   }
 

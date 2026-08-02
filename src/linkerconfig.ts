@@ -22,6 +22,11 @@ export type SegmentType = AreaType | 'bss' | 'zp' | 'overwrite';
 const AREA_TYPES: readonly string[] = ['ro', 'rw'];
 const SEGMENT_TYPES: readonly string[] = ['ro', 'rw', 'bss', 'zp', 'overwrite'];
 
+const RE_CFG_COMMENT = /(#|\/\/).*/y;
+const RE_CFG_NUMBER = /\$?[0-9a-z_]+/iy;
+const RE_CFG_OPERATOR = /([;,=:]|\++|-+|&&?|\|\|?|[*/~^]|<[<=]?|>[>=]?)/y;
+const RE_CFG_PERCENT = /%[a-z0-9_]*/iy;
+
 export type CfgSymbols = Map<string, number>;
 
 export interface MemoryArea {
@@ -97,22 +102,22 @@ export class CfgTokenizer extends Tokenizer {
 
   protected override skipIgnored(): void {
     while (this.buffer.space() || this.buffer.newline() ||
-           this.buffer.token(/^(#|\/\/).*/)) {
+           this.buffer.token(RE_CFG_COMMENT)) {
              // intentionally empty
            }
   }
 
   /** change the default meaning of `%` since here its for `%O`/`%S` filename placeholders */
-  protected override numberRegex(): RegExp { return /^\$?[0-9a-z_]+/i; }
+  protected override numberRegex(): RegExp { return RE_CFG_NUMBER; }
 
   /** added a new `;` token for line ending so we need to add it to the operator list */
   protected override operatorRegex(): RegExp {
-    return /^([;,=:]|\++|-+|&&?|\|\|?|[*/~^]|<[<=]?|>[>=]?)/;
+    return RE_CFG_OPERATOR;
   }
 
   /** Handle the %o / %s tokens as well */
   protected override tokenInternal(): Token {
-    if (this.buffer.token(/^%[a-z0-9_]*/i)) {
+    if (this.buffer.token(RE_CFG_PERCENT)) {
       if (this.buffer.group() === '%S' && this.startAddr != null) {
         return {token: 'num', num: this.startAddr};
       }

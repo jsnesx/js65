@@ -7,7 +7,26 @@ import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
 import { ErrorCollector } from './assembler.ts';
 
-const NEWLINE = /^(\r\n|\n|\r)/;
+const NEWLINE = /(\r\n|\n|\r)/y;
+
+// Each of these regexes use the `y` flag to mark the regex as sticky.
+// This means if you run the regex with the same input multiple times,
+// it will start scanning from the last found index. This saves SO much
+// time as it will not need to start from the beginning of the string,
+// nor do we need to reallocate the string with a slice.
+const RE_COMMENT = /;.*/y;
+const RE_LINE_CONT = /\\(\r\n|\n|\r)/y;
+const RE_AT_IDENT = /@+[a-z0-9_]*/iy;
+const RE_IDENT = /((::)?[a-z_][a-z0-9_]*)+/iy;
+const RE_CS = /\.[a-z][a-z0-9]*/iy;
+const RE_LOCAL_LABEL = /:([+-]\d+|[-+]+|<+rts|>*rts)/y;
+const RE_NUMBER = /[$%]?[0-9a-z_]+/iy;
+const RE_OPERATOR = /(:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/y;
+const RE_STRING_START = /["']/y;
+const RE_UNICODE_ESC = /\\u([0-9a-f]{4})/iy;
+const RE_HEX_ESC = /\\x([0-9a-f]{2})/iy;
+const RE_CHAR_ESC = /\\(.)/y;
+const RE_ANY = /./y;
 
 export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
@@ -73,17 +92,17 @@ export class Tokenizer implements Tokens.Source {
    */
   protected skipIgnored(): void {
     while (this.buffer.space() ||
-           this.buffer.token(/^;.*/) ||
-           (this.opts.lineContinuations && this.buffer.token(/^\\(\r\n|\n|\r)/))) {
+           this.buffer.token(RE_COMMENT) ||
+           (this.opts.lineContinuations && this.buffer.token(RE_LINE_CONT))) {
             // intentionally empty
            }
   }
 
   /** `%` is a binary literal prefix in ca65, but used for special `%O` and `%S` flags in linkercfg. */
-  protected numberRegex(): RegExp { return /^[$%]?[0-9a-z_]+/i; }
+  protected numberRegex(): RegExp { return RE_NUMBER; }
 
   protected operatorRegex(): RegExp {
-    return /^(:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/;
+    return RE_OPERATOR;
   }
 
   protected token(): Token {
@@ -115,12 +134,12 @@ export class Tokenizer implements Tokens.Source {
 
   protected tokenInternal(): Token {
     if (this.buffer.newline()) return {token: 'eol'};
-    if (this.buffer.token(/^@+[a-z0-9_]*/i) ||
-        this.buffer.token(/^((::)?[a-z_][a-z0-9_]*)+/i)) {
+    if (this.buffer.token(RE_AT_IDENT) ||
+        this.buffer.token(RE_IDENT)) {
       return this.strTok('ident');
     }
-    if (this.buffer.token(/^\.[a-z][a-z0-9]*/i)) return this.csTok();
-    if (this.buffer.token(/^:([+-]\d+|[-+]+|<+rts|>*rts)/)) return this.strTok('ident');
+    if (this.buffer.token(RE_CS)) return this.csTok();
+    if (this.buffer.token(RE_LOCAL_LABEL)) return this.strTok('ident');
     if (this.buffer.token(this.operatorRegex())) {
       const op = this.strTok('op');
       // the := is just like = but it marks it as a label in the dbg file.
@@ -128,13 +147,13 @@ export class Tokenizer implements Tokens.Source {
       if ((op as Tokens.StringToken).str === ':=') return {token: 'op', str: '='};
       return op;
     }
-    if (this.buffer.token('[')) return {token: 'lb'};
-    if (this.buffer.token('{')) return {token: 'lc'};
-    if (this.buffer.token('(')) return {token: 'lp'};
-    if (this.buffer.token(']')) return {token: 'rb'};
-    if (this.buffer.token('}')) return {token: 'rc'};
-    if (this.buffer.token(')')) return {token: 'rp'};
-    if (this.buffer.token(/^["']/)) return this.tokenizeStr();
+    if (this.buffer.tokenStr('[')) return {token: 'lb'};
+    if (this.buffer.tokenStr('{')) return {token: 'lc'};
+    if (this.buffer.tokenStr('(')) return {token: 'lp'};
+    if (this.buffer.tokenStr(']')) return {token: 'rb'};
+    if (this.buffer.tokenStr('}')) return {token: 'rc'};
+    if (this.buffer.tokenStr(')')) return {token: 'rp'};
+    if (this.buffer.token(RE_STRING_START)) return this.tokenizeStr();
     if (this.buffer.token(this.numberRegex())) return this.tokenizeNum();
     throw new Error(`Syntax error`);
   }
@@ -154,18 +173,18 @@ export class Tokenizer implements Tokens.Source {
                           {file: this.file, line: m.line, column: m.column});
         return this.makeStrToken(end, str);
       }
-      if (b.token(/^\\u([0-9a-f]{4})/i)) {
+      if (b.token(RE_UNICODE_ESC)) {
         str += String.fromCodePoint(parseInt(b.group(1)!, 16));
-      } else if (b.token(/^\\x([0-9a-f]{2})/i)) {
+      } else if (b.token(RE_HEX_ESC)) {
         str += String.fromCharCode(parseInt(b.group(1)!, 16));
-      } else if (b.token(/^\\(.)/)) {
+      } else if (b.token(RE_CHAR_ESC)) {
         str += b.group(1)!;
       } else {
-        b.token(/^./);
+        b.token(RE_ANY);
         str += b.group(0)!;
       }
     }
-    b.token(end);
+    b.tokenStr(end);
     return this.makeStrToken(end, str);
   }
 
