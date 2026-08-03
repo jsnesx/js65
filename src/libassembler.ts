@@ -3,7 +3,6 @@
 
 // We use the browser build here since this file is intended to be used from both the cli and browser
 // environments
-import { gzipSync, gunzipSync, strToU8, strFromU8 } from 'fflate/browser';
 import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
@@ -534,14 +533,16 @@ export function isGzip(data: Uint8Array): boolean {
  * compress the object files to save a lotta space. In my testing its around 10x just
  * from gzip + another 2.5x saved just from cutting indents outta the json file.
  */
-export function serializeObjectFile(m: Module): Uint8Array {
+export async function serializeObjectFile(m: Module): Promise<Uint8Array> {
+  const { gzipSync, strToU8 } = await import('fflate/browser');
   return gzipSync(strToU8(serializeModule(m)), { level: 9 });
 }
 
 /**
  * Decode a `.o` file produced by serializeObjectFile back into a Module.
  */
-export function deserializeObjectFile(data: Uint8Array, name = 'object file'): Module {
+export async function deserializeObjectFile(data: Uint8Array, name = 'object file'): Promise<Module> {
+  const { gunzipSync, strFromU8 } = await import('fflate/browser');
   let json: string;
   try {
     json = strFromU8(gunzipSync(data));
@@ -636,11 +637,11 @@ export async function compile(
     }
 
     if (outputFormat === 'object') {
-      const outputs: OutputFile[] = asm.modules.map(m => ({
+      const outputs: OutputFile[] = await Promise.all(asm.modules.map(async m => ({
         name: `${m.name || 'module'}.o`,
-        data: serializeObjectFile(m),
+        data: await serializeObjectFile(m),
         type: 'object',
-      }));
+      })));
       return { success: true, outputs, messages: asm.messages };
     }
 
