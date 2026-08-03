@@ -345,14 +345,26 @@ export class BitSet {
   }
 }
 
-export class IntervalSet implements Iterable<readonly [number, number]> {
-  private data: Array<[number, number]> = [];
+/** Index of the first element of a sorted array that is >= `x`. */
+export function lowerBound(arr: ArrayLike<number>, x: number): number {
+  const i = binarySearch(arr.length, (j: number) => x - arr[j]);
+  return i < 0 ? ~i : i;
+}
 
-  [Symbol.iterator]() { 
+export class IntervalSet implements Iterable<readonly [number, number]> {
+  protected data: Array<[number, number]> = [];
+
+  [Symbol.iterator]() {
     return this.data[Symbol.iterator]();
   }
 
-  private _find(v: number): number {
+  // This is made protected so the FreeSpace class can create an index tracking
+  // the smallest interval ranges.
+  protected replace(s: number, e: number, entries: Array<[number, number]>) {
+    this.data.splice(s, e - s, ...entries);
+  }
+
+  protected _find(v: number): number {
     return binarySearch(this.data.length, (i: number) => {
       const entry = this.data[i];
       //if (!entry) console.log(i, v);
@@ -377,7 +389,7 @@ export class IntervalSet implements Iterable<readonly [number, number]> {
     const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
-    this.data.splice(s, e - s, entry);
+    this.replace(s, e, [entry]);
   }
 
   delete(start: number, end: number) {
@@ -407,8 +419,8 @@ export class IntervalSet implements Iterable<readonly [number, number]> {
     const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
-    
-    this.data.splice(s, e - s, ...entries);
+
+    this.replace(s, e, entries);
   }
 
   // Given a point, returns an iterator over the intervals to the
