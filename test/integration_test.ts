@@ -858,6 +858,43 @@ FOO := 5
       expect(Array.from(result)).toEqual([5]);
     });
 
+    it('builds a scope chain out of `::` a segment at a time', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.scope L1
+  .scope L2
+    .scope L3
+      Val = $61
+    .endscope
+  .endscope
+.endscope
+.define Head L1
+.define Mid L2
+.define Tail L3
+.define Path L1::L2
+  .byte L1::L2::L3::Val
+  .byte ::L1::L2::L3::Val
+  .byte Head::Mid::Tail::Val
+  .byte Path::L3::Val
+  .byte L1::.ident("L2")::L3::Val
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x61, 0x61, 0x61, 0x61, 0x61]);
+    });
+
+    it('reads `::` after an opcode as the global scope, not a chain',
+       async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+Target = $42
+  lda #::Target
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0xa9, 0x42]);
+    });
+
     it('accepts zeropage as an alias for the zp segment attribute', async function() {
       const source = `
 .segment "ZP" :bank $00 :size $0100 :mem $0000 :off $0000 : zeropage

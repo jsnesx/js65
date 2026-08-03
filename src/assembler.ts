@@ -114,6 +114,14 @@ abstract class BaseScope {
     if (tail !== name) symbol.scoped = true;
     return symbol;
   }
+
+  /** Insert a brand new symbol into the table, scoped if there is one open */
+  declare(name: string, symbol: Symbol): Symbol {
+    const [tail, scope] = this.pickScope(name);
+    scope.symbols.set(tail, symbol);
+    if (tail !== name) symbol.scoped = true;
+    return symbol;
+  }
 }
 
 class Scope extends BaseScope {
@@ -430,17 +438,34 @@ export class Assembler {
     }
   }
 
-  definedSymbol(sym: string): boolean {
-    // In this case, it's okay to traverse up the scope chain since if we
-    // were to reference the symbol, it's guaranteed to be defined somehow.
-    if (this.globals.get(sym) === 'import') return true;
+  private walkSymbolTree(sym: string): Expr|undefined {
     let scope: Scope|undefined = this.currentScope;
     const unscoped = !sym.includes('::');
     do {
       const s = scope.resolve(sym, {allowForwardRef: false});
-      if (s) return Boolean(s.expr);
+      if (s) return s.expr;
     } while (unscoped && (scope = scope.parent));
+    return undefined;
+  }
+
+  definedSymbol(sym: string): boolean {
+    // In this case, it's okay to traverse up the scope chain since if we
+    // were to reference the symbol, it's guaranteed to be defined somehow.
+    if (this.globals.get(sym) === 'import') return true;
+    const s = this.walkSymbolTree(sym);
+    if (s !== undefined) return Boolean(s);
     return false;
+  }
+
+  /**
+   * The value is needed by the preprocessor to determine if something
+   * is chunk relative. `* - Label` is a valid way to get a size of some code,
+   * but if you use the normal scope resolve, it would try to get a numeric
+   * value when we want to keep it as an expression for computing the diff.
+   */
+  definedValue(sym: string): Expr|undefined {
+    if (sym === '*') return this.pc();
+    return this.walkSymbolTree(sym);
   }
 
   constantSymbol(sym: string): boolean {
@@ -738,11 +763,18 @@ export class Assembler {
     }
     close(this.currentScope);
 
+    const globalScope = this.currentScope.global;
     for (const [name, global] of this.globals) {
       // Resolve the symbol in the scope the declaration appeared in and
       // fall back to the global scope if not found.
       const scope = this.globalScopes.get(name) ?? this.currentScope;
-      const sym = scope.symbols.get(name);
+      let sym = scope.symbols.get(name);
+      // A declaration inside a `.proc`/`.scope` can name a symbol that lives
+      // further out - the same lookup an ordinary reference from there does.
+      for (let s = scope.parent; s && !sym?.expr; s = s.parent) {
+        const outer = s.symbols.get(name);
+        if (outer?.expr) sym = outer;
+      }
       // `.global` is import-or-export depending on whether it got defined here.
       const kind = global === 'global' ? (sym?.expr ? 'export' : 'import') : global;
       if (kind === 'export') {
@@ -755,6 +787,13 @@ export class Assembler {
           this.symbols.push(sym);
         }
         sym.export = name;
+        // An `.export` inside a `.proc`/`.scope` publishes the name for the
+        // whole module, so a reference from outside that scope - which by now
+        // has been floated up to the global scope - names this symbol.
+        const outer = globalScope.symbols.get(name);
+        if (outer && outer !== sym && !outer.expr) {
+          outer.expr = {op: 'sym', num: sym.id};
+        }
       } else if (kind === 'import') {
         if (!sym) continue; // okay to import but not use.
         // TODO - record both positions?
@@ -910,7 +949,9 @@ export class Assembler {
 
   // Assemble from a list of tokens
   async line(tokens: Token[]) {
-    if (Tokens.eq(tokens[1], Tokens.ASSIGN) || Tokens.eq(tokens[1], Tokens.SET)) {
+    if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
+        Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
+        Tokens.eq(tokens[1], Tokens.SET)) {
       // Skip over any assignments as these were handled in the preprocessor?
       // TODO: Should the preprocessor remove the tokens?
       return;
@@ -1205,7 +1246,7 @@ export class Assembler {
       this.fail(`Mutable set requires constant`, token);
     } else if (!sym) {
       if (!mut) throw new Error(`impossible`);
-      scope.symbols.set(ident, sym = {id: -1});
+      sym = scope.declare(ident, {id: -1});
     } else if (!mut && sym.expr) {
       const orig =
           sym.expr.source ? `\nOriginally defined${Tokens.at(sym.expr)}` : '';
