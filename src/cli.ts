@@ -7,7 +7,7 @@ import { sha1 } from "./sha1";
 import { Base64 } from './base64.ts';
 import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
-import { dirOf } from './util.ts';
+import { dirOf, joinDir } from './util.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -36,6 +36,7 @@ class Arguments {
   dbgfile = "";
   mapfile = "";
   cfgfile = "";
+  depfile = "";
   compileonly = false;
   patch : "ips" | "" = "";
   options: Js65Options = {
@@ -47,13 +48,20 @@ class Arguments {
   };
 }
 
-const DEBUG_PRINT = false;
+const DEPFILE_FLAGS = ['--create-dep', '--create-full-dep', '--create-deps'];
 
-const DEBUG = (...args : any) => {
-  if (DEBUG_PRINT) {
-    console.log(args);
-  }
+/** Make doesn't accept windows style paths */
+function escapeMakePath(path: string): string {
+  return path.replace(/ /g, '\\ ');
 }
+
+// const DEBUG_PRINT = false;
+
+// const DEBUG = (...args : any) => {
+//   if (DEBUG_PRINT) {
+//     console.log(args);
+//   }
+// }
 
 export class Cli {
   public static readonly STDIN : string = "//stdin";
@@ -64,16 +72,33 @@ export class Cli {
   private readonly sources = new Map<string, string>();
   private readonly sourceLines = new Map<string, string[]>();
 
+  // Resolved paths of every file this build actually read, for --create-dep. A Set
+  // dedupes the header that gets included from a dozen places while keeping read
+  // order, so the dependency file comes out the same on every run.
+  private readonly deps = new Set<string>();
+
   constructor(readonly callbacks: Callbacks) {
     this.callbacks = callbacks;
+  }
+
+  private trackDep(path: string, filename: string) {
+    if (filename === Cli.STDIN) return;
+    this.deps.add(joinDir(path, filename));
   }
 
   // Load the file and keep the source code in our local cache for later.
   private async readSource(path: string, filename: string): Promise<string> {
     const code = await this.callbacks.fsReadString(path, filename);
+    this.trackDep(path, filename);
     this.sources.set(filename, code);
     this.sourceLines.delete(filename);
     return code;
+  }
+
+  private async readBinary(path: string, filename: string): Promise<Uint8Array|string> {
+    const data = await this.callbacks.fsReadBytes(path, filename);
+    this.trackDep(path, filename);
+    return data;
   }
 
   /**
@@ -81,7 +106,7 @@ export class Cli {
    * a text file (skipping over the BOM if its there)
    */
   private async readInput(filename: string): Promise<AssemblyInput> {
-    let bytes = await this.callbacks.fsReadBytes("", filename);
+    let bytes = await this.readBinary("", filename);
     if (typeof bytes === "string") bytes = new Base64().decode(bytes);
     if (isGzip(bytes)) {
       return { type: 'module', module: await deserializeObjectFile(bytes, filename) };
@@ -115,6 +140,12 @@ export class Cli {
         out.mapfile = args[++i];
       } else if (arg.startsWith('--mapfile=')) {
         out.mapfile = arg.substring('--mapfile='.length);
+      } else if (DEPFILE_FLAGS.some(f => arg === f)) {
+        if (out.depfile) this.usage();
+        out.depfile = args[++i];
+      } else if (DEPFILE_FLAGS.some(f => arg.startsWith(`${f}=`))) {
+        if (out.depfile) this.usage();
+        out.depfile = arg.substring(arg.indexOf('=') + 1);
       } else if (arg === '-C' || arg === '--config') {
         if (out.cfgfile) this.usage();
         out.cfgfile = args[++i];
@@ -188,6 +219,12 @@ export class Cli {
         return this.usage(8, [new Error("Cannot use --compileonly flag combined with -C/--config")]);
     }
 
+    // The dependency file names the output as its make target, and `//stdout` is not
+    // something make can build.
+    if (args.depfile && (args.outfile === "--stdout" || args.outfile === Cli.STDOUT)) {
+      return this.usage(8, [new Error("Cannot use --create-dep flag combined with -o --stdout")]);
+    }
+
     if (args.mapfile) args.options.generateMapFile = true;
 
     if (args.outfile == "--stdout") {
@@ -235,14 +272,14 @@ export class Cli {
       // Load base ROM if specified
       let baseRom: Uint8Array | undefined;
       if (args.rom) {
-        let romData = await this.callbacks.fsReadBytes("", args.rom);
+        let romData = await this.readBinary("", args.rom);
         if (typeof romData === "string") romData = new Base64().decode(romData);
         baseRom = romData;
       }
 
       const callbacks: FileCallbacks = {
         readText: (path, filename) => this.readSource(path, filename),
-        readBinary: this.callbacks.fsReadBytes
+        readBinary: (path, filename) => this.readBinary(path, filename)
       };
 
       const result = await compile(inputs, args.options, callbacks, baseRom);
@@ -279,6 +316,11 @@ export class Cli {
       const map = findOutput(result, 'map');
       if (args.mapfile && map) {
         await this.callbacks.fsWriteBytes("", args.mapfile, map.data);
+      }
+
+      // Write the make dependency file last, once the build has actually succeeded.
+      if (args.depfile) {
+        await this.writeDepFile(args.depfile, args.outfile);
       }
     } catch (e) {
       this.printerrors(e as Error);
@@ -323,6 +365,20 @@ export class Cli {
     const prg = fullRom!.subarray(0x10, 0x40010);
     await this.callbacks.fsWriteString("", args.outfile, args.op!(src!, Cpu.P02, prg));
     // if (err) this.printerrors(err);
+  }
+
+  /**
+   * Write the makefile targets for `--create-dep` which look like this
+   *
+   *     out.nes:	main.s inc/header.inc chr/tiles.chr
+   *
+   *     main.s inc/header.inc chr/tiles.chr:
+   */
+  private async writeDepFile(name: string, target: string) {
+    const prereqs = [...this.deps].map(escapeMakePath).join(' ');
+    const phony = prereqs ? `${prereqs}:\n\n` : '';
+    const text = `${escapeMakePath(joinDir('', target))}:\t${prereqs}\n\n${phony}`;
+    await this.callbacks.fsWriteBytes("", name, new TextEncoder().encode(text));
   }
 
   // Builds the `file:line:col: ` when we know where we are, else the program name
@@ -420,6 +476,11 @@ optional arguments:
   --no-debuginfo          Disable debug info generation.
   --dbgfile FILE          Output debug symbols to the specified file.
   -m FILE/--mapfile=FILE  Output a linker map (free space / placed chunks) to the specified file. Cannot be used with --compileonly.
+  --create-dep FILE       Write a make dependency file listing every source, \`.include\` and
+                          \`.incbin\` the build read, with the output file as the target.
+                          \`-include\` it from a Makefile so edits to a header rebuild the object.
+                          Cannot be used with --stdout. \`--create-full-dep\` and
+                          \`--create-deps\` are accepted as aliases for ca65 compat.
   -C FILE/--config=FILE   Link using an ld65 linker config, in place of the built-in
                           segment layout.
                           Cannot be used with --compileonly.
