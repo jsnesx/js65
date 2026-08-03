@@ -519,3 +519,85 @@ export function joinDir(base: string, rel: string): string {
   }
   return root + out.join('/');
 }
+
+/**
+ * Basic wrapper for a Map that stores a cache of the largest key size.
+ * This is intended to be used for charmapping where we need to know what the
+ * largest key size is each time we are writing out a new character.
+ */
+export class MaxKeySizeCacheMap<K, V> {
+  private map: Map<K, V>;
+  private maxKey: K | undefined = undefined;
+  private maxKeySize: number = 0;
+
+  constructor(iterable?: Iterable<readonly [K, V]> | null) {
+    this.map = new Map(iterable);
+    if (iterable instanceof MaxKeySizeCacheMap) {
+      this.maxKey = iterable.getLargestKey();
+      this.maxKeySize = iterable.getLargestKeySize();
+    } else {
+      // Otherwise, evaluate the entries to find the initial maximum
+      this.recalculateMaxKey();
+    }
+  }
+
+  *[Symbol.iterator](): IterableIterator<readonly [K, V]> {
+    yield* this.map.entries();
+  }
+
+  public getLargestKey(): K | undefined { return this.maxKey; }
+
+  public getLargestKeySize(): number { return this.maxKeySize; }
+
+  get(key: K): V|undefined {
+    return this.map.get(key);
+  }
+
+  set(key: K, value: V): this {
+    this.map.set(key, value);
+    this.checkAndUpdateMax(key);
+    return this;
+  }
+
+  delete(key: K): boolean {
+    const wasDeleted = this.map.delete(key);
+    if (wasDeleted && Object.is(key, this.maxKey)) {
+      this.recalculateMaxKey();
+    }
+    return wasDeleted;
+  }
+
+  clear(): void {
+    this.map.clear();
+    this.maxKey = undefined;
+    this.maxKeySize = 0;
+  }
+
+  private checkAndUpdateMax(key: K): void {
+    const size = this.calculateSize(key);
+    if (size > this.maxKeySize) {
+      this.maxKeySize = size;
+      this.maxKey = key;
+    }
+  }
+
+  private recalculateMaxKey(): void {
+    let largestSize = 0;
+    let largestKey: K | undefined = undefined;
+
+    for (const key of this.map.keys()) {
+      const size = this.calculateSize(key);
+      if (size > largestSize) {
+        largestSize = size;
+        largestKey = key;
+      }
+    }
+
+    this.maxKeySize = largestSize;
+    this.maxKey = largestKey;
+  }
+
+  // We could set this up to support other non-string key types but
+  // this will be fine for our case. its not a big deal.
+  private calculateSize(key: K): number { return String(key).length; }
+}

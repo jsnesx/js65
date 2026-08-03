@@ -8,7 +8,7 @@ import * as mod from './module.ts';
 import { type Token, type AssemblerMessage, type ErrorLevel } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { IntervalSet, assertNever } from './util.ts';
+import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
@@ -299,9 +299,9 @@ export class Assembler {
   private pendingLabel?: {name: string, startPc: Expr};
 
   /** Mapping for any string to byte array  */
-  private charMapping = new Map<string, number[]>();
+  private charMapping = new MaxKeySizeCacheMap<string, number[]>();
   /** Saved charmaps for `.pushcharmap`/`.popcharmap`. */
-  private charmapStack: Array<Map<string, number[]>> = [];
+  private charmapStack: Array<MaxKeySizeCacheMap<string, number[]>> = [];
 
   /**
    * We don't have any CPUs to switch to, so this is just there to make sure the
@@ -1020,7 +1020,7 @@ export class Assembler {
         case '.hibytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.hiByte(e)));
         case '.lobytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.loByte(e)));
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
-        case '.literal': return this.byteInternal(this.parseDataList(tokens, true), new Map());
+        case '.literal': return this.byteInternal(this.parseDataList(tokens, true), new MaxKeySizeCacheMap());
         case '.res': return this.res(...this.parseResArgs(tokens));
         case '.word': return this.word(...this.parseDataList(tokens));
         case '.dbyt': return this.dbyte(...this.parseDataList(tokens));
@@ -1037,7 +1037,7 @@ export class Assembler {
         case '.charmap': return this.charmap(tokens);
         case '.strmap': return this.strmap(tokens);
         case '.pushcharmap': return this.parseNoArgs(tokens, 1),
-          void this.charmapStack.push(new Map(this.charMapping));
+          void this.charmapStack.push(new MaxKeySizeCacheMap(this.charMapping));
         case '.popcharmap': return this.parseNoArgs(tokens, 1),
           void (this.charMapping = this.charmapStack.pop() ?? this.charMapping);
         case '.setcpu': return this.setCpu(this.parseStr(tokens, 1));
@@ -1699,7 +1699,7 @@ export class Assembler {
   // the `charMap` parameter defaults to the current charMap, but for `.literal`
   // we pass in an empty map to disable the charMapping for this string.
   byteInternal(args: Array<Expr|string|number>,
-               charmap: Map<string, number[]> = this.charMapping) {
+               charmap: MaxKeySizeCacheMap<string, number[]> = this.charMapping) {
     const {chunk} = this;
     this.markWritten(args.length);
 
@@ -2315,12 +2315,11 @@ export class Assembler {
   }
 }
 
-function writeString(data: number[], str: string, charmap: Map<string, number[]>) {
+function writeString(data: number[], str: string, charmap: MaxKeySizeCacheMap<string, number[]>) {
   // Split into Unicode code points (not js string UTF-16 code units) so a multi-byte
   // character is one unit for both matching and the unmapped fallback.
   const chars = Array.from(str);
-  const maxKeyLen = charmap.size ?
-      Math.max(...[...charmap.keys()].map(k => Array.from(k).length)) : 0;
+  const maxKeyLen = charmap.getLargestKeySize();
   for (let i = 0; i < chars.length; ) {
     // Greedy longest-match, so a `.strmap` key beats the single-character
     // `.charmap` entries it overlaps.
