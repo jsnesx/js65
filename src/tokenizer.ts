@@ -17,11 +17,17 @@ const NEWLINE = /(\r\n|\n|\r)/y;
 const RE_COMMENT = /;.*/y;
 const RE_LINE_CONT = /\\(\r\n|\n|\r)/y;
 const RE_AT_IDENT = /@+[a-z0-9_]*/iy;
-const RE_IDENT = /((::)?[a-z_][a-z0-9_]*)+/iy;
+// Notably missing from the IDENT is the scope :: qualifier, since this
+// is actually treated as a separate token in ca65. We glue it back together
+// later in the preprocessor with mergeScopePrefix
+const RE_IDENT = /[a-z_][a-z0-9_]*/iy;
 const RE_CS = /\.[a-z][a-z0-9]*/iy;
+const RE_ADDR_SIZE = /[azf]:(?!:)/iy;
+/** Non-sticky as it tests a whole identifier, not a slice of the buffer. */
+const RE_REGISTER = /^[axy]$/i;
 const RE_LOCAL_LABEL = /:([+-]\d+|[-+]+|<+rts|>*rts)/y;
 const RE_NUMBER = /[$%]?[0-9a-z_]+/iy;
-const RE_OPERATOR = /(:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/y;
+const RE_OPERATOR = /(::|:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/y;
 const RE_STRING_START = /["']/y;
 const RE_UNICODE_ESC = /\\u([0-9a-f]{4})/iy;
 const RE_HEX_ESC = /\\x([0-9a-f]{2})/iy;
@@ -101,9 +107,9 @@ export class Tokenizer implements Tokens.Source {
   /** `%` is a binary literal prefix in ca65, but used for special `%O` and `%S` flags in linkercfg. */
   protected numberRegex(): RegExp { return RE_NUMBER; }
 
-  protected operatorRegex(): RegExp {
-    return RE_OPERATOR;
-  }
+  protected operatorRegex(): RegExp { return RE_OPERATOR; }
+  protected addressSizeRegex(): RegExp|undefined { return RE_ADDR_SIZE; }
+  protected registerRegex(): RegExp|undefined { return RE_REGISTER; }
 
   protected token(): Token {
     // skip whitespace
@@ -134,18 +140,21 @@ export class Tokenizer implements Tokens.Source {
 
   protected tokenInternal(): Token {
     if (this.buffer.newline()) return {token: 'eol'};
+    const addrSize = this.addressSizeRegex();
+    if (addrSize && this.buffer.token(addrSize)) {
+      return {token: 'op', str: this.buffer.group()!.toLowerCase()};
+    }
     if (this.buffer.token(RE_AT_IDENT) ||
         this.buffer.token(RE_IDENT)) {
-      return this.strTok('ident');
+      const tok = this.strTok('ident') as Tokens.StringToken;
+      // normalize the case for A/X/Y registers as they can be mixed Upper and lower case.
+      if (this.registerRegex()?.test(tok.str)) tok.str = tok.str.toLowerCase();
+      return tok;
     }
     if (this.buffer.token(RE_CS)) return this.csTok();
     if (this.buffer.token(RE_LOCAL_LABEL)) return this.strTok('ident');
     if (this.buffer.token(this.operatorRegex())) {
-      const op = this.strTok('op');
-      // the := is just like = but it marks it as a label in the dbg file.
-      // which we don't support so just treat it as = for now.
-      if ((op as Tokens.StringToken).str === ':=') return {token: 'op', str: '='};
-      return op;
+      return this.strTok('op');
     }
     if (this.buffer.tokenStr('[')) return {token: 'lb'};
     if (this.buffer.tokenStr('{')) return {token: 'lc'};

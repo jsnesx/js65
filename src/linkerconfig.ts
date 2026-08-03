@@ -111,9 +111,9 @@ export class CfgTokenizer extends Tokenizer {
   protected override numberRegex(): RegExp { return RE_CFG_NUMBER; }
 
   /** added a new `;` token for line ending so we need to add it to the operator list */
-  protected override operatorRegex(): RegExp {
-    return RE_CFG_OPERATOR;
-  }
+  protected override operatorRegex(): RegExp { return RE_CFG_OPERATOR; }
+  protected override addressSizeRegex(): undefined { return undefined; }
+  protected override registerRegex(): undefined { return undefined; }
 
   /** Handle the %o / %s tokens as well */
   protected override tokenInternal(): Token {

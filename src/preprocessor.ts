@@ -16,6 +16,9 @@ import { ErrorCollector, RecoverableError } from './assembler.ts';
 //    to know when to release the frame?
 const MAX_STACK_DEPTH = 100;
 
+/** Token types that finish off a value so a `::` after one qualifies it. */
+const VALUE_END: ReadonlySet<string> = new Set(['num', 'str', 'rb', 'rp', 'rc', 'grp']);
+
 /**
  * Value reported by `.version`, encoded the way ca65 does it:
  * `(major << 8) | minor`.
@@ -63,6 +66,8 @@ interface Env {
   /** Whether the name is an opcode mnemonic of the CPU being assembled for. */
   isMnemonic(name: string): boolean;
   evaluate(expr: Expr): number|undefined;
+  /** Expression a defined symbol (or `*`) stands for, without interning it. */
+  definedValue(sym: string): Expr|undefined;
   assignSym(line: Token[]): void;
   setSym(line: Token[]): void;
   /** Applies the current charmap to a character literal (`'a'`). */
@@ -152,7 +157,8 @@ export class Preprocessor implements Tokens.Source {
             this.outQueue.push(label);
             break;
           }
-          if (Tokens.eq(line[1], Tokens.ASSIGN)) {
+          if (Tokens.eq(line[1], Tokens.ASSIGN) ||
+              Tokens.eq(line[1], Tokens.ASSIGN_LABEL)) {
             this.env.assignSym(line);
           } else if (Tokens.eq(line[1], Tokens.SET)) {
             this.env.setSym(line);
@@ -218,10 +224,43 @@ export class Preprocessor implements Tokens.Source {
     return line;
   }
 
+  /** Whether a name is an instruction or a `.macro`, and so can't be a scope. */
+  private isCallable(name: string): boolean {
+    return this.macros.get(name) instanceof Macro || this.env.isMnemonic(name);
+  }
+
+  /**
+   * Differentiate between a `scope :: label` and a `.if :: global` by finding
+   * where exactly the "label" starts. In the first case it should roll
+   * up everything through the scope, but the second should stop at
+   * the `::`. This combines the scope into one big ident token to make it
+   * easier to process.
+   * In the tokenizer, we keep each part `scope :: label` separate (thats 3
+   * tokens) to match how ca65 does it, and then for later handling, we combine
+   * that into one label token.
+   */
+  private mergeScopePrefix(line: Token[], pos: number): number {
+    if (pos < 1 || !Tokens.eq(line[pos - 1], Tokens.DCOLON)) return pos;
+    const ident = line[pos];
+    if (ident.token !== 'ident') return pos;
+    const before = pos >= 2 ? line[pos - 2] : undefined;
+    if (before && before.token !== 'ident' && VALUE_END.has(before.token)) {
+      return pos;
+    }
+    const scope = before?.token === 'ident' && !this.isCallable(before.str) ?
+        before.str : '';
+    const start = scope ? pos - 2 : pos - 1;
+    line.splice(start, pos - start + 1,
+                {token: 'ident', str: `${scope}::${ident.str}`, source: ident.source});
+    return start;
+  }
+
   /** Returns the next position to expand. */
   private expandToken(line: Token[], pos: number): number {
     const front = line[pos]!;
     if (front.token === 'ident') {
+      // define replacement has to happen first in case the scope has some
+      // name that needs replaced before we turn it into a label.
       const define = this.macros.get(front.str);
       if (define instanceof Define) {
         const overflow = define.expand(line, pos);
@@ -231,8 +270,14 @@ export class Preprocessor implements Tokens.Source {
           return pos;
         }
       }
+      // Whatever it expanded to still has to be joined to the scope in front.
+      return this.mergeScopePrefix(line, pos) + 1;
     } else if (front.token === 'cs') {
       return this.expandDirective(front.str, line, pos);
+    } else if (front.token === 'grp') {
+      // Expand the { ... } lists immediately instead of passing it
+      // down to the callee
+      this.expandLine(front.inner);
     }
     return pos + 1;
   }
@@ -394,11 +439,12 @@ export class Preprocessor implements Tokens.Source {
     return [{token: 'num', num: Preprocessor.tokensEqual(a, b, true) ? 1 : 0, source: cs.source}];
   }
 
-  /** Evaluate an already-expanded token list to a constant token count. */
   private constCount(toks: Token[], cs: Token): number {
-    const e = Exprs.evaluate(Exprs.parseOnly(toks, 0));
-    if (e.num == null) Tokens.fail(`Expected a constant token count`, cs);
-    return e.num;
+    try {
+      return this.evaluateConst(parseOneExpr(toks, cs, this.env.encodeChar), cs);
+    } catch {
+      Tokens.fail(`Expected a constant token count`, cs);
+    }
   }
 
   private left(cs: Token, count: Token[], list: Token[]) : Token[] {
@@ -501,7 +547,9 @@ export class Preprocessor implements Tokens.Source {
     const expr = parseOneExpr(arg, cs, this.env.encodeChar);
     let known = true;
     try {
-      this.evaluateConst(expr, cs);
+      // `*` and labels have a value here, but it's an address rather than a
+      // constant, so `.const` says no to them the way ca65 does.
+      this.evaluateConst(expr, cs, false);
     } catch {
       known = false; // `*`, forward references and imports are not constant
     }
@@ -570,14 +618,19 @@ export class Preprocessor implements Tokens.Source {
     return true;
   }
 
-  evaluateConst(expr: Expr, source?: Token): number {
+  /**
+   * @param addresses Whether `*` and labels may stand in for their address value
+   * `.const` needs them as labels, but other callers want them as addresses.
+   */
+  evaluateConst(expr: Expr, source?: Token, addresses = true): number {
     // Attempt to look up a symbol and see if its a constant value
     const evalWrapper = (ex: Expr) => {
-      if (ex.op === 'sym' && this.env.definedSymbol(ex.sym!)) {
-        // HACK? If its defined but not set, default it to zero?
-        const num = this.env.evaluate(ex);
-        if (num === undefined) throw new Error(`Symbol ${ex.sym} is undefined`);
-        return Exprs.evaluate({op: 'num', num, meta: Exprs.size(num, undefined)});
+      if (ex.op === 'sym' && ex.sym) {
+        // Substitute the expression rather than a number.
+        // Labels and `*` are chunk-relative, and it's the surrounding
+        // arithmetic like `* - label` that makes them constant again.
+        const val = this.env.definedValue(ex.sym);
+        if (val && (addresses || !isAddress(val))) return Exprs.evaluate(val);
       }
       return Exprs.evaluate(ex);
     };
@@ -918,6 +971,10 @@ export class Preprocessor implements Tokens.Source {
 function parseOneIdent(ts: Token[], prev?: Token): string {
   const e = parseOneExpr(ts, prev);
   return Exprs.identifier(e);
+}
+
+function isAddress(expr: Expr): boolean {
+  return expr.op !== 'num' || expr.meta?.rel === true || expr.meta?.org != null;
 }
 
 function parseOneExpr(ts: Token[], prev?: Token, charEncoder?: Exprs.CharEncoder): Expr {

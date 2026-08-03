@@ -114,13 +114,14 @@ export const WORD: Token = {token: 'cs', str: '.word'};
 
 // Important operator tokens
 export const COLON: Token = {token: 'op', str: ':'};
-//export const DCOLON: Token = {token: 'op', str: '::'};
+export const DCOLON: Token = {token: 'op', str: '::'};
 export const COMMA: Token = {token: 'op', str: ','};
 /** Statement terminator in an ld65 linker config. We don't use this for asm */
 export const SEMI: Token = {token: 'op', str: ';'};
 export const STAR: Token = {token: 'op', str: '*'};
 export const IMMEDIATE: Token = {token: 'op', str: '#'};
 export const ASSIGN: Token = {token: 'op', str: '='};
+export const ASSIGN_LABEL: Token = {token: 'op', str: ':='};
 
 // CS -> CS token alias map
 export const CS_TOKEN_ALIAS_MAP = new Map([
