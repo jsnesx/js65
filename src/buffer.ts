@@ -20,6 +20,15 @@ export class Buffer {
   constructor(readonly content: string, public line = 1, public column = 0) {}
 
   private advance(s: string) {
+    // fast path for skipping the check for newlines when advancing since
+    // almost all tokens we skip by don't have a newline in them
+    if (!s.includes('\n') && !s.includes('\r')) {
+      this.column += s.length;
+      this.pos += s.length;
+      return;
+    }
+    // slow path if the token has newlines in it, we want to split it and move
+    // to the next line/column/etc
     // s is the freshly-matched token text starting at this.pos.
     this.pos += s.length;
     s = s.replace('\n', s.includes('\r') ? '' : '\r');
