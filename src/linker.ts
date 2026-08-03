@@ -13,7 +13,7 @@ import * as Tokens from './token.ts';
 import { type SourceInfo } from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
-import { IntervalSet, SparseByteArray, binaryInsert } from './util.ts';
+import { IntervalSet, SparseByteArray, binaryInsert, lowerBound } from './util.ts';
 
 export interface Export {
   value: number;
@@ -544,6 +544,117 @@ function alignUp(value: number, align: number): number {
   return align > 1 ? Math.ceil(value / align) * align : value;
 }
 
+/**
+ * The linker's pool of unallocated space, which answers "smallest free range
+ * that fits" without walking the pool.
+ *
+ * Placement is best-fit-decreasing: chunks go out largest first, and each one
+ * takes the smallest hole it fits in. This class extends the basic IntervalSet
+ * in order to keep an index of the smallest intervals so that way when there
+ * are a large number of free spaces and we are trying to set chunks in there,
+ * we can reduce the number of intervals to check.
+ *
+ * The index only covers ranges lying wholly inside the window being searched,
+ * since a range hanging off either end contributes only the part that overlaps.
+ * At most two ranges can do that - one per end - so `bestFit` looks those up
+ * directly and lets the index handle everything between them.
+ */
+export class FreeSpace extends IntervalSet {
+  /** Range length -> the starts of every range with that length, sorted. */
+  private readonly bySize = new Map<number, number[]>();
+  /** The lengths present in `bySize`, sorted, so a query can walk upwards. */
+  private readonly sizes: number[] = [];
+
+  protected override replace(s: number, e: number, entries: Array<[number, number]>) {
+    // Reindex the data in the free space whenever a free chunk size changes.
+    for (let i = s; i < e; i++) {
+      const [start, end] = this.data[i];
+      this.unindex(start, end - start);
+    }
+    super.replace(s, e, entries);
+    for (const [start, end] of entries)
+      this.index(start, end - start);
+  }
+
+  private index(start: number, len: number) {
+    let starts = this.bySize.get(len);
+    if (!starts) {
+      this.bySize.set(len, starts = []);
+      this.sizes.splice(lowerBound(this.sizes, len), 0, len);
+    }
+    starts.splice(lowerBound(starts, start), 0, start);
+  }
+
+  private unindex(start: number, len: number) {
+    const starts = this.bySize.get(len);
+    if (!starts) return;
+    const i = lowerBound(starts, start);
+    if (starts[i] !== start) return;
+    starts.splice(i, 1);
+    if (!starts.length) {
+      this.bySize.delete(len);
+      this.sizes.splice(lowerBound(this.sizes, len), 1);
+    }
+  }
+
+  /**
+   * Aligns and find the smallest free segment that fits the chunk
+   * Check three different interval types to find the "best" match:
+   * - the interval that contains the start address
+   * - the smallest interval that is still in the bounds
+   * - the interval that contains the end address.
+   * Our goal is to fit the largest things we have into the tightest box
+   * possible to leave as much room for other large blocks as possible.
+   */
+  bestFit(s0: number, s1: number, size: number, align: number,
+          delta: number): number|undefined {
+    let found: number|undefined;
+    let smallest = Infinity;
+
+    // helper to align and validate that this chunk fits in the interval
+    const consider = (f0: number, end: number): boolean => {
+      const start = alignUp(f0 - delta, align) + delta;
+      if (start + size > end) return false;
+      const df = end - f0;
+      if (df >= smallest) return false;
+      found = start;
+      smallest = df;
+      return true;
+    };
+
+    // The range surrounding the low end of the window, if any.
+    const lo = this._find(s0);
+    if (lo >= 0 && this.data[lo][0] < s0) {
+      consider(s0, Math.min(this.data[lo][1], s1));
+    }
+
+    // Everything wholly inside the window, shortest length first. The first
+    // length that yields a fit wins outright, since every later one is longer.
+    const widest = s1 - s0;
+    for (let k = lowerBound(this.sizes, size); k < this.sizes.length; k++) {
+      const len = this.sizes[k];
+      // Too long to fit in the window at all, or already beaten by the range
+      // off the low end - and lengths only grow from here.
+      if (len > widest || len >= smallest) break;
+      const starts = this.bySize.get(len)!;
+      let done = false;
+      for (let i = lowerBound(starts, s0); i < starts.length; i++) {
+        const f0 = starts[i];
+        if (f0 + len > s1) break;  // runs past the window, so not inside it
+        if (consider(f0, f0 + len)) { done = true; break; }
+      }
+      if (done) break;
+    }
+
+    // And the range straddling the high end, which comes last in address order.
+    const hi = this._find(s1);
+    if (hi >= 0 && this.data[hi][0] >= s0)
+      consider(this.data[hi][0], s1);
+
+    return found;
+  }
+}
+
 class LinkSegment {
   readonly name: string;
   readonly bank: number;
@@ -913,7 +1024,7 @@ class Link {
   symbols: Symbol[] = [];
   debugSymbols?: Symbol[] = undefined;
   written = new IntervalSet();
-  free = new IntervalSet();
+  free = new FreeSpace();
   rawSegments = new Map<string, Segment[]>();
   segments = new Map<string, LinkSegment>();
 
@@ -1648,21 +1759,8 @@ class Link {
       const base = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset;
       const s0 = base + segment.used;
       const s1 = base + segment.size;
-      let found: number|undefined;
-      let smallest = Infinity;
-      for (const [f0, f1] of this.free.tail(s0)) {
-        if (f0 >= s1) break;
-        const end = Math.min(f1, s1);
-        // Find an org address for the data that matches its alignment.
-        // Any space from skipping bytes for alignment remain free so we can use it later.
-        const start = alignUp(f0 - segment.delta, align) + segment.delta;
-        if (start + size > end) continue;
-        const df = end - f0;
-        if (df < smallest) {
-          found = start;
-          smallest = df;
-        }
-      }
+      // Any space skipped over for alignment stays free, so we can use it later.
+      const found = this.free.bestFit(s0, s1, size, align, segment.delta);
       if (found != null) {
         // found a region
         chunk.place(found - segment.delta, segment);

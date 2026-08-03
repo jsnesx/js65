@@ -3,7 +3,7 @@
 
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
-import {Linker} from '../src/linker.ts';
+import {FreeSpace, Linker} from '../src/linker.ts';
 import {type Module} from '../src/module.ts';
 import {SourceError} from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -1400,5 +1400,122 @@ describe('Linker with an ld65 config', function() {
     }
     expect(err).toBeInstanceOf(SourceError);
     expect((err as SourceError).source).toMatchObject({file: 'test.cfg'});
+  });
+});
+
+describe('FreeSpace', function() {
+  // The size index has to agree with what a plain left-to-right scan of every
+  // free range would have chosen, including which range wins a tie, or chunks
+  // land at different addresses and the linked output shifts.
+  function scanBestFit(free: FreeSpace, s0: number, s1: number, size: number,
+                       align: number, delta: number): number|undefined {
+    let found: number|undefined;
+    let smallest = Infinity;
+    for (const [f0, f1] of free.tail(s0)) {
+      if (f0 >= s1) break;
+      const end = Math.min(f1, s1);
+      const start =
+          align > 1 ? Math.ceil((f0 - delta) / align) * align + delta : f0;
+      if (start + size > end) continue;
+      const df = end - f0;
+      if (df < smallest) {
+        found = start;
+        smallest = df;
+      }
+    }
+    return found;
+  }
+
+  it('should match a full scan under random pools and queries', function() {
+    let seed = 987654321;
+    const rnd = (n: number) => {  // xorshift; fixed seed keeps this repeatable
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >> 17;
+      seed ^= seed << 5; seed >>>= 0;
+      return seed % n;
+    };
+    const SPAN = 400;
+    for (let trial = 0; trial < 300; trial++) {
+      const free = new FreeSpace();
+      // Carve a pool up with a random mix of adds and deletes.
+      for (let i = 0; i < 25; i++) {
+        const a = rnd(SPAN);
+        const b = a + 1 + rnd(40);
+        if (rnd(3)) free.add(a, b); else free.delete(a, b);
+      }
+      for (let q = 0; q < 25; q++) {
+        const s0 = rnd(SPAN);
+        const s1 = s0 + rnd(SPAN - s0 + 1);
+        const size = 1 + rnd(12);
+        const align = [1, 1, 1, 2, 4, 8][rnd(6)];
+        const delta = rnd(3) - 1;
+        const at = `trial ${trial} query ${q}: [${s0},${s1}) size=${size} ${
+            ''}align=${align} delta=${delta} pool=${JSON.stringify([...free])}`;
+        // -1 rather than undefined, so a miss on one side reads clearly.
+        expect(free.bestFit(s0, s1, size, align, delta) ?? -1, at)
+            .toBe(scanBestFit(free, s0, s1, size, align, delta) ?? -1);
+      }
+    }
+  });
+
+  it('should prefer the smallest range that fits', function() {
+    const free = new FreeSpace();
+    free.add(0, 20);    // big
+    free.add(30, 34);   // exact fit
+    free.add(40, 50);   // medium
+    expect(free.bestFit(0, 100, 4, 1, 0)).toBe(30);
+    expect(free.bestFit(0, 100, 5, 1, 0)).toBe(40);
+    expect(free.bestFit(0, 100, 11, 1, 0)).toBe(0);
+    expect(free.bestFit(0, 100, 21, 1, 0)).toBeUndefined();
+  });
+
+  it('should break ties toward the lowest address', function() {
+    const free = new FreeSpace();
+    free.add(50, 54);
+    free.add(10, 14);
+    free.add(30, 34);
+    expect(free.bestFit(0, 100, 4, 1, 0)).toBe(10);
+  });
+
+  it('should only count the part of a range inside the window', function() {
+    const free = new FreeSpace();
+    free.add(0, 100);   // straddles both ends of the window below
+    free.add(120, 132);
+    // Clipped to [90, 110) the first range is only 10 bytes, beating the 12
+    // byte range that sits wholly outside the window.
+    expect(free.bestFit(90, 110, 8, 1, 0)).toBe(90);
+    // ...but a range hanging off the high end is measured from where it starts.
+    const other = new FreeSpace();
+    other.add(0, 4);
+    other.add(10, 100);
+    expect(other.bestFit(0, 20, 4, 1, 0)).toBe(0);
+    expect(other.bestFit(0, 20, 5, 1, 0)).toBe(10);
+  });
+
+  it('should place at the low edge of a range running off the low end',
+     function() {
+    // Free ranges merge across segment boundaries, so a range hanging off the
+    // low end of the window is normally the previous segment's leftovers fused
+    // onto this one's. Packing against the high edge would keep that merged
+    // range in one piece, but the piece below `s0` is not this segment's to
+    // allocate from - so the split is free, and packing high would only fill
+    // the segment back to front.
+    const free = new FreeSpace();
+    free.add(0x8000, 0x80c0);   // the previous segment's leftovers...
+    free.add(0x80c0, 0x8100);   // ...fused onto this segment's free space
+    expect([...free]).toEqual([[0x8000, 0x8100]]);
+    const at = free.bestFit(0x80c0, 0x8100, 0x20, 1, 0);
+    expect(at).toBe(0x80c0);
+    free.delete(at!, at! + 0x20);
+    // Both segments still have every byte they started with available.
+    expect([...free]).toEqual([[0x8000, 0x80c0], [0x80e0, 0x8100]]);
+  });
+
+  it('should respect alignment when choosing a range', function() {
+    const free = new FreeSpace();
+    free.add(9, 15);    // 6 bytes, but 4-aligned only leaves [12, 15)
+    free.add(40, 48);   // 8 bytes, 4-aligned from the start
+    expect(free.bestFit(0, 100, 4, 4, 0)).toBe(40);
+    expect(free.bestFit(0, 100, 3, 4, 0)).toBe(12);
   });
 });
