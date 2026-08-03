@@ -392,10 +392,12 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
     if (val) {
       // looking for a value: literal, balanced parens, or prefix op.
       if (front.token === 'cs' || front.token === 'op') {
-        const mapped = NAME_MAP.get(front.str);
-        const prefix = PREFIXOPS.get(mapped ?? front.str);
+        const str = collapseSigns(front.str, true);
+        if (!str) continue; // a run of signs that cancels itself out
+        const mapped = NAME_MAP.get(str);
+        const prefix = PREFIXOPS.get(mapped ?? str);
         if (prefix) {
-          ops.push([front.str, prefix]);
+          ops.push([str, prefix]);
         } else if (front.token === 'cs') {
           const op = front.str;
           if (!FUNCTIONS.has(op)) {
@@ -482,8 +484,9 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
         break;
       }
       if (front.token === 'cs' || front.token === 'op') {
-        const mapped = NAME_MAP.get(front.str);
-        const op = BINOPS.get(mapped ?? front.str);
+        const str = collapseSigns(front.str, false);
+        const mapped = NAME_MAP.get(str);
+        const op = BINOPS.get(mapped ?? str);
         if (!op) break; // we're at the end...?  or if no op.
         // see if anything to the left is faster.
         while (ops.length) {
@@ -496,7 +499,7 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
           }
           popOp();
         }
-        ops.push([front.str, op]);
+        ops.push([str, op]);
         val = true;
       } else {
         //throw new Error(`Garbage after expression: ${Tokens.nameAt(front)}`);
@@ -516,6 +519,20 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
   return [exprs[0], i];
 }
 
+
+const SIGN_RUN = /^([-+])\1+$/;
+
+/**
+ * We allow an asm6 style +++ free-standing to be a label, but for a long
+ * run of a +++ b, we can collapse that into a single a + b here to simplify
+ * handling these cases. For instance a -- b turns into a - (-b) which is a + b
+ */
+function collapseSigns(str: string, unary: boolean): string {
+  if (!SIGN_RUN.test(str)) return str;
+  const negations = str[0] === '-' ? (unary ? str.length : str.length - 1) : 0;
+  if (negations % 2) return '-';
+  return unary ? '' : '+';
+}
 
 /** ca65 evaluates expressions as signed 32-bit integers, so we do too. */
 function i32(x: number): number {
