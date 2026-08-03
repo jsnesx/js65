@@ -675,6 +675,74 @@ AnotherLabel:
       expect(errors.length).toBeGreaterThanOrEqual(1);
     });
 
+    it('should collect every parse error in a file', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .segment 12345
+  .byte 1,,2
+  lda #(1+
+  nop nop
+  rts
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile(
+        [input], { lineContinuations: true, generateDebugInfo: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => e.message)).toEqual([
+        'Expected constant string: NUM[$3039]',
+        'Missing term',
+        'No close paren: (',
+        'Bad address mode add for nop',
+      ]);
+      // One error per source line, in order.
+      expect(errors.map(e => e.source?.line)).toEqual([4, 5, 6, 7]);
+    });
+
+    it('should collect expression evaluation errors and keep going', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .byte 1/0
+  .byte .strat("a", 9)
+  lda StillAssembled
+  rts
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile(
+        [input], { lineContinuations: true, generateDebugInfo: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      const divide = errors.find(e => e.message === 'Division by zero');
+      expect(divide?.source?.line).toBe(4);
+      const strat = errors.find(e => e.message === '.strat index out of range');
+      expect(strat?.source?.line).toBe(5);
+      // The lines after the failures were still assembled.
+      expect(errors.some(e => e.message.includes('StillAssembled'))).toBe(true);
+    });
+
+    it('should stop after too many errors', async function() {
+      const lines = [
+        '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000',
+        '.org $8000',
+      ];
+      for (let i = 0; i < 40; i++) lines.push(`  lda Undefined${i}`);
+
+      const input: AssemblyInput = {
+        type: 'source', code: lines.join('\n'), name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.length).toBe(31);
+      expect(errors[30].message).toBe('too many errors (30); stopping');
+      expect(errors.slice(0, 30).every(e => /^Symbol 'Undefined\d+' undefined$/
+                                                .test(e.message))).toBe(true);
+    });
+
     it('should include source location in error messages', async function() {
       const source = `
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000

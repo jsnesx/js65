@@ -557,8 +557,10 @@ describe('Assembler', function() {
       await a.instruction([ident('jsr'), ident('@foo')]);
       expect(() => a.label('bar'))
           .toThrow(/Cheap local label never defined: @foo/);
-      expect(() => a.module())
-          .toThrow(/Cheap local label never defined: @foo/);
+      a.module();
+      expect(a.hasErrors()).toBe(true);
+      expect(a.getMessages().map(m => m.message))
+          .toContain('Cheap local label never defined: @foo');
     });
   });
 

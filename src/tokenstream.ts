@@ -5,7 +5,7 @@ import * as Exprs from './expr.ts';
 import { Base64 } from './base64.ts'
 import {type Token} from './token.ts'
 import {Tokenizer, type Options} from './tokenizer.ts'
-import {type ErrorCollector} from './assembler.ts';
+import {type ErrorCollector} from './error.ts';
 import {dirOf, joinDir} from './util.ts';
 import * as Tokens from './token.ts';
 // TODO: import raw text files seems painful right now.
