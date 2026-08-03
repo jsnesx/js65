@@ -721,7 +721,7 @@ class LinkChunk {
         sparse.splice(sub.offset, sub.size);
       }
       for (const [start, chunk] of sparse.chunks()) {
-        full.set(offset + start, ...chunk);
+        full.set(offset + start, chunk);
       }
     } else {
       full.set(offset, data);
@@ -832,8 +832,7 @@ class LinkChunk {
         const delta =
             child.meta!.offset! - (child.meta!.rel ? 0 : child.meta!.org!);
         const start = child.num! + delta;
-        const slice = this.linker.orig.slice(start, start + sub.size);
-        this.writeBytes(sub.offset, Uint8Array.from(slice));
+        this.writeBytes(sub.offset, this.linker.orig.slice(start, start + sub.size));
         del = true;
       }
     }
@@ -1187,7 +1186,7 @@ class Link {
       const base = this.fileBase(c.segment?.out || '%O');
       this.output(c.segment?.out).set(
           c.offset! - base,
-          Uint8Array.from(this.data.slice(c.offset!, c.offset! + c.size!)));
+          this.data.slice(c.offset!, c.offset! + c.size!));
     }
     if (DEBUG) console.log(this.report(true));
     return patch;

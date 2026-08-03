@@ -36,16 +36,18 @@ export function binaryInsert<T>(arr: T[], f: (t: T) => number, t: T) {
   arr.splice(~index, 0, t);
 }
 
-export class SparseArray<T> {
-  protected _chunks: Array<readonly [number, T[]]> = [];
-  protected _length = 0;
+type Chunk = [start: number, data: Uint8Array];
+
+export class SparseByteArray {
+  private _chunks: Chunk[] = [];
+  private _length = 0;
 
   // NOTE: length is a high water mark.
   get length() { return this._length; }
   // TODO - set length - may need to splice
   //  - alternative: shrink() method
 
-  protected _find(target: number): number {
+  private _find(target: number): number {
     return binarySearch(this._chunks.length, (i: number) => {
       const [start, data] = this._chunks[i];
       if (target < start) return -1;
@@ -54,125 +56,115 @@ export class SparseArray<T> {
     });
   }
 
-  apply(target: MutableArrayLike<T>) {
+  apply(target: Uint8Array) {
     if (target.length < this._length) throw new Error(`Target too small.`);
     for (const [start, chunk] of this._chunks) {
-      for (let i = 0; i < chunk.length; i++) {
-        target[start + i] = chunk[i];
-      }
+      target.set(chunk, start);
     }
   }
 
-  chunks(): ReadonlyArray<readonly [number, readonly T[]]> {
+  chunks(): ReadonlyArray<readonly [number, Uint8Array]> {
     return this._chunks;
   }
 
-  get(index: number): T|undefined {
+  get(index: number): number|undefined {
     const i = this._find(index);
     if (i < 0) return undefined;
     const [start, data] = this._chunks[i];
     return data[index - start];
   }
 
-  set(start: number, ...values: T[]) {
-    this.setInternal(start, values);
+  set(start: number, data: ArrayLike<number>): void;
+  set(start: number, ...values: number[]): void;
+  set(start: number, ...args: [ArrayLike<number>]|number[]) {
+    if (!args.length) return;
+    const first = args[0];
+    this.setInternal(start, typeof first === 'number' ? args as number[] : first);
   }
 
-  protected setInternal(start: number, values: IterableArrayLike<T>) {
-    if (!values.length) return; // nothing to do
-    const end = start + values.length;
+  private setInternal(start: number, values: ArrayLike<number>) {
+    const len = values.length;
+    if (!len) return; // nothing to do
+    const end = start + len;
     this._length = Math.max(this._length, end);
     let i0 = this._find(start);
     let i1 = this._find(end);
     if (i0 >= 0 && i0 === i1) {
-      // Optimize trivial case of overwriting already-filled values
+      // Trivial case of overwriting already-filled bytes.
       const [s0, a0] = this._chunks[i0];
-      for (let i = 0; i < values.length; i++) {
-        a0[start + i - s0] = values[i];
-      }
+      a0.set(values, start - s0);
       return;
     }
-    const e0 = this._chunks[~i0 - 1];
-    if (e0 && (e0[0] + e0[1].length === start)) i0 = ~i0 - 1;
+    // Widen the replaced range to swallow whatever we overlap, plus a chunk
+    // that merely abuts on either side, so the result stays a single run.
+    const prev = this._chunks[~i0 - 1];
+    if (prev && prev[0] + prev[1].length === start) i0 = ~i0 - 1;
     if (this._chunks[~i1]?.[0] === end) i1 = ~i1;
-    if (i0 >= 0) {
-      const [s0, a0] = this._chunks[i0];
-      if (i1 !== i0 || !Array.isArray(values)) {
-        values = spliceHead(a0, start - s0, values);
-      } else {
-        values.unshift(...a0.slice(0, start - s0));
-      }
-      start = s0;
+    const head = i0 >= 0 ? this._chunks[i0] : undefined;
+    const tail = i1 >= 0 ? this._chunks[i1] : undefined;
+    const newStart = head ? head[0] : start;
+    const newEnd = tail ? tail[0] + tail[1].length : end;
+    const total = newEnd - newStart;
+
+    let out: Uint8Array;
+    if (!head) {
+      out = new Uint8Array(total);
+    } else if (head[1].buffer.byteLength >= total) {
+      // Reuse the head chunk's buffer since its bytes are already in place.
+      out = new Uint8Array(head[1].buffer, 0, total);
+    } else {
+      // double the size of the buffer and then add the new data.
+      out = new Uint8Array(new ArrayBuffer(Math.max(total, head[1].length * 2)), 0, total);
+      out.set(head[1]);
     }
-    if (i1 >= 0) {
-      const [s1, a1] = this._chunks[i1];
-      values = spliceTail(values, end - s1, a1)
-    }
+    out.set(values, start - newStart);
+    // `tail` is a different chunk than `head` here (equal indices took the fast
+    // path above), so it owns a different buffer and can't alias `out`.
+    if (tail && end < newEnd) out.set(tail[1].subarray(end - tail[0]), end - newStart);
+
     const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
-    if (!Array.isArray(values)) values = Array.from(values);
-    this._chunks.splice(s, e - s, [start, values as T[]]);
+    this._chunks.splice(s, e - s, [newStart, out]);
   }
 
   splice(start: number, length = 1) {
     const end = start + length;
     let i0 = this._find(start);
     let i1 = this._find(end);
-    let e0 = i0 >= 0 ? this._chunks[i0] : undefined;
-    let e1 = i1 >= 0 ? this._chunks[i1] : undefined;
-    if (e0) {
-      
-      const l0 = start - e0[0];
-      if (l0) {
-        e0 = [e0[0], e0 === e1 ? e0[1].slice(0, l0) : arrayHead(e0[1], l0)];
-      } else {
-        e0 = undefined;
-        i0 = ~i0;
-      }
+    let e0: Chunk|undefined;
+    let e1: Chunk|undefined;
+    if (i0 >= 0) {
+      const [s0, a0] = this._chunks[i0];
+      const l0 = start - s0;
+      // the head keeps the original buffer, and the tail gets allocated a new one
+      if (l0) e0 = [s0, a0.subarray(0, l0)];
+      else i0 = ~i0;
     }
-    if (e1) {
-      e1 = [end, arrayTail(e1[1], end - e1[0])];
-      if (!e1[1].length) {
-        e1 = undefined;
-        i1 = ~i1;
-      }
+    if (i1 >= 0) {
+      const [s1, a1] = this._chunks[i1];
+      e1 = [end, a1.slice(end - s1)];
     }
 
-    const entries = [];
+    const entries: Chunk[] = [];
     if (e0) entries.push(e0);
     if (e1) entries.push(e1);
 
     const s = i0 < 0 ? ~i0 : i0;
     let e = i1 < 0 ? ~i1 : i1;
     if (i1 >= 0) e++;
-    
+
     this._chunks.splice(s, e - s, ...entries);
   }
 
-  slice(start: number, end: number): T[] {
-    if (end <= start) return [];
+  /** Returns a copy of `[start, end)`, which must be entirely present. */
+  slice(start: number, end: number): Uint8Array {
+    if (end <= start) return new Uint8Array(0);
     const i = this._find(start);
     if (i < 0) throw new Error(`Absent: ${start}`);
     const [s, a] = this._chunks[i];
     if (s + a.length < end) throw new Error(`Absent: ${s + a.length}`);
     return a.slice(start - s, end - s);
-  }
-}
-
-interface MutableArrayLike<T> {
-  length: number;
-  [i: number]: T;
-}
-
-/** Specialization of SparseArray optimized for efficient search. */
-export class SparseByteArray extends SparseArray<number> {
-
-  set(start: number, arr: Uint8Array): void;
-  set(start: number, ...values: number[]): void;
-  set(start: number, ...args: Array<number|Uint8Array>) {
-    this.setInternal(start, args[0] instanceof Uint8Array ?
-                     args[0] : Uint8Array.from(args as number[]));
   }
 
   search(needle: ArrayLike<number>, start?: number, end?: number): number {
@@ -247,8 +239,9 @@ export class SparseByteArray extends SparseArray<number> {
   addOffset(offset: number): SparseByteArray {
     const out = new SparseByteArray();
     for (const [start, data] of this._chunks) {
-      out._chunks.push([start + offset, data]);
+      out._chunks.push([start + offset, data.slice()]);
     }
+    out._length = this._length && this._length + offset;
     return out;
   }
 
@@ -326,53 +319,6 @@ export namespace SparseByteArray {
   }
 }
 
-
-// Helper functions to avoid doing expensive array operations, given the
-// assumption that we can destroy the input.
-function spliceHead<T>(a0: T[], i: number, a1: IterableArrayLike<T>): T[] {
-  const l0 = a0.length;
-  if (a1.length < l0 || !Array.isArray(a1)) {
-    a0.splice(i, l0 - i, ...a1);
-    return a0;
-  }
-  a1.unshift(...arrayHead(a0, i));
-  return a1;
-}
-
-function spliceTail<T>(a0: IterableArrayLike<T>, i: number, a1: T[]): T[] {
-  const l1 = a1.length;
-  if (a0.length < l1 || !Array.isArray(a0)) {
-    a1.splice(0, i, ...a0);
-    return a1;
-  }
-  a0.push(...arrayTail(a1, i));
-  return a0;
-}
-
-type IterableArrayLike<T> = ArrayLike<T> & Iterable<T>;
-
-function arrayHead<T>(arr: T[], i: number): T[] {
-  const l = arr.length;
-  if ((i << 1) < l) {
-    return arr.slice(0, i);
-  }
-  arr.splice(i, l - i);
-  return arr;
-}
-
-function arrayTail<T>(arr: T[], i: number): T[] {
-  const l = arr.length;
-  if ((i << 1) < l) {
-    arr.splice(0, i);
-    return arr;
-  }
-  return arr.slice(i);
-}
-
-// export function linearSearch<T>(T[] haystack, T[] needle,
-//                                 start = 0, end = haystack.length): number {
-
-// }
 
 export class BitSet {
   private data = new Uint8Array(16);

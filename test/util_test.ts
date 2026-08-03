@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {BitSet, IntervalSet, SparseArray, SparseByteArray,
+import {BitSet, IntervalSet, SparseByteArray,
         binaryInsert, binarySearch, toHexString, fromHexString, fromByteString} from '../src/util.ts';
 import * as util from '../src/util.ts';
 
 const [_] = [util];
+
+/** Convert the chunks to plain number arrays for testing. */
+function chunks(a: SparseByteArray): Array<[number, number[]]> {
+  return [...a.chunks()].map(([start, data]) => [start, [...data]]);
+}
 
 describe('binarySearch', function() {
   const arr = [3, 6, 8, 10, 12, 16, 18, 22, 27, 35];
@@ -348,262 +353,262 @@ describe('IntervalSet', function() {
   });
 });
 
-describe('SparseArray', function() {
+describe('SparseByteArray', function() {
   it('should start empty', function() {
-    expect([...new SparseArray().chunks()]).toEqual([]);
+    expect(chunks(new SparseByteArray())).toEqual([]);
   });
 
-  describe('SparseArray#set', function() {
+  describe('SparseByteArray#set', function() {
     it('should set some values', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(5, 1, 3, 4);
-      expect([...a.chunks()]).toEqual([[5, [1, 3, 4]]]);
+      expect(chunks(a)).toEqual([[5, [1, 3, 4]]]);
     });
 
     it('should add a second chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(5, 3, 4);
-      expect([...a.chunks()]).toEqual([[2, [1, 2]], [5, [3, 4]]]);
+      expect(chunks(a)).toEqual([[2, [1, 2]], [5, [3, 4]]]);
     });
 
     it('should add a chunk that abuts on the left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(5, 3, 4);
       a.set(7, 5, 6);
-      expect([...a.chunks()]).toEqual([[2, [1, 2]], [5, [3, 4, 5, 6]]]);
+      expect(chunks(a)).toEqual([[2, [1, 2]], [5, [3, 4, 5, 6]]]);
     });
 
     it('should add a chunk that abuts on the right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(5, 3, 4);
       a.set(0, 5, 6);
-      expect([...a.chunks()]).toEqual([[0, [5, 6, 1, 2]], [5, [3, 4]]]);
+      expect(chunks(a)).toEqual([[0, [5, 6, 1, 2]], [5, [3, 4]]]);
     });
 
     it('should add a chunk that abuts on both sides', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(5, 3, 4);
       a.set(4, 5);
-      expect([...a.chunks()]).toEqual([[2, [1, 2, 5, 3, 4]]]);
+      expect(chunks(a)).toEqual([[2, [1, 2, 5, 3, 4]]]);
     });
 
     it('should add a chunk that encloses another', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(6, 3, 4);
       a.set(5, 5, 6, 7, 8);
-      expect([...a.chunks()]).toEqual([[2, [1, 2]], [5, [5, 6, 7, 8]]]);
+      expect(chunks(a)).toEqual([[2, [1, 2]], [5, [5, 6, 7, 8]]]);
     });
 
     it('should add a chunk within another', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2, 3, 4, 5, 6);
       a.set(4, 7, 8);
-      expect([...a.chunks()]).toEqual([[2, [1, 2, 7, 8, 5, 6]]]);
+      expect(chunks(a)).toEqual([[2, [1, 2, 7, 8, 5, 6]]]);
     });
 
     it('should add a chunk that overlaps on the left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(6, 3, 4);
       a.set(3, 5, 6);
-      expect([...a.chunks()]).toEqual([[2, [1, 5, 6]], [6, [3, 4]]]);
+      expect(chunks(a)).toEqual([[2, [1, 5, 6]], [6, [3, 4]]]);
     });
 
     it('should add a chunk that overlaps multiple on the left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(6, 3, 4);
       a.set(3, 4, 5, 6, 7, 8, 9);
-      expect([...a.chunks()]).toEqual([[2, [1, 4, 5, 6, 7, 8, 9]]]);
+      expect(chunks(a)).toEqual([[2, [1, 4, 5, 6, 7, 8, 9]]]);
     });
 
     it('should add a chunk that overlaps on the right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(6, 3, 4);
       a.set(5, 5, 6);
-      expect([...a.chunks()]).toEqual([[2, [1, 2]], [5, [5, 6, 4]]]);
+      expect(chunks(a)).toEqual([[2, [1, 2]], [5, [5, 6, 4]]]);
     });
 
     it('should add a chunk that overlaps multiple on the right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(2, 1, 2);
       a.set(6, 3, 4);
       a.set(1, 5, 6, 7, 8, 9, 10);
-      expect([...a.chunks()]).toEqual([[1, [5, 6, 7, 8, 9, 10, 4]]]);
+      expect(chunks(a)).toEqual([[1, [5, 6, 7, 8, 9, 10, 4]]]);
     });
   });
 
-  describe('SparseArray#get', function() {
+  describe('SparseByteArray#get', function() {
     it('should be undefined on the far left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 5);
       a.set(3, 7);
       expect(a.get(0)).toBeUndefined();
     });
 
     it('should fetch from the start of a chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 5);
       a.set(3, 7);
       expect(a.get(1)).toBe(5);
     });
 
     it('should fetch from the middle of a chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 5, 6);
       a.set(4, 7);
       expect(a.get(2)).toBe(6);
     });
 
     it('should be undefined at the end of a chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 5, 6);
       a.set(4, 7);
       expect(a.get(3)).toBeUndefined();
     });
 
     it('should be undefined between chunks', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 5);
       a.set(4, 7);
       expect(a.get(3)).toBeUndefined();
     });
 
     it('should be undefined on the far right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 5);
       a.set(4, 7);
       expect(a.get(6)).toBeUndefined();
     });
   });
 
-  describe('SparseArray#splice', function() {
+  describe('SparseByteArray#splice', function() {
     it('should splice an absent chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(3, 5);
       a.splice(1);
-      expect([...a.chunks()]).toEqual([[3, [5]]]);
+      expect(chunks(a)).toEqual([[3, [5]]]);
     });
 
     it('should splice from the middle of a chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2, 3, 4, 5);
       a.set(8, 6);
       a.splice(4);
-      expect([...a.chunks()])
+      expect(chunks(a))
           .toEqual([[1, [1]], [3, [2]], [5, [4, 5]], [8, [6]]]);
     });
 
     it('should splice a chunk that abuts on the inside left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2, 3, 4, 5);
       a.set(8, 6);
       a.splice(3, 2);
-      expect([...a.chunks()]).toEqual([[1, [1]], [5, [4, 5]], [8, [6]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [5, [4, 5]], [8, [6]]]);
     });
 
     it('should splice a chunk that abuts on the inside right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2, 3, 4, 5);
       a.set(8, 6);
       a.splice(5, 2);
-      expect([...a.chunks()]).toEqual([[1, [1]], [3, [2, 3]], [8, [6]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [3, [2, 3]], [8, [6]]]);
     });
 
     it('should splice a chunk that abuts on the outside left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2, 3, 4, 5);
       a.set(8, 6);
       a.splice(2, 3);
-      expect([...a.chunks()]).toEqual([[1, [1]], [5, [4, 5]], [8, [6]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [5, [4, 5]], [8, [6]]]);
     });
 
     it('should splice a chunk that abuts on the outside right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2, 3, 4, 5);
       a.set(8, 6);
       a.splice(5, 3);
-      expect([...a.chunks()]).toEqual([[1, [1]], [3, [2, 3]], [8, [6]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [3, [2, 3]], [8, [6]]]);
     });
 
     it('should splice a chunk that outerlaps on the left', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(4, 2, 3);
       a.set(8, 4);
       a.splice(3, 2);
-      expect([...a.chunks()]).toEqual([[1, [1]], [5, [3]], [8, [4]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [5, [3]], [8, [4]]]);
     });
 
     it('should splice a chunk that outerlaps on the right', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(4, 2, 3);
       a.set(8, 4);
       a.splice(5, 2);
-      expect([...a.chunks()]).toEqual([[1, [1]], [4, [2]], [8, [4]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [4, [2]], [8, [4]]]);
     });
 
     it('should splice a chunk that overlaps multiple', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2);
       a.set(5, 3);
       a.set(8, 4);
       a.splice(3, 3);
-      expect([...a.chunks()]).toEqual([[1, [1]], [8, [4]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [8, [4]]]);
     });
 
     it('should splice a chunk that outerlaps multiple', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(1, 1);
       a.set(3, 2);
       a.set(5, 3);
       a.set(8, 4);
       a.splice(2, 6);
-      expect([...a.chunks()]).toEqual([[1, [1]], [8, [4]]]);
+      expect(chunks(a)).toEqual([[1, [1]], [8, [4]]]);
     });
   });
 
-  describe('SparseArray.slice', function() {
+  describe('SparseByteArray.slice', function() {
     it('should return a slice', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(5, 1, 2, 3, 4, 5);
-      expect(a.slice(6, 8)).toEqual([2, 3]);
+      expect([...a.slice(6, 8)]).toEqual([2, 3]);
     });
 
     it('should return an entire chunk', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(5, 1, 2);
-      expect(a.slice(5, 7)).toEqual([1, 2]);
+      expect([...a.slice(5, 7)]).toEqual([1, 2]);
     });
 
     it('should throw if across a gap', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(5, 1, 2);
       a.set(8, 3, 4);
       expect(() => a.slice(6, 9)).toThrow(/^Absent: 7/);
     });
 
     it('should throw if left edge is missing', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(5, 1, 2);
       expect(() => a.slice(4, 6)).toThrow(/^Absent: 4/);
     });
 
     it('should throw if right edge is missing', function() {
-      const a = new SparseArray<number>();
+      const a = new SparseByteArray();
       a.set(5, 1, 2);
       expect(() => a.slice(5, 8)).toThrow(/^Absent: 7/);
     });
@@ -633,6 +638,69 @@ describe('SparseArray', function() {
     it('should return -1 if the bounds are left of the match', function() {
       expect(a.search([2, 3, 4], 0, 3)).toBe(-1);
     });
+  });
+
+  // Basic test to check that as a chunk grows into its owned buffer,
+  // that it doesn't start to overlap with a different buffer. This test just
+  // adds things at a "fixed" random seed so its consistent but "random"ish
+  // and verifies that the growths never cause a patch to slip into a different chunk.
+  it('should not generate a scenario where expanding grows into another chunk', function() {
+    let seed = 12345;
+    const rnd = (n: number) => {  // xorshift; fixed seed keeps this repeatable
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >> 17;
+      seed ^= seed << 5; seed >>>= 0;
+      return seed % n;
+    };
+    const SPAN = 60;
+    for (let trial = 0; trial < 200; trial++) {
+      const a = new SparseByteArray();
+      const model = new Map<number, number>();
+      let high = 0;
+      for (let step = 0; step < 40; step++) {
+        const op = rnd(3);
+        const start = rnd(SPAN);
+        const len = 1 + rnd(8);
+        const at = `trial ${trial} step ${step}`;
+        if (op < 2) {
+          const vals = new Uint8Array(len);
+          for (let i = 0; i < len; i++) vals[i] = 1 + rnd(255);
+          // exercise both the array-like and the variadic overload
+          if (op === 0) a.set(start, vals); else a.set(start, ...vals);
+          for (let i = 0; i < len; i++) model.set(start + i, vals[i]);
+          high = Math.max(high, start + len);
+        } else {
+          a.splice(start, len);
+          for (let i = 0; i < len; i++) model.delete(start + i);
+        }
+
+        const bytes: Array<number|undefined> = [];
+        const want: Array<number|undefined> = [];
+        for (let i = 0; i < SPAN + 16; i++) {
+          bytes.push(a.get(i));
+          want.push(model.get(i));
+        }
+        expect(bytes, at).toEqual(want);
+        expect(a.length, at).toBe(high);
+
+        // Chunks stay sorted, non-empty, disjoint, and cover exactly the model.
+        const covered = new Map<number, number>();
+        const buffers = new Set<ArrayBufferLike>();
+        let prevEnd = -1;
+        for (const [s, d] of a.chunks()) {
+          expect(d.length, at).toBeGreaterThan(0);
+          expect(s, at).toBeGreaterThanOrEqual(prevEnd);
+          expect(d.byteOffset, at).toBe(0);
+          prevEnd = s + d.length;
+          buffers.add(d.buffer);
+          for (let i = 0; i < d.length; i++) covered.set(s + i, d[i]);
+        }
+        expect(buffers.size, `${at}: chunks must not share a buffer`)
+            .toBe(a.chunks().length);
+        expect([...covered].sort((x, y) => x[0] - y[0]), at)
+            .toEqual([...model].sort((x, y) => x[0] - y[0]));
+      }
+    }
   });
 });
 
