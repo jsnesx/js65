@@ -8,9 +8,12 @@ import {type Module} from '../src/module.ts';
 import {SourceError} from '../src/token.ts';
 import * as util from '../src/util.ts';
 
-const [_] = [util];
-
 const link = Linker.link;
+
+/** Convert the chunks to plain number arrays for testing. */
+function chunks(a: util.SparseByteArray): Array<[number, number[]]> {
+  return [...a.chunks()].map(([start, data]) => [start, [...data]]);
+}
 
 function off(chunk: number, num: number): Expr {
   return {op: 'num', num, meta: {rel: true, chunk}};
@@ -35,7 +38,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).toEqual([[50, [2, 4, 6, 8]]]);
+    expect(chunks(link(m))).toEqual([[50, [2, 4, 6, 8]]]);
   });
 
   it('should link two simple .org chunks', function() {
@@ -51,7 +54,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[50, [2, 4, 6, 8]], [150, [3, 5, 7, 9]]]);
   });
 
@@ -71,7 +74,7 @@ describe('Linker', function() {
         {name: 'b', size: 400, offset: 1030, memory: 480},
       ],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[50, [2, 4, 6, 8]], [1050, [1, 2, 3, 4]]]);
   });
 
@@ -85,7 +88,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).toEqual([[50, [2, 4, 103, 8]]]);
+    expect(chunks(link(m))).toEqual([[50, [2, 4, 103, 8]]]);
   });
 
   it('should fill in a 4-byte substitution', function() {
@@ -98,7 +101,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).toEqual([[50, [0x78, 0x56, 0x34, 0x12]]]);
+    expect(chunks(link(m))).toEqual([[50, [0x78, 0x56, 0x34, 0x12]]]);
   });
 
   it('should fill in an offset from a symbol', function() {
@@ -121,7 +124,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[50, [2, 4, 201, 8]], [150, [1, 3, 102, 7]]]);
   });
 
@@ -136,7 +139,7 @@ describe('Linker', function() {
       symbols: [{expr: op('+', num(80), off(0, 1))}],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect([...link(m).chunks()]).toEqual([[50, [2, 4, 181, 8]]]);
+    expect(chunks(link(m))).toEqual([[50, [2, 4, 181, 8]]]);
   });
 
   it('should support multiple segments', function() {
@@ -157,7 +160,7 @@ describe('Linker', function() {
       segments: [{name: 'code', size: 0x400, offset: 0x0010, memory: 0x0000},
                  {name: 'data', size: 0x400, offset: 0x0410, memory: 0x8000}],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0x0110, [2, 4, 0x26, 0x81]], [0x0533, [1, 1, 2, 3, 5]]]);
   });
 
@@ -178,7 +181,7 @@ describe('Linker', function() {
         free: [[0xc200, 0xc300]],
       }],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0x0210, [2, 4, 0x00, 0xc2, 1, 3, 0x02, 0xc2]]]);
   });
 
@@ -215,7 +218,7 @@ describe('Linker', function() {
         size: 0x400, offset: 0x0010, memory: 0xc000,
       }],
     };
-    expect([...link(m).chunks()]).toEqual([[0x10, [2, 4, 0x00, 0xc0]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [2, 4, 0x00, 0xc0]]]);
   });
 
   it('should honor a chunk alignment and leave the skipped bytes free',
@@ -240,7 +243,7 @@ describe('Linker', function() {
     // Chunks are packed largest-first, so the 13-byte chunk lands at 0 and the
     // aligned one skips to 16 rather than 13 - and the three bytes it skipped
     // stay free for the 3-byte chunk that comes after it.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0, [...new Array(13).fill(1), 3, 3, 3, 2, 2, 2, 2]]]);
   });
 
@@ -258,7 +261,7 @@ describe('Linker', function() {
     };
     // $c100, i.e. file offset $110 - the offset itself is not a multiple of
     // $100, so aligning in offset space would land somewhere else entirely.
-    expect([...link(m).chunks()]).toEqual([[0x110, [2, 4, 6, 8]]]);
+    expect(chunks(link(m))).toEqual([[0x110, [2, 4, 6, 8]]]);
   });
 
   it('should pack the biggest chunks in a segment first', function() {
@@ -279,7 +282,7 @@ describe('Linker', function() {
       }],
     };
     // Size order, not the order the chunks were read.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0, [2, 2, 2, 2, 3, 3, 3, 1, 1]]]);
   });
 
@@ -306,7 +309,7 @@ describe('Linker', function() {
     // All three prefer 'a', since eligibility is ordered by segment
     // declaration rather than by the order the chunk lists them.  'a' only
     // fits two of them, so the 4-byte chunk that loses the race moves to 'b'.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0, [1, 2, 3, 4, 9, 5, 6, 7, 8]]]);
   });
 
@@ -327,7 +330,7 @@ describe('Linker', function() {
     };
     // Neither unmapped segment declares a size, so each one is measured from its
     // contents and they pack tight against each other in the mapped one.
-    expect([...link(m).chunks()]).toEqual([[0x10, [1, 1, 1, 1, 2, 2, 2]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [1, 1, 1, 1, 2, 2, 2]]]);
   });
 
   it('should measure an unmapped segment independently of the mapped one', function() {
@@ -346,7 +349,7 @@ describe('Linker', function() {
       ],
     });
     // Sizing is segment-relative, so moving the mapped one does not change it.
-    expect([...link(m(0x8000)).chunks()]).toEqual([...link(m(0x9000)).chunks()]);
+    expect(chunks(link(m(0x8000)))).toEqual(chunks(link(m(0x9000))));
   });
 
   it('should align an unmapped segment within the mapped one', function() {
@@ -365,7 +368,7 @@ describe('Linker', function() {
       ],
     };
     // DATA's alignment bumps PRG's cursor from $8003 to $8010.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0x10, [1, 1, 1]], [0x20, [2, 2]]]);
   });
 
@@ -389,7 +392,7 @@ describe('Linker', function() {
     // BOOT's labels resolve against its run address in RAM ($300), but its
     // bytes are written into the file space PRG gave it - and PRG is charged
     // for them, so CODE starts after BOOT rather than on top of it.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0x10, [0xaa, 0xbb, 0x00, 0x03, 1, 2]]]);
   });
 
@@ -413,7 +416,7 @@ describe('Linker', function() {
     };
     // B still runs tight against A at $303, but loads at the next multiple of
     // 16 in the file.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0x10, [0x03, 0x03, 7]], [0x20, [2, 2]]]);
   });
 
@@ -442,7 +445,7 @@ describe('Linker', function() {
       ],
     };
     // The two zero page segments stack up in address space and emit nothing.
-    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x00, 0xa5, 0x04]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [0xa5, 0x00, 0xa5, 0x04]]]);
   });
 
   it('should throw when an unmapped segment overflows the mapped one', function() {
@@ -497,7 +500,7 @@ describe('Linker', function() {
     };
     // CODE is measured out to the end of its .org chunk, so DATA starts after
     // it rather than on top of it.
-    expect([...link(m).chunks()]).toEqual([[0x14, [1, 1, 2, 2]]]);
+    expect(chunks(link(m))).toEqual([[0x14, [1, 1, 2, 2]]]);
   });
 
   it('should hand out file offsets in declaration order', function() {
@@ -519,7 +522,7 @@ describe('Linker', function() {
     // PRG takes the cursor left by the header, and since it has no fill it
     // only advances the cursor by the four bytes CODE actually needed - so
     // FTR starts at $14 rather than at the end of PRG's declared size.
-    expect([...link(m).chunks()]).toEqual([[0x10, [1, 1, 1, 1, 9, 9]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [1, 1, 1, 1, 9, 9]]]);
   });
 
   it('should choose an eligible segment for .reloc chunks', function() {
@@ -541,7 +544,7 @@ describe('Linker', function() {
         free: [[0x100, 0x164]],
       }],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0, [2, 4, 0x02, 0x01]], [100, [1, 3, 5, 7]]]);
   });
 
@@ -569,7 +572,7 @@ describe('Linker', function() {
         free: [[0, 100]], dedupe: true,
       }],
     };
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0, [101, 0]], [100, [1, 3, 5, 7, 9]]]);
   });
 
@@ -592,12 +595,12 @@ describe('Linker', function() {
       }],
     });
     // Without :dedupe the 3-byte chunk gets its own space after the 5-byte one.
-    expect([...link(m()).chunks()])
+    expect(chunks(link(m())))
         .toEqual([[0, [1, 3, 5, 7, 9, 3, 5, 7, 5, 0]]]);
     // With it, it aliases onto the copy inside the 5-byte chunk at $01.
     const shared = m();
     shared.segments[0].dedupe = true;
-    expect([...link(shared).chunks()])
+    expect(chunks(link(shared)))
         .toEqual([[0, [1, 3, 5, 7, 9, 1, 0]]]);
   });
 
@@ -623,7 +626,7 @@ describe('Linker', function() {
       }],
     };
     const patch = new Linker().base(base, 10).read(m).link();
-    expect([...patch.chunks()]).toEqual([[5, [21, 0x80]]]);
+    expect(chunks(patch)).toEqual([[5, [21, 0x80]]]);
   });
 
   it('should .move existing data', function() {
@@ -648,7 +651,7 @@ describe('Linker', function() {
       }, {name: 'b', size: 40, offset: 0, memory: 0}],
     };
     const patch = new Linker().base(base, 10).read(m).link();
-    expect([...patch.chunks()]).toEqual([[150, [5, 7, 9, 1, 1, 3, 3]]]);
+    expect(chunks(patch)).toEqual([[150, [5, 7, 9, 1, 1, 3, 3]]]);
   });
 
   it('should .move existing data from an absolute offset', function() {
@@ -675,7 +678,7 @@ describe('Linker', function() {
       }, {name: 'b', size: 40, offset: 0, memory: 0}],
     };
     const patch = new Linker().base(base, 10).read(m).link();
-    expect([...patch.chunks()]).toEqual([[150, [5, 7, 9, 1, 1, 3, 3]]]);
+    expect(chunks(patch)).toEqual([[150, [5, 7, 9, 1, 1, 3, 3]]]);
   });
 
   it('should resolve bank bytes', function() {
@@ -706,7 +709,7 @@ describe('Linker', function() {
     };
     // Chunks are placed segment by segment, largest first, so the 6-byte chunk
     // takes the front of segment 'a' and the 2-byte one follows it at $8006.
-    expect([...link(m).chunks()]).toEqual([
+    expect(chunks(link(m))).toEqual([
       [0, [9, 0, 0x80, 8, 6, 0x80, 2, 4]],
       [100, [1, 3, 5, 7, 9]],
     ]);
@@ -735,7 +738,7 @@ describe('Linker', function() {
         free: [[100, 200]],
       }],
     };
-    expect([...link(m1, m2).chunks()])
+    expect(chunks(link(m1, m2)))
         .toEqual([[0, [3, 5, 101]], [100, [1, 2, 3]]]);
   });
 
@@ -749,7 +752,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'a', size: 100, offset: 100, memory: 100}],
     };
-    expect([...link(m).chunks()]).toEqual([[100, [2, 4, 6, 8]]]);
+    expect(chunks(link(m))).toEqual([[100, [2, 4, 6, 8]]]);
   });
 
   it('should check a failing assert', function() {
@@ -784,7 +787,7 @@ describe('Linker', function() {
     // Placement order is fixed (largest first) rather than following the
     // dependency graph, so the cycle is broken by placing the 6-byte chunk
     // first and letting the 4-byte one resolve against it afterwards.
-    expect([...link(m).chunks()])
+    expect(chunks(link(m)))
         .toEqual([[0, [3, 5, 0x06, 0x80, 7, 9, 2, 0x00, 0x80, 4]]]);
   });
 
@@ -805,7 +808,7 @@ describe('Linker', function() {
         {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
       ],
     };
-    expect([...link(m).chunks()]).toEqual([[0x10, [0xa9, 0x00]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [0xa9, 0x00]]]);
   });
 
   it('should treat segments without offset as RAM', function() {
@@ -824,7 +827,7 @@ describe('Linker', function() {
         {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
       ],
     };
-    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x00]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [0xa5, 0x00]]]);
   });
 
   it('should resolve RAM symbols in ROM code', function() {
@@ -843,7 +846,7 @@ describe('Linker', function() {
         {name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}
       ],
     };
-    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x42]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [0xa5, 0x42]]]);
   });
 
   it('should allocate relocatable chunks in RAM free space', function() {
@@ -864,7 +867,7 @@ describe('Linker', function() {
       ],
     };
     // RAM chunk allocated at $10 (start of free space), ROM references it
-    expect([...link(m).chunks()]).toEqual([[0x10, [0xa5, 0x10]]]);
+    expect(chunks(link(m))).toEqual([[0x10, [0xa5, 0x10]]]);
   });
 
   it('should allocate multiple RAM chunks without overlap', function() {
@@ -890,7 +893,7 @@ describe('Linker', function() {
       ],
     };
     // Both RAM chunks allocated, no overlap
-    const result = [...link(m).chunks()];
+    const result = chunks(link(m));
     expect(result.length).toBe(1);  // Only ROM chunk in output
     // The addresses should be different (allocated sequentially)
     const [_offset, data] = result[0];
@@ -936,7 +939,7 @@ describe('Linker with an ld65 config', function() {
     // HDR takes the front of the file because it is declared first, and PRG
     // follows it at $4.  Both areas fill their whole declared size; the RAM
     // areas take no file space at all and the BSS chunk emits nothing.
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([
+    expect(chunks(linkCfg(cfg, m))).toEqual([
       [0, [1, 2, 3, 0, 10, 11, 20, ...new Array(29).fill(0xff)]],
     ]);
   });
@@ -963,7 +966,7 @@ describe('Linker with an ld65 config', function() {
     };
     // The two namespaces are separate in ld65, and nrom.cfg really does reuse
     // ZEROPAGE for both.  js65 has one namespace, so the segment is the area.
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0xa5, 0x00]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [0xa5, 0x00]]]);
   });
 
   it('should fill a merged area around the segments lowered into it', function() {
@@ -995,7 +998,7 @@ describe('Linker with an ld65 config', function() {
     };
     // RAM is both the area BSS lives in and a segment of its own, so its own
     // chunks go after the $4 bytes it handed to BSS rather than on top of them.
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [0xa5, 0x10, 0xa5, 0x14]]]);
   });
 
@@ -1019,7 +1022,7 @@ describe('Linker with an ld65 config', function() {
     };
     // A's own chunks can land anywhere it has left, so B has to start past all
     // of A rather than just past the segments lowered into it.
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [1, 1, 2, 2]], [8, [3, 3]]]);
   });
 
@@ -1038,7 +1041,7 @@ describe('Linker with an ld65 config', function() {
       ],
     };
     // DATA is declared first, so it goes first even though CODE is bigger.
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [9, 1, 2, 3, 4]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [9, 1, 2, 3, 4]]]);
   });
 
   it('should pin a segment with an explicit start', function() {
@@ -1055,7 +1058,7 @@ describe('Linker with an ld65 config', function() {
         {segments: ['VECTORS'], data: Uint8Array.of(0xaa, 0xbb)},
       ],
     };
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [1, 2, ...new Array(12).fill(0xff), 0xaa, 0xbb]]]);
   });
 
@@ -1072,7 +1075,7 @@ describe('Linker with an ld65 config', function() {
         {segments: ['DATA'], data: Uint8Array.of(2, 2)},
       ],
     };
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [1, 1, 1]], [0x10, [2, 2]]]);
   });
 
@@ -1098,7 +1101,7 @@ describe('Linker with an ld65 config', function() {
     };
     // BOOT's label resolves against $300 where it runs, but its bytes are
     // written into - and charged to - the file space PRG handed it.
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [0xaa, 0xbb, 0x00, 0x03, 1, 2]]]);
   });
 
@@ -1125,7 +1128,7 @@ describe('Linker with an ld65 config', function() {
         data: Uint8Array.of(7),
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [8, 9, 7]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [8, 9, 7]]]);
   });
 
   it('should resolve a config symbol in an area expression', function() {
@@ -1140,7 +1143,7 @@ describe('Linker with an ld65 config', function() {
         subs: [{offset: 0, size: 2, expr: off(0, 0)}],
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x00, 0x80]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [0x00, 0x80]]]);
   });
 
   it('should throw when a segment overflows its area', function() {
@@ -1170,7 +1173,7 @@ describe('Linker with an ld65 config', function() {
         {segments: ['FILE0_HDR'], data: Uint8Array.of(2, 2, 2)},
       ],
     };
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [1, 1, 2, 2, 2, 3, 3, 3, 3]]]);
   });
 
@@ -1204,7 +1207,7 @@ describe('Linker with an ld65 config', function() {
         ],
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [0xa5, 0x10, 0xa5, 0x14]]]);
   });
 
@@ -1231,7 +1234,7 @@ describe('Linker with an ld65 config', function() {
     };
     const linker = linkerCfg(cfg, m);
     const main = linker.link();
-    expect([...main.chunks()])
+    expect(chunks(main))
         .toEqual([[0, [10, 11, 0xff, 0xff, 0xff, 0xff]]]);
     const extra = linker.outputFiles();
     expect(extra.length).toBe(1);
@@ -1264,7 +1267,7 @@ describe('Linker with an ld65 config', function() {
         data: Uint8Array.of(1, 2),
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([
+    expect(chunks(linkCfg(cfg, m))).toEqual([
       [0, [0x00, 0x80, 0x0a, 0x00, 0x0a, 0x80, 0x00, 0x00, 0x0a, 0x80, 1, 2]],
     ]);
   });
@@ -1295,7 +1298,7 @@ describe('Linker with an ld65 config', function() {
         data: Uint8Array.of(7),
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [0x00, 0x80, 0x00, 0x03, 0x00, 0x00, 7]]]);
   });
 
@@ -1319,7 +1322,7 @@ describe('Linker with an ld65 config', function() {
       }],
       segments: [{name: 'CODE', size: 8, offset: 0, memory: 0x9000}],
     };
-    expect([...linkCfg(cfg, m).chunks()])
+    expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [0x00, 0x02, 0x00, 0x01, 0x04, 0x02]]]);
   });
 
@@ -1335,7 +1338,7 @@ describe('Linker with an ld65 config', function() {
         subs: [{offset: 0, size: 2, expr: imp('__STACKSIZE__')}],
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x00, 0x02]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [0x00, 0x02]]]);
   });
 
   it('should let an object file override a weak config symbol', function() {
@@ -1351,7 +1354,7 @@ describe('Linker with an ld65 config', function() {
       }],
       symbols: [{export: '__STACKSIZE__', expr: num(0x30)}],
     };
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x30, 0x00]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [0x30, 0x00]]]);
   });
 
   it('should resolve a config symbol against a segment define', function() {
@@ -1375,7 +1378,7 @@ describe('Linker with an ld65 config', function() {
         subs: [{offset: 0, size: 2, expr: imp('__HEAP__')}],
       }],
     };
-    expect([...linkCfg(cfg, m).chunks()]).toEqual([[0, [0x03, 0x02]]]);
+    expect(chunks(linkCfg(cfg, m))).toEqual([[0, [0x03, 0x02]]]);
   });
 
   it('should require an imported config symbol to be exported', function() {
