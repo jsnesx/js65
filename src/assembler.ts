@@ -22,6 +22,8 @@ type Module = mod.Module;
 const SIZE_NAME = '.size';
 const SIZE_SUFFIX = `::${SIZE_NAME}`;
 
+const RE_SCOPE_SPLIT = /::/g;
+
 /** Whether a symbol name is one of the internal size entries described above. */
 function isSizeOfSymbol(name: string): boolean {
   return name === SIZE_NAME || name.endsWith(SIZE_SUFFIX);
@@ -163,14 +165,14 @@ class Scope extends BaseScope {
 
   /** Look up a scope by (possibly qualified) name. Undefined if there is none. */
   findScope(name: string): Scope|undefined {
-    const found = this.walkScopes(name.split(/::/g));
+    const found = this.walkScopes(name.split(RE_SCOPE_SPLIT));
     return 'scope' in found ? found.scope : undefined;
   }
 
   /** Splits a qualified symbol name into its unqualified tail and owning scope. */
   pickScope(name: string): [string, Scope] {
     // TODO - plumb the source information through here?
-    const split = name.split(/::/g);
+    const split = name.split(RE_SCOPE_SPLIT);
     const tail = split.pop()!;
     const found = this.walkScopes(split);
     // If the name has an explicit scope, this is an error?
@@ -598,7 +600,7 @@ export class Assembler {
    * Finds the size symbol of a (possibly qualified) symbol name.
    */
   private lookupSizeOfSymbol(name: string): Symbol|undefined {
-    const split = name.split(/::/g);
+    const split = name.split(RE_SCOPE_SPLIT);
     const tail = split.pop()!;
     if (split.length) {
       const owner = this.currentScope.findScope(split.join('::'));
