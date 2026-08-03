@@ -492,7 +492,7 @@ TestLabel:
         {binIncludePaths: ['art']}, fs);
       expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
       expect(result.success).toBe(true);
-      const mod = deserializeObjectFile(result.outputs[0].data);
+      const mod = await deserializeObjectFile(result.outputs[0].data);
       // The three bytes should land in one of the module's chunks.
       const found = (mod.chunks ?? []).some(c =>
         Array.from(c.data).join() === [0xAA, 0xBB, 0xCC].join());

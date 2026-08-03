@@ -170,7 +170,7 @@ loop:
     );
     expect(out.success).toBe(true);
 
-    const chunk = deserializeObjectFile(out.outputs[0].data).chunks![0];
+    const chunk = (await deserializeObjectFile(out.outputs[0].data)).chunks![0];
     expect(chunk.labelIndex).toBeInstanceOf(Map);
     expect(chunk.labelIndex!.get('start')).toBe(0);
     expect(chunk.labelIndex!.get('loop')).toBe(2);
@@ -196,12 +196,12 @@ start:
     const o = out.outputs[0].data;
     expect(isGzip(o)).toBe(true);
 
-    const linked = link([deserializeObjectFile(o)], {}, 'binary');
+    const linked = link([await deserializeObjectFile(o)], {}, 'binary');
     expect(linked.success).toBe(true);
     expect(Array.from(linked.data)).toEqual([0xa9, 0x01, 0x8d, 0x00, 0x20, 0x60]);
   });
 
-  it('round-trips a module handed over in-process with real Maps', () => {
+  it('round-trips a module handed over in-process with real Maps', async () => {
     const m: Module = {
       name: 'inproc',
       chunks: [{
@@ -210,23 +210,23 @@ start:
         sourceMap: new Map([[0, { file: 'a.s', line: 1, column: 0 }]]),
       }],
     };
-    const chunk = deserializeObjectFile(serializeObjectFile(m)).chunks![0];
+    const chunk = (await deserializeObjectFile(await serializeObjectFile(m))).chunks![0];
     expect(chunk.labelIndex!.get('here')).toBe(0);
     expect(chunk.sourceMap!.get(0)).toEqual({ file: 'a.s', line: 1, column: 0 });
   });
 
-  it('reports a useful error for a corrupt .o', () => {
-    const truncated = serializeObjectFile({ name: 'm' }).slice(0, 8);
-    expect(() => deserializeObjectFile(truncated, 'bad.o')).toThrow(/bad\.o: could not decompress/);
+  it('reports a useful error for a corrupt .o', async () => {
+    const truncated = (await serializeObjectFile({ name: 'm' })).slice(0, 8);
+    expect(async () => await deserializeObjectFile(truncated, 'bad.o')).toThrow(/bad\.o: could not decompress/);
 
     // Well-formed gzip, but the payload is not a module.
     const notAModule = gzipSync(strToU8('{"chunks":[{}]}'));
-    expect(() => deserializeObjectFile(notAModule, 'bad.o'))
+    expect(async () => await deserializeObjectFile(notAModule, 'bad.o'))
       .toThrow(/bad\.o: not a valid object file: module\.chunks\[0\]\.data/);
 
     // Plain JSON is no longer an accepted object file.
     expect(isGzip(new TextEncoder().encode('{"name":"m"}'))).toBe(false);
-    expect(() => deserializeObjectFile(new TextEncoder().encode('{"name":"m"}'), 'plain.o'))
+    expect(async () => await deserializeObjectFile(new TextEncoder().encode('{"name":"m"}'), 'plain.o'))
       .toThrow(/plain\.o: could not decompress/);
   });
 
