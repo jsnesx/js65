@@ -130,25 +130,25 @@ describe('Define', function() {
     });
 
     it('should not retain a pair of braces in a single arg', function() {
-      testExpand('.define foo(a, b) [a:b]',
+      testExpand('.define foo(p, b) [p:b]',
                  'foo({1}{2}, 3)',
                  '[{1}{2} : 3]');
     });
 
     it('should retain non-single-group braces', function() {
-      testExpand('.define foo(a, b) [a:b]',
+      testExpand('.define foo(p, b) [p:b]',
                  'foo({1} 2, 3)',
                  '[{1} 2 : 3]');
-      testExpand('.define foo(a, b) [a:b]',
+      testExpand('.define foo(p, b) [p:b]',
                  'foo {1} 2, 3',
                  '[{1} 2 : 3]'); 
-      testExpand('.define foo(a, b) [a:b]',
+      testExpand('.define foo(p, b) [p:b]',
                  'foo(1, {2} 3)',
                  '[1 : {2} 3]'); 
     });
 
     it('should fail on parenthesized calls with too many args', async function() {
-      const define = Define.from(await tok('.define foo(a, b) [a:b]'));
+      const define = Define.from(await tok('.define foo(p, b) [p:b]'));
       expect(define.expand(await tok('foo(1, 2, 3)'), 0)).toBeFalsy();
     });
 
@@ -163,72 +163,72 @@ describe('Define', function() {
 
   describe('with TeX-style argument list', function() {
     it('should capture empty last argument', function() {
-      testExpand('.define foo {a b c .eol} [a:b:c]',
+      testExpand('.define foo {p b c .eol} [p:b:c]',
                  'qux foo bar baz',
                  'qux [bar:baz:]');
     });
 
     it('should fail on empty undelimited argument', async function() {
-      const define = Define.from(await tok('.define foo {a b} [a:b]'));
+      const define = Define.from(await tok('.define foo {p b} [p:b]'));
       expect(define.expand(await tok('foo bar'), 0)).toBeFalsy();      
     });
 
     it('should fail on missing delimiter', async function() {
-      const define = Define.from(await tok('.define foo {a,b} [a:b]'));
+      const define = Define.from(await tok('.define foo {p,b} [p:b]'));
       expect(define.expand(await tok('foo bar baz qux'), 0)).toBeFalsy();      
     });
 
     it('should capture entire group for undelimited arg', function() {
-      testExpand('.define foo {a b c} [a:b:c]',
+      testExpand('.define foo {p b c} [p:b:c]',
                  'qux foo {bar baz} qux corge',
                  'qux [bar baz:qux:corge]');
     });
 
     it('should capture entire group for undelimited arg', function() {
-      testExpand('.define foo {a b c} [a:b:c]',
+      testExpand('.define foo {p b c} [p:b:c]',
                  'qux foo {bar baz} qux corge',
                  'qux [bar baz:qux:corge]');
     });
 
     it('should capture delimited arg', function() {
-      testExpand('.define foo {a,b,c} [a:b:c]',
+      testExpand('.define foo {p,b,c} [p:b:c]',
                  'qux foo bar baz, qux, corge',
                  'qux [bar baz:qux:corge]');
     });
 
     it('should retain braces for delimited arg', function() {
-      testExpand('.define foo {a,b,c} [a:b:c]',
+      testExpand('.define foo {p,b,c} [p:b:c]',
                  'qux foo {bar baz}, qux, corge',
                  'qux [{bar baz}:qux:corge]');
     });
 
     it('should skip param delimiter in braces', function() {
-      testExpand('.define foo {a,b,c} [a:b:c]',
+      testExpand('.define foo {p,b,c} [p:b:c]',
                  'qux foo {bar, baz}, qux, corge',
                  'qux [{bar, baz}:qux:corge]');
     });
 
     it('should not gobble to end of line if delimited at end', function() {
-      testExpand('.define foo {a,b,c,} [a:b:c]',
+      testExpand('.define foo {p,b,c,} [p:b:c]',
                  'qux foo bar, baz, qux, corge',
                  'qux [bar:baz:qux] corge');
     });
 
     it('should allow arbitrary tokens as delimiters', function() {
-      testExpand('.define foo {a .d b 1 c ]} [a:b:c]',
+      testExpand('.define foo {p .d b 1 c ]} [p:b:c]',
                  'qux foo bar .d baz 1 qux ] corge',
                  'qux [bar:baz:qux] corge');
     });
 
     it('should expand .eol', function() {
-      testExpand('.define foo {a b c} [a:b:c] .eol a:c .eol b',
+      testExpand('.define foo {p b c} [p:b:c] .eol p:c .eol b',
                  'qux foo bar baz qux',
                  'qux [bar:baz:qux]',
                  'bar:qux\nbaz'); // overflow
     });
 
     it('should not expand .eol if not at end of line', async function() {
-      const define = Define.from(await tok('.define foo {a b c} [a:b:c] .eol a:c'));
+      const define = Define.from(await tok('.define foo {p b c} [p:b:c] .eol p:c'));
       expect(define.expand(await tok('foo bar baz qux not_eol'), 0)).toBeFalsy();      
     });
   });
