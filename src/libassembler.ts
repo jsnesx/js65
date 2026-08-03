@@ -535,7 +535,7 @@ export function isGzip(data: Uint8Array): boolean {
  */
 export async function serializeObjectFile(m: Module): Promise<Uint8Array> {
   const { gzipSync, strToU8 } = await import('fflate/browser');
-  return gzipSync(strToU8(serializeModule(m)), { level: 9 });
+  return gzipSync(strToU8(serializeModule(m)), { level: 1, mtime: 0, filename: m.name });
 }
 
 /**
