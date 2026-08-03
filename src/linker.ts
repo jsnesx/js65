@@ -30,6 +30,13 @@ export interface MesenLabelFormat {
   comment: string,
 }
 
+const RE_IS_COMMENT = /^\s*(;|.*:\s*$)/;
+const RE_COLON = /:/g;
+const RE_INLINE_COMMENT = /;(.*)$/;
+const RE_LABEL_ONLY_LINE = /^\s*.*:\s*$/;
+const RE_FULL_COMMENT_LINE = /^\s*;/;
+const RE_LABEL_OR_COMMENT_LINE = /^\s*(;|.*:\s*$)/;
+
 export class Linker {
   opts: Options;
   // TODO - accept a list of [filename, contents]?
@@ -118,7 +125,7 @@ export class Linker {
       if (debugLevel === 0) {
         // Level 0: Only include comments, skip source code and labels
         // Walk backwards while we see comment lines (;) or label definitions (ending with :)
-        do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
+        do { firstLine--; } while (firstLine >= 0 && RE_IS_COMMENT.test(sourceLines[firstLine]));
 
         const lines = sourceLines.slice(firstLine + 1, actualLine + 1);
         const result: string[] = [];
@@ -126,20 +133,20 @@ export class Linker {
         for (const l of lines) {
           const trimmed = l.trim();
           // Check if line is a full comment line
-          if (/^\s*;/.test(l)) {
+          if (RE_FULL_COMMENT_LINE.test(l)) {
             // Remove leading semicolon and colons from comments
-            const commentText = trimmed.substring(1).trim().replace(/:/g, '');
+            const commentText = trimmed.substring(1).trim().replace(RE_COLON, '');
             if (commentText) {
               result.push(commentText);
             }
-          } else if (/^\s*.*:\s*$/.test(l)) {
+          } else if (RE_LABEL_ONLY_LINE.test(l)) {
             // Label-only line - skip it (labels go in the label field, not comments)
           } else {
             // Check if line has an inline comment (code ; comment)
-            const inlineCommentMatch = l.match(/;(.*)$/);
+            const inlineCommentMatch = l.match(RE_INLINE_COMMENT);
             if (inlineCommentMatch) {
               // Remove colons from the comment (no leading semicolon)
-              const commentText = inlineCommentMatch[1].trim().replace(/:/g, '');
+              const commentText = inlineCommentMatch[1].trim().replace(RE_COLON, '');
               if (commentText) {
                 result.push(commentText);
               }
@@ -152,11 +159,11 @@ export class Linker {
       } else {
         // Level 1+: Include comments and code, but not labels
         // Walk backwards while we see comment lines (;) or label definitions (ending with :)
-        do { firstLine--; } while (firstLine >= 0 && /^\s*(;|.*:\s*$)/.test(sourceLines[firstLine]));
+        do { firstLine--; } while (firstLine >= 0 && RE_LABEL_OR_COMMENT_LINE.test(sourceLines[firstLine]));
         // Filter out label-only lines and remove colons from remaining lines
         comment = sourceLines.slice(firstLine + 1, actualLine + 1)
-          .filter((s) => !/^\s*\S+:\s*$/.test(s))  // Exclude label-only lines
-          .map((s) => s.trim().replace(/:/g, ''))
+          .filter((s) => !RE_LABEL_ONLY_LINE.test(s))
+          .map((s) => s.trim().replace(RE_COLON, ''))
           .join('\\n');
       }
     }
