@@ -5,7 +5,7 @@ import {Buffer} from './buffer.ts';
 import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
-import { ErrorCollector } from './assembler.ts';
+import { ErrorCollector } from './error.ts';
 
 const NEWLINE = /(\r\n|\n|\r)/y;
 

@@ -5,10 +5,16 @@ import { Cpu } from './cpu.ts';
 import { type Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import * as mod from './module.ts';
-import { type Token, type AssemblerMessage, type ErrorLevel } from './token.ts'
+import { ErrorCollector, FatalError, RecoverableError } from './error.ts';
+import type { AssemblerMessage, ErrorLevel } from './error.ts';
+import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
+
+// These used to be declared here; keep them exported from this module so
+// existing importers (including tests) don't have to change.
+export { ErrorCollector, RecoverableError } from './error.ts';
 
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
@@ -83,7 +89,8 @@ abstract class BaseScope {
   //closed = false;
   readonly symbols = new Map<string, Symbol>();
 
-  protected pickScope(name: string): [string, BaseScope] {
+  protected pickScope(name: string,
+                      _at?: {source?: Tokens.SourceInfo}): [string, BaseScope] {
     return [name, this];
   }
 
@@ -98,7 +105,7 @@ abstract class BaseScope {
   resolve(name: string, opts: ResolveOpts = {}):
       Symbol|undefined {
     const {allowForwardRef = false, ref} = opts;
-    const [tail, scope] = this.pickScope(name);
+    const [tail, scope] = this.pickScope(name, ref);
     const sym = scope.symbols.get(tail);
 //console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
     if (sym) {
@@ -118,8 +125,8 @@ abstract class BaseScope {
   }
 
   /** Insert a brand new symbol into the table, scoped if there is one open */
-  declare(name: string, symbol: Symbol): Symbol {
-    const [tail, scope] = this.pickScope(name);
+  declare(name: string, symbol: Symbol, at?: {source?: Tokens.SourceInfo}): Symbol {
+    const [tail, scope] = this.pickScope(name, at ?? symbol.ref);
     scope.symbols.set(tail, symbol);
     if (tail !== name) symbol.scoped = true;
     return symbol;
@@ -170,15 +177,15 @@ class Scope extends BaseScope {
   }
 
   /** Splits a qualified symbol name into its unqualified tail and owning scope. */
-  pickScope(name: string): [string, Scope] {
-    // TODO - plumb the source information through here?
+  pickScope(name: string, at?: {source?: Tokens.SourceInfo}): [string, Scope] {
     const split = name.split(RE_SCOPE_SPLIT);
     const tail = split.pop()!;
     const found = this.walkScopes(split);
     // If the name has an explicit scope, this is an error?
     if ('missing' in found) {
-      throw new Error(
-          `Could not resolve scope ${split.slice(0, found.missing + 1).join('::')}`);
+      Tokens.fail(
+          `Could not resolve scope ${split.slice(0, found.missing + 1).join('::')}`,
+          at);
     }
     return [tail, found.scope];
   }
@@ -198,15 +205,22 @@ class Scope extends BaseScope {
 class CheapScope extends BaseScope {
 
   /** Clear everything out, making sure everything was defined. */
-  clear() {
-    this.validate();
+  clear(collector?: ErrorCollector) {
+    this.validate(collector);
     this.symbols.clear();
   }
-  validate() {
+  /**
+   * Given a collector, records every still-undefined cheap label and returns
+   * normally; without one it throws on the first, which is what the mid-line
+   * callers want (`line()` records and resyncs for them).
+   */
+  validate(collector?: ErrorCollector) {
     for (const [name, sym] of this.symbols) {
       if (!sym.expr) {
-        const at = sym.ref ? Tokens.at(sym.ref) : '';
-        throw new Error(`Cheap local label never defined: ${name}${at}`);
+        // The location rides on `.source` rather than being baked into the text.
+        const msg = `Cheap local label never defined: ${name}`;
+        if (!collector) Tokens.fail(msg, sym.ref);
+        collector.add('error', msg, sym.ref?.source);
       }
     }
   }
@@ -216,47 +230,6 @@ export interface RefExtractor {
   label?(name: string, addr: number, segments: readonly string[]): void;
   ref?(expr: Expr, bytes: number, addr: number, segments: readonly string[]): void;
   assign?(name: string, value: number): void;
-}
-
-export class RecoverableError extends Tokens.SourceError {
-  constructor(message: string, source?: Tokens.SourceInfo) {
-    super(message, source);
-    this.name = 'RecoverableError';
-  }
-}
-
-export class ErrorCollector {
-  private messages: AssemblerMessage[] = [];
-
-  add(level: ErrorLevel, message: string, source?: Tokens.SourceInfo): void {
-    this.messages.push({
-      level,
-      message,
-      source,
-      stack: new Error().stack,
-    });
-  }
-
-  addFromException(err: Error, source?: Tokens.SourceInfo, level: ErrorLevel = 'error'): void {
-    this.messages.push({
-      level,
-      message: err.message,
-      source: (err instanceof Tokens.SourceError ? err.source : undefined) ?? source,
-      stack: err.stack,
-    });
-  }
-
-  getMessages(): readonly AssemblerMessage[] {
-    return this.messages;
-  }
-
-  hasErrors(): boolean {
-    return this.messages.some(m => m.level === 'error');
-  }
-
-  clear(): void {
-    this.messages = [];
-  }
 }
 
 export class Assembler {
@@ -718,8 +691,11 @@ export class Assembler {
   }
 
   closeScopes() {
-    this.cheapLocals.clear();
     const collector = this.errorCollector;
+    // This runs outside `line()`'s recovery net, so hand the collector down and
+    // accumulate rather than throwing, matching how the rest of this method
+    // reports undefined symbols.
+    this.cheapLocals.clear(collector);
 
     // Need to find any undeclared symbols in nested scopes and link
     // them to a parent scope symbol if possible.
@@ -975,12 +951,20 @@ export class Assembler {
         await this.instruction(tokens);
       }
     } catch (err) {
+      // `.fatal`, cancellation and the error cap stop the whole run.
+      if (err instanceof FatalError) throw err;
       if (err instanceof RecoverableError) {
         // Error already recorded, continue to next line
         return;
       }
-      // Re-throw unrecoverable errors, and use this line for the source if
-      // it didn't have a source attached in the err.
+      if (err instanceof Tokens.SourceError) {
+        // Thrown by Tokens.fail / Exprs.parse / scope lookup, which have no
+        // access to the collector. Record it here so there is exactly one
+        // message, then resync to the next line.
+        this.errorCollector.addFromException(err, err.source ?? this._source);
+        return;
+      }
+      // A plain Error is something not caused by the user, so treat it as fatal
       throw Tokens.SourceError.locate(err, this._source);
     } finally {
       // A label opens its span above; this line is the remainder of the label's
@@ -996,7 +980,7 @@ export class Assembler {
     let line;
     // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
     while (!this.ended && (line = await source.next())) {
-      if (signal?.aborted) throw new Error('Compilation cancelled');
+      if (signal?.aborted) throw new FatalError('Compilation cancelled');
       await this.line(line);
     }
   }
@@ -1248,7 +1232,7 @@ export class Assembler {
       this.fail(`Mutable set requires constant`, token);
     } else if (!sym) {
       if (!mut) throw new Error(`impossible`);
-      sym = scope.declare(ident, {id: -1});
+      sym = scope.declare(ident, {id: -1}, token);
     } else if (!mut && sym.expr) {
       const orig =
           sym.expr.source ? `\nOriginally defined${Tokens.at(sym.expr)}` : '';
@@ -2020,7 +2004,7 @@ export class Assembler {
 
     // Don't add the error to the error collector if its from `.fatal`
     // since its unrecoverable.
-    if (fatal) throw new Tokens.SourceError(str, source);
+    if (fatal) throw new FatalError(str, source);
 
     // Map 'warn' to 'warning' for ErrorLevel
     const errorLevel: ErrorLevel = level === 'warn' ? 'warning' : level;
@@ -2028,7 +2012,7 @@ export class Assembler {
 
     if (level === 'error') {
       // For .error directive, record and throw to stop processing this line
-      throw new RecoverableError(str);
+      throw new RecoverableError(str, source);
     }
   }
 

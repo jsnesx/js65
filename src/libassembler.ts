@@ -344,7 +344,7 @@ export async function assemble(
     // if we have currentAssembler, it means there was some unrecoverable error,
     // so grab whatever messages we can scavenge
     if (currentAssembler) allMessages.push(...currentAssembler.getMessages());
-    allMessages.push(messageFromException(err));
+    pushException(allMessages, err);
     return { success: false, modules, messages: allMessages };
   }
 
@@ -486,11 +486,18 @@ export function findOutput(result: CompileResult, type: OutputType): OutputFile 
  * produced by the assembler that happened before an unrecoverable exception occured
  */
 function failureFromException(err: unknown, collected: AssemblerMessage[] = []): CompileResult {
+  const messages = [...collected];
+  pushException(messages, err);
   return {
     success: false,
     outputs: [],
-    messages: [...collected, messageFromException(err)]
+    messages
   };
+}
+
+function pushException(messages: AssemblerMessage[], err: unknown): void {
+  if (err instanceof SourceError && err.recorded) return;
+  messages.push(messageFromException(err));
 }
 
 function messageFromException(err: unknown): AssemblerMessage {

@@ -164,10 +164,10 @@ export function evaluate(expr: Expr): Expr {
       }
       case '.strlen': {
         const arg = expr.args![0];
-        if (arg.op !== 'str') throw new Error('.strlen requires a string literal');
+        if (arg.op !== 'str') Tokens.fail('.strlen requires a string literal', expr);
         return {op: 'num', num: arg.str!.length, meta: size(arg.str!.length)};
       }
-      default: throw new Error(`Unknown unary operator: ${mapped}`);
+      default: Tokens.fail(`Unknown unary operator: ${mapped}`, expr);
     }
   }
 
@@ -184,11 +184,11 @@ export function evaluate(expr: Expr): Expr {
     case '-': return minus(expr);
     case '*': return binary(expr, (a, b) => a * b);
     case '/': return binary(expr, (a, b) => {
-      if (b === 0) throw new Error('Division by zero');
+      if (b === 0) Tokens.fail('Division by zero', expr);
       return Math.trunc(a / b); // ca65 truncates toward zero
     });
     case '.mod': return binary(expr, (a, b) => {
-      if (b === 0) throw new Error('Modulo operation with zero');
+      if (b === 0) Tokens.fail('Modulo operation with zero', expr);
       return a % b;
     });
     case '&': return binary(expr, (a, b) => a & b);
@@ -208,13 +208,14 @@ export function evaluate(expr: Expr): Expr {
     case '.xor': return binary(expr, (a, b) => +(!!a !== !!b));
     case '.strat': {
       const [s, idx] = expr.args!;
-      if (s.op !== 'str') throw new Error('.strat requires a string literal');
+      if (s.op !== 'str') Tokens.fail('.strat requires a string literal', expr);
       if (idx.op !== 'num') return expr; // not resolvable yet
       const ch = Array.from(s.str!)[idx.num!];
-      if (ch === undefined) throw new Error('.strat index out of range');
+      if (ch === undefined) Tokens.fail('.strat index out of range', expr);
       return {op: 'num', num: ch.codePointAt(0)!, meta: size(ch.codePointAt(0)!)};
     }
-    default: throw new Error(`Unknown operator: ${mapped} Expr: ${JSON.stringify(expr)}`);
+    default:
+      Tokens.fail(`Unknown operator: ${mapped} Expr: ${JSON.stringify(expr)}`, expr);
   }
 }
 
@@ -266,7 +267,7 @@ export function invert(expr: Expr, sym: string, result: number): number|undefine
       case '<': return result === (result & 0xff) ? invert(arg, sym, result) : undefined;
       case '>': return result === (result & 0xff) ? invert(arg, sym, result << 8) : undefined;
       case '^': return undefined;
-      default: throw new Error(`Unknown unary operator: ${expr.op}`);
+      default: Tokens.fail(`Unknown unary operator: ${expr.op}`, expr);
     }
   }
 
@@ -315,13 +316,13 @@ export function invert(expr: Expr, sym: string, result: number): number|undefine
       if (right == null) return undefined;
       if (((knownArg >>> right) << right) !== knownArg) return undefined;
       return invert(unknownArg, sym, result << right);
-    default: throw new Error(`Unknown operator: ${expr.op}`);
+    default: Tokens.fail(`Unknown operator: ${expr.op}`, expr);
   }
 }
 
 export function identifier(expr: Expr): string {
   if (expr.op === 'sym' && expr.sym) return expr.sym;
-  throw new Error(`Expected identifier but got op: ${expr.op}`);
+  Tokens.fail(`Expected identifier but got op: ${expr.op}`, expr);
 }
 
 // /** Returns the identifier. */

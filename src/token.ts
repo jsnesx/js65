@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {assertNever} from './util.ts';
+import {at, fail, type SourceInfo} from './error.ts';
+
+// The error machinery used to live here, and rather than refactor
+// it all just reexport it until i decide if its important.
+export * from './error.ts';
 
 export interface Source {
   next(): Promise<Token[]|undefined>;
@@ -23,27 +28,6 @@ export function concat(...sources: Source[]): Source {
   };
 }
 
-export interface SourceInfo {
-  ident?: string;
-  file: string;
-  line: number;
-  column: number;
-  /** macro-expansion / include stack */
-  parent?: SourceInfo;
-}
-
-export type ErrorLevel = 'info' | 'warning' | 'error';
-
-export interface AssemblerMessage {
-  /** Severity of the message */
-  level: ErrorLevel;
-  /** Human-readable message */
-  message: string;
-  /** Source location where message originated */
-  source?: SourceInfo;
-  /** JS stack trace when captured */
-  stack?: string;
-}
 export type GroupTok = 'grp';
 export type StringTok = 'ident' | 'op' | 'cs' | 'str';
 export type NumberTok = 'num';
@@ -186,14 +170,6 @@ export function name(arg: Token): string {
   }
 }
 
-export function at(arg: {source?: SourceInfo}): string {
-  const s = arg.source;
-  if (!s) return '';
-  const parent = s.parent ? at({source: s.parent}) : '';
-  return `\n  at ${s.file}:${s.line}:${s.column}${parent}`;
-  // TODO - definition vs usage?
-}
-
 /**
  * Renders a token together with its location. Only for *secondary* locations inside a
  * message ("previously defined at ...")
@@ -213,31 +189,6 @@ export function nameOf(arg: {source?: SourceInfo}|undefined): string {
   if (!arg) return 'unknown';
   const token = arg as Token;
   return token.token ? name(token) : 'unknown';
-}
-
-export class SourceError extends Error {
-  readonly source?: SourceInfo;
-  constructor(message: string, at?: {source?: SourceInfo}|SourceInfo) {
-    super(message);
-    this.name = 'SourceError';
-    const source = at && ('source' in at ? at.source : at as SourceInfo);
-    if (source) this.source = source;
-  }
-
-  /**
-   * Add a stack to the eror if we haven't gotten that resolved yet.
-   */
-  static locate(err: unknown, source?: SourceInfo): unknown {
-    if (!source || !(err instanceof Error) || err instanceof SourceError) return err;
-    const located = new SourceError(err.message, source);
-    located.stack = err.stack;
-    return located;
-  }
-}
-
-// Helper function to create a source error from the message + sourceinfo
-export function fail(message: string, at?: {source?: SourceInfo}|SourceInfo): never {
-  throw new SourceError(message, at);
 }
 
 export function expectEol(token: Token|undefined, name = 'end of line') {

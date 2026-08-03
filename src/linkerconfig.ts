@@ -14,7 +14,7 @@ import {type Segment} from './module.ts';
 import {type Token} from './token.ts';
 import * as Tokens from './token.ts';
 import {Tokenizer} from './tokenizer.ts';
-import {ErrorCollector} from './assembler.ts';
+import {ErrorCollector} from './error.ts';
 
 export type AreaType = 'ro' | 'rw';
 export type SegmentType = AreaType | 'bss' | 'zp' | 'overwrite';
