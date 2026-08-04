@@ -2,7 +2,7 @@
   "name": "js65",
   "version": "1.0.9",
   "type": "module",
-  "description": "Tool suite for assembling, linking, and smudging 6502 assembly code",
+  "description": "CLI and library for assembling, linking, patching, and smudging 6502 assembly code",
   "main": "./dist/src/libassembler.js",
   "types": "./dist/src/libassembler.d.ts",
   "exports": {
