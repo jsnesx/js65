@@ -287,8 +287,35 @@ function validateByteList(v: unknown, path: string): Array<number | { op: 'sym';
     if (isObject(e) && e.op === 'sym') {
       return { op: 'sym' as const, sym: reqString(e.sym, `${path}[${i}].sym`) };
     }
-    fail(`${path}[${i}]`, 'expected number or {op:"sym",sym}');
+    fail(`${path}[${i}]`, 'expected number or symbol');
   });
+}
+
+// Like validateByteList, but for the 'byte'/'literal' actions, whose entries can also be
+// a whole string (embedded as a string literal, run through the charmap at emit time).
+function validateByteOrStringList(v: unknown, path: string): Array<number | string | { op: 'sym'; sym: string }> {
+  if (v instanceof Uint8Array) return Array.from(v);
+  const arr = reqArray(v, path);
+  return arr.map((e, i) => {
+    if (typeof e === 'number' || typeof e === 'string') return e;
+    if (isObject(e) && e.op === 'sym') {
+      return { op: 'sym' as const, sym: reqString(e.sym, `${path}[${i}].sym`) };
+    }
+    fail(`${path}[${i}]`, 'expected number, string literal, or symbol');
+  });
+}
+
+function validateStringList(v: unknown, path: string): string[] {
+  const arr = reqArray(v, path);
+  return arr.map((e, i) => reqString(e, `${path}[${i}]`));
+}
+
+// `.strmap` output bytes are plain numbers only - no symbol references, since the mapping
+// table has to be resolved immediately rather than deferred to link time.
+function validateNumberList(v: unknown, path: string): number[] {
+  if (v instanceof Uint8Array) return Array.from(v);
+  const arr = reqArray(v, path);
+  return arr.map((e, i) => reqNumber(e, `${path}[${i}]`));
 }
 
 function validateAction(v: unknown, path: string): AssemblyAction {
@@ -307,9 +334,15 @@ function validateAction(v: unknown, path: string): AssemblyAction {
     case 'label':
       return withSource({ action: 'label' as const, label: reqString(v.label, `${path}.label`) });
     case 'byte':
-      return withSource({ action: 'byte' as const, bytes: validateByteList(v.bytes, `${path}.bytes`) });
+      return withSource({ action: 'byte' as const, bytes: validateByteOrStringList(v.bytes, `${path}.bytes`) });
     case 'word':
       return withSource({ action: 'word' as const, words: validateByteList(v.words, `${path}.words`) });
+    case 'hibytes':
+      return withSource({ action: 'hibytes' as const, values: validateByteList(v.values, `${path}.values`) });
+    case 'lobytes':
+      return withSource({ action: 'lobytes' as const, values: validateByteList(v.values, `${path}.values`) });
+    case 'literal':
+      return withSource({ action: 'literal' as const, values: validateByteOrStringList(v.values, `${path}.values`) });
     case 'org':
       return withSource({
         action: 'org' as const,
@@ -329,6 +362,16 @@ function validateAction(v: unknown, path: string): AssemblyAction {
       });
     case 'export':
       return withSource({ action: 'export' as const, name: reqString(v.name, `${path}.name`) });
+    case 'exportzp':
+      return withSource({ action: 'exportzp' as const, names: validateStringList(v.names, `${path}.names`) });
+    case 'import':
+      return withSource({ action: 'import' as const, names: validateStringList(v.names, `${path}.names`) });
+    case 'importzp':
+      return withSource({ action: 'importzp' as const, names: validateStringList(v.names, `${path}.names`) });
+    case 'global':
+      return withSource({ action: 'global' as const, names: validateStringList(v.names, `${path}.names`) });
+    case 'globalzp':
+      return withSource({ action: 'globalzp' as const, names: validateStringList(v.names, `${path}.names`) });
     case 'assign':
     case 'set': {
       if (typeof v.value !== 'number' && typeof v.value !== 'string') {
@@ -342,6 +385,38 @@ function validateAction(v: unknown, path: string): AssemblyAction {
     }
     case 'free':
       return withSource({ action: 'free' as const, size: reqNumber(v.size, `${path}.size`) });
+    case 'align': {
+      const fill = optNumber(v.fill, `${path}.fill`);
+      return withSource({
+        action: 'align' as const,
+        boundary: reqNumber(v.boundary, `${path}.boundary`),
+        ...(fill !== undefined ? { fill } : {}),
+      });
+    }
+    case 'res': {
+      const value = optNumber(v.value, `${path}.value`);
+      return withSource({
+        action: 'res' as const,
+        count: reqNumber(v.count, `${path}.count`),
+        ...(value !== undefined ? { value } : {}),
+      });
+    }
+    case 'charmap':
+      return withSource({
+        action: 'charmap' as const,
+        code: reqNumber(v.code, `${path}.code`),
+        target: reqNumber(v.target, `${path}.target`),
+      });
+    case 'strmap':
+      return withSource({
+        action: 'strmap' as const,
+        key: reqString(v.key, `${path}.key`),
+        bytes: validateNumberList(v.bytes, `${path}.bytes`),
+      });
+    case 'pushcharmap':
+      return withSource({ action: 'pushcharmap' as const });
+    case 'popcharmap':
+      return withSource({ action: 'popcharmap' as const });
     default:
       fail(`${path}.action`, `unknown action "${action}"`);
   }

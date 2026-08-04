@@ -12,12 +12,17 @@ import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest } from "./validate_modules.ts";
+import * as Exprs from './expr.ts';
 import type { Expr } from './expr.ts';
+import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
 export type { Expr, Module, Segment };
+
+// Builder API for using js65 with a fluent API instead of needing to understand the internals.
+export { AsmEngine, AsmModule, sym } from './builder.ts';
 
 /**
  * Source location for an action (from the caller's code)
@@ -33,15 +38,29 @@ export interface ActionSource {
 export type AssemblyAction =
   | { action: 'code', code: string, name?: string, source?: ActionSource }
   | { action: 'label', label: string, source?: ActionSource }
-  | { action: 'byte', bytes: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'byte', bytes: Array<number | string | { op: 'sym', sym: string }>, source?: ActionSource }
   | { action: 'word', words: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'hibytes', values: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'lobytes', values: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'literal', values: Array<number | string | { op: 'sym', sym: string }>, source?: ActionSource }
   | { action: 'org', addr: number, name?: string, source?: ActionSource }
   | { action: 'segment', name: string | string[], source?: ActionSource }
   | { action: 'reloc', name?: string, source?: ActionSource }
   | { action: 'export', name: string, source?: ActionSource }
+  | { action: 'exportzp', names: string[], source?: ActionSource }
+  | { action: 'import', names: string[], source?: ActionSource }
+  | { action: 'importzp', names: string[], source?: ActionSource }
+  | { action: 'global', names: string[], source?: ActionSource }
+  | { action: 'globalzp', names: string[], source?: ActionSource }
   | { action: 'assign', name: string, value: number | string, source?: ActionSource }
   | { action: 'set', name: string, value: number | string, source?: ActionSource }
-  | { action: 'free', size: number, source?: ActionSource };
+  | { action: 'free', size: number, source?: ActionSource }
+  | { action: 'align', boundary: number, fill?: number, source?: ActionSource }
+  | { action: 'res', count: number, value?: number, source?: ActionSource }
+  | { action: 'charmap', code: number, target: number, source?: ActionSource }
+  | { action: 'strmap', key: string, bytes: number[], source?: ActionSource }
+  | { action: 'pushcharmap', source?: ActionSource }
+  | { action: 'popcharmap', source?: ActionSource };
 
 /**
  * Assembly input - supports source code, pre-compiled modules, or a list of
@@ -176,6 +195,10 @@ function toSourceInfo(source?: ActionSource): SourceInfo | undefined {
   return { file: source.file, line: source.line, column: 0 };
 }
 
+function toValueExpr(v: number | { op: 'sym', sym: string }): Expr {
+  return typeof v === 'number' ? { op: 'num', num: v } : v;
+}
+
 /**
  * Assemble source files, pre-compiled modules, and/or action lists into
  * Module objects.
@@ -267,6 +290,18 @@ export async function assemble(
               asm.word(...action.words);
               break;
 
+            case 'hibytes':
+              asm.byte(...action.values.map(v => Exprs.hiByte(toValueExpr(v))));
+              break;
+
+            case 'lobytes':
+              asm.byte(...action.values.map(v => Exprs.loByte(toValueExpr(v))));
+              break;
+
+            case 'literal':
+              asm.byteInternal(action.values, new MaxKeySizeCacheMap());
+              break;
+
             case 'org':
               asm.org(action.addr, action.name);
               break;
@@ -281,6 +316,50 @@ export async function assemble(
 
             case 'export':
               asm.export(action.name);
+              break;
+
+            case 'exportzp':
+              asm.exportzp(...action.names);
+              break;
+
+            case 'import':
+              asm.import(...action.names);
+              break;
+
+            case 'importzp':
+              asm.importzp(...action.names);
+              break;
+
+            case 'global':
+              asm.global(...action.names);
+              break;
+
+            case 'globalzp':
+              asm.globalzp(...action.names);
+              break;
+
+            case 'align':
+              asm.align(action.boundary, action.fill);
+              break;
+
+            case 'res':
+              asm.res(action.count, action.value);
+              break;
+
+            case 'charmap':
+              asm.charMap(action.code, action.target);
+              break;
+
+            case 'strmap':
+              asm.strMap(action.key, action.bytes);
+              break;
+
+            case 'pushcharmap':
+              asm.pushCharmap();
+              break;
+
+            case 'popcharmap':
+              asm.popCharmap();
               break;
 
             case 'assign': {

@@ -59,6 +59,17 @@ public class AsmModule
         });
     }
 
+    public void Byt(string str,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "byte" },
+            { "bytes", new string[] { str } },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
     public void Word(ushort words,
         [CallerFilePath] string sourceFilePath = "",
         [CallerLineNumber] int sourceLineNumber = 0) => Word([words], sourceFilePath, sourceLineNumber);
@@ -85,6 +96,83 @@ public class AsmModule
         Actions.Add(new() {
             { "action", "word" },
             { "words", words },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void HiBytes(ushort[] values,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "hibytes" },
+            { "values", values },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void HiBytes(Dictionary<string, object>[] values,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "hibytes" },
+            { "values", values },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void LoBytes(ushort[] values,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "lobytes" },
+            { "values", values },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void LoBytes(Dictionary<string, object>[] values,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "lobytes" },
+            { "values", values },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void Literal(byte[] values,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "literal" },
+            { "values", values },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void Literal(string str,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "literal" },
+            { "values", new string[] { str } },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void Literal(Dictionary<string, object>[] values,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "literal" },
+            { "values", values },
             { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
         });
     }
@@ -171,6 +259,86 @@ public class AsmModule
         });
     }
 
+    public void ExportZp(string name,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0) => ExportZp([name], sourceFilePath, sourceLineNumber);
+
+    public void ExportZp(string[] names,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new()
+        {
+            { "action", "exportzp" },
+            { "names", names },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void Import(string name,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0) => Import([name], sourceFilePath, sourceLineNumber);
+
+    public void Import(string[] names,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new()
+        {
+            { "action", "import" },
+            { "names", names },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void ImportZp(string name,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0) => ImportZp([name], sourceFilePath, sourceLineNumber);
+
+    public void ImportZp(string[] names,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new()
+        {
+            { "action", "importzp" },
+            { "names", names },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void Global(string name,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0) => Global([name], sourceFilePath, sourceLineNumber);
+
+    public void Global(string[] names,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new()
+        {
+            { "action", "global" },
+            { "names", names },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void GlobalZp(string name,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0) => GlobalZp([name], sourceFilePath, sourceLineNumber);
+
+    public void GlobalZp(string[] names,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new()
+        {
+            { "action", "globalzp" },
+            { "names", names },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
     public void RelocExportLabel(string name, string[] segments,
         [CallerFilePath] string sourceFilePath = "",
         [CallerLineNumber] int sourceLineNumber = 0)
@@ -224,7 +392,82 @@ public class AsmModule
             { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
         });
     }
-    
+
+    public void Align(int boundary, int? fill = null,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        var dict = new Dictionary<string, object> {
+            { "action", "align" },
+            { "boundary", boundary },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        };
+        if (fill.HasValue) dict["fill"] = fill.Value;
+        Actions.Add(dict);
+    }
+
+    public void Res(int count, int? value = null,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        var dict = new Dictionary<string, object> {
+            { "action", "res" },
+            { "count", count },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        };
+        if (value.HasValue) dict["value"] = value.Value;
+        Actions.Add(dict);
+    }
+
+    public void CharMap(int code, int target,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "charmap" },
+            { "code", code },
+            { "target", target },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    // Maps a whole string key to one or more output bytes, i.e. `.strmap`.
+    public void StrMap(string key, byte value,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0) => StrMap(key, [value], sourceFilePath, sourceLineNumber);
+
+    public void StrMap(string key, byte[] bytes,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "strmap" },
+            { "key", key },
+            { "bytes", bytes },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void PushCharmap(
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "pushcharmap" },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
+    public void PopCharmap(
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Actions.Add(new() {
+            { "action", "popcharmap" },
+            { "source", new Dictionary<string, object> { { "file", sourceFilePath }, { "line", sourceLineNumber } } }
+        });
+    }
+
     public string GetDebuggerDisplay()
     {
         StringBuilder sb = new StringBuilder();
