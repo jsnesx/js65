@@ -1025,10 +1025,8 @@ export class Assembler {
         case '.globalzp': return this.globalzp(...this.parseIdentifierList(tokens));
         case '.charmap': return this.charmap(tokens);
         case '.strmap': return this.strmap(tokens);
-        case '.pushcharmap': return this.parseNoArgs(tokens, 1),
-          void this.charmapStack.push(new MaxKeySizeCacheMap(this.charMapping));
-        case '.popcharmap': return this.parseNoArgs(tokens, 1),
-          void (this.charMapping = this.charmapStack.pop() ?? this.charMapping);
+        case '.pushcharmap': return this.parseNoArgs(tokens, 1), this.pushCharmap();
+        case '.popcharmap': return this.parseNoArgs(tokens, 1), this.popCharmap();
         case '.setcpu': return this.setCpu(this.parseStr(tokens, 1));
         case '.pushcpu': return this.parseNoArgs(tokens, 1), this.pushCpu();
         case '.popcpu': return this.parseNoArgs(tokens, 1), this.popCpu();
@@ -1648,8 +1646,20 @@ export class Assembler {
     if (args.length !== 2) this.fail(`.charmap expects an index and a value`, tokens[0]);
     const code = this.parseConst(args[0], 0);
     const target = this.parseConst(args[1], 0);
-    if (code < 0 || code > 255) this.fail(`.charmap index out of range: ${code}`, tokens[0]);
+    this.charMap(code, target);
+  }
+
+  charMap(code: number, target: number) {
+    if (code < 0 || code > 255) this.fail(`.charmap index out of range: ${code}`);
     this.charMapping.set(String.fromCodePoint(code), [target & 0xff]);
+  }
+
+  pushCharmap() {
+    this.charmapStack.push(new MaxKeySizeCacheMap(this.charMapping));
+  }
+
+  popCharmap() {
+    this.charMapping = this.charmapStack.pop() ?? this.charMapping;
   }
 
   // Our own custom string based mapping, which allows any N input bytes to M output bytes
@@ -1682,6 +1692,12 @@ export class Assembler {
       // Otherwise, its probaly some constant value or something.
       bytes = [this.parseConst(valueToks, 0)];
     }
+    this.strMap(key, bytes);
+  }
+
+  strMap(key: string, bytes: number[]) {
+    if (!key) this.fail(`.strmap key must not be empty`);
+    if (!bytes.length) this.fail(`.strmap value must not be empty`);
     this.charMapping.set(key, bytes.map(b => b & 0xff));
   }
 
