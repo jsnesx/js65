@@ -29,6 +29,7 @@ export interface Callbacks {
 }
 
 class Arguments {
+  help = false;
   outfile = "";
   op: ((src: string, cpu: Cpu, prg: Uint8Array) => string) | undefined = undefined;
   rom = "";
@@ -128,7 +129,7 @@ export class Cli {
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (arg === '-h' || arg === '--help') {
-        this.usage(0);
+        out.help = true;
       } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
         if (out.outfile) this.usage();
         out.outfile = args[++i];
@@ -203,6 +204,10 @@ export class Cli {
 
   public async run(argv: string[]) {
     const args = this.parseArgs(argv);
+
+    if (args.help) {
+      return this.usage(0);
+    }
 
     if (args.files.length === 0) {
       return this.usage(1, [new Error("No input files provided")]);
