@@ -1,7 +1,38 @@
 {
   "name": "js65",
-  "version": "0.0.0",
-  "main": "target/debug/js/patch.js",
+  "version": "1.0.9",
+  "type": "module",
+  "description": "Tool suite for assembling, linking, and smudging 6502 assembly code",
+  "main": "./dist/src/libassembler.js",
+  "types": "./dist/src/libassembler.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/libassembler.d.ts",
+      "default": "./dist/src/libassembler.js"
+    },
+    "./cli": {
+      "types": "./dist/src/cli.d.ts",
+      "default": "./dist/src/cli.js"
+    },
+    "./node": {
+      "types": "./dist/integrations/node.d.ts",
+      "default": "./dist/integrations/node.js"
+    }
+  },
+  "bin": {
+    "js65": "./integrations/npm/js65.mjs"
+  },
+  "files": [
+    "dist",
+    "integrations/npm",
+    "README.md",
+    "LICENSE.txt",
+    "LICENSE-3RD-PARTY.txt"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
   "scripts": {
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
@@ -10,16 +41,18 @@
     "quickjs-exe": "bun run quickjs-bundle && qjs -c ./build/quickjs.bundle.js -o ./build/js65-qjs",
     "hermes-exe": "bun run integrations/hermes/hermes-build.ts",
     "build": "bun run --no-exit-on-error --parallel exe hermes-exe quickjs-exe",
-    "bench": "bun run build && bun run bench/bench.ts"
-  },
-  "bin": {
-    "js65": "target/release/bin/js65"
+    "bench": "bun run build && bun run bench/bench.ts",
+    "build:npm": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test test"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jsnesx/js65.git"
   },
   "author": "Stephen Hicks",
+  "contributors": ["James Rowe"],
   "license": "MPL-2.0",
   "bugs": {
     "url": "https://github.com/jsnesx/js65/issues"
@@ -31,8 +64,8 @@
     "typescript": "^5.8.3",
     "typescript-language-server": "^2.3.0"
   },
-  "description": "",
   "dependencies": {
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "sha1-uint8array": "^0.10.7"
   }
 }

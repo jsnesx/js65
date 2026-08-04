@@ -145,11 +145,16 @@ jobs:
           echo "Staged native shared libraries:"
           find integrations/dotnet/js65.hermes/runtimes -type f
       - name: Pack NuGet packages
+        shell: bash
         run: |
-          dotnet pack -c Release integrations/dotnet/js65.interop/js65.interop.csproj --output build/nuget/
-          dotnet pack -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj --output build/nuget/
-          dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/
-          dotnet pack -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj --output build/nuget/
+          VERSION_ARGS=()
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION_ARGS=(-p:Version="${GITHUB_REF_NAME#v}")
+          fi
+          dotnet pack -c Release integrations/dotnet/js65.interop/js65.interop.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
+          dotnet pack -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
+          dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
+          dotnet pack -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
       - name: Upload NuGet artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -180,3 +185,70 @@ jobs:
           dotnet-version: '8.0.x'
       - name: NuGet push
         run: dotnet nuget push nuget/*.nupkg --api-key ${{steps.login.outputs.NUGET_API_KEY}} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  npm-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout js65
+        uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Install deps
+        run: bun install
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+      - name: Build npm package
+        run: npm run build:npm
+      - name: Pack tarball
+        run: npm pack
+      - name: Smoke test the packed tarball
+        run: |
+          set -e
+          npm install -g ./js65-*.tgz
+          js65 --help
+          printf '.segment "code"\nlda #\$01\nrts\n' > smoke.s
+          js65 --target=nes-nrom -o smoke.nes smoke.s
+          test -s smoke.nes
+          mkdir smoke-lib && cd smoke-lib
+          npm init -y >/dev/null
+          npm install ../js65-*.tgz
+          node --input-type=module -e "
+            import { compile } from 'js65';
+            const result = await compile(
+              [{ type: 'actions', actions: [{ action: 'code', code: 'lda #\$01\nrts' }] }],
+              { target: 'nes-nrom' },
+            );
+            if (!result.success) throw new Error(result.messages.map(m => m.message).join('\n'));
+            console.log('npm library smoke test passed');
+          "
+      - name: Upload npm package
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: js65-*.tgz
+          if-no-files-found: error
+
+  publish-npm:
+    needs: npm-package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write     # OIDC for npm Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm install -g npm@latest      # trusted publishing requires npm >= 11.5.1
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: .
+      - run: npm publish ./js65-*.tgz --access public
