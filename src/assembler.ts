@@ -781,6 +781,9 @@ export class Assembler {
         }
         // Zeropage imports carry a one-byte size so references pick zp modes.
         const expr: Expr = {op: 'im', sym: name};
+        // Carry the reference site so the linker can point at something if the
+        // import turns out never to have been exported.
+        if (sym.ref?.source) expr.source = sym.ref.source;
         if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
         sym.expr = expr;
       } else {
