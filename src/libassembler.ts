@@ -13,7 +13,7 @@ import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest } from "./validate_modules.ts";
 import type { Expr } from './expr.ts';
-import { SourceError, type SourceInfo, type AssemblerMessage } from './token.ts';
+import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
@@ -391,12 +391,14 @@ export function link(
 ): LinkResult {
   // Create a copy of messages so we can add to it
   const allMessages = [...messages];
+  const collector = new ErrorCollector();
 
   try {
     const linker = new Linker({
       target: options?.target,
       linkerConfig: options?.linkerConfig,
       linkerConfigName: options?.linkerConfigName,
+      errorCollector: collector,
     });
 
     // Load base ROM if provided and not generating IPS
@@ -433,6 +435,7 @@ export function link(
     const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
     const mapFile = options?.generateMapFile ? linker.report(true) : '';
 
+    allMessages.push(...collector.getMessages());
     const hasErrors = allMessages.some(m => m.level === 'error');
 
     return {
@@ -444,8 +447,9 @@ export function link(
       messages: allMessages
     };
   } catch (err) {
-    // Linker threw an error - add it to messages and return failure
-    allMessages.push(messageFromException(err));
+    // Linker threw an error - add it to messages and return failure.
+    allMessages.push(...collector.getMessages());
+    pushException(allMessages, err);
 
     return {
       success: false,

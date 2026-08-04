@@ -667,12 +667,70 @@ AnotherLabel:
 `
       };
 
-      const result = await compile([module1], { lineContinuations: true });
+      const result = await compile(
+        [module1], { lineContinuations: true, generateDebugInfo: true });
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
-      // Should have at least one error about missing imports
-      expect(errors.length).toBeGreaterThanOrEqual(1);
+      expect(errors.length).toBeGreaterThanOrEqual(3);
+      // Every missing import is named, each exactly once, and points at the
+      // line that used it.
+      for (const name of ['MissingFunc1', 'MissingFunc2', 'MissingFunc3']) {
+        const matches = errors.filter(e => e.message.includes(name));
+        expect(matches.length).toBe(1);
+        expect(matches[0].message).toBe(`Symbol never exported ${name}`);
+        expect(matches[0].source?.file).toBe('main.s');
+      }
+    });
+
+    it('should collect multiple unplaceable chunks', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $30 :mem $8000 :off $0000
+.segment "CODE"
+.reloc
+one:
+  .res 40
+.reloc
+two:
+  .res 40
+.reloc
+three:
+  .res 40
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile(
+        [input], { lineContinuations: true, generateDebugInfo: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(
+        m => m.level === 'error' && m.message.includes('Could not find space'));
+      // The first chunk fits; the other two are both reported.
+      expect(errors.length).toBe(2);
+      expect(errors.every(e => e.source?.line != null)).toBe(true);
+    });
+
+    it('should collect multiple failing link-time asserts', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $100 :mem $8000 :off $0000
+.segment "CODE"
+.reloc
+lbl1:
+  rts
+.reloc
+lbl2:
+  rts
+.assert lbl1 > $9000, error, "lbl1 too low"
+.assert lbl2 > $9000, error, "lbl2 too low"
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile(
+        [input], { lineContinuations: true, generateDebugInfo: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(
+        m => m.level === 'error' && m.message.includes('Assertion failed'));
+      expect(errors.length).toBe(2);
+      expect(errors.map(e => e.source?.line)).toEqual([10, 11]);
     });
 
     it('should collect every parse error in a file', async function() {
