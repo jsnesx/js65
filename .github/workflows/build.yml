@@ -43,6 +43,20 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
+      - name: Get .NET SDK version
+        id: dotnet-version
+        shell: bash
+        run: echo "version=$(dotnet --version)" >> "$GITHUB_OUTPUT"
+      - name: Cache .NET WASM workload
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.DOTNET_ROOT }}/packs
+            ${{ env.DOTNET_ROOT }}/sdk-manifests
+            ${{ env.DOTNET_ROOT }}/metadata
+          key: ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-${{ hashFiles('integrations/dotnet/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
       - name: Install WASM workload
         run: dotnet workload restore
       - uses: oven-sh/setup-bun@v2
@@ -116,6 +130,20 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
+      - name: Get .NET SDK version
+        id: dotnet-version
+        shell: bash
+        run: echo "version=$(dotnet --version)" >> "$GITHUB_OUTPUT"
+      - name: Cache .NET WASM workload
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.DOTNET_ROOT }}/packs
+            ${{ env.DOTNET_ROOT }}/sdk-manifests
+            ${{ env.DOTNET_ROOT }}/metadata
+          key: ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-${{ hashFiles('integrations/dotnet/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
       - name: Install WASM workload
         run: dotnet workload restore
       - uses: oven-sh/setup-bun@v2
