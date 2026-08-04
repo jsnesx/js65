@@ -279,4 +279,15 @@ jobs:
         with:
           name: npm-package
           path: .
-      - run: npm publish ./js65-*.tgz --access public
+      - name: Determine npm dist-tag
+        id: npm_tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            TAG="${VERSION#*-}"
+            TAG="${TAG%%.*}"
+          else
+            TAG="latest"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - run: npm publish ./js65-*.tgz --access public --tag ${{ steps.npm_tag.outputs.tag }}
