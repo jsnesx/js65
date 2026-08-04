@@ -1,2 +1,2 @@
 # js65
-Tool suite for assembling, linking, and smudging 6502 assembly code
+CLI and library for assembling, linking, patching, and smudging 6502 assembly code

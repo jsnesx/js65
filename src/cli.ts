@@ -3,7 +3,7 @@
 
 import { Cpu } from './cpu.ts';
 import { clean, smudge } from './smudge.ts';
-import { sha1 } from "./sha1";
+import { createHash } from "sha1-uint8array";
 import { Base64 } from './base64.ts';
 import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
@@ -348,7 +348,7 @@ export class Cli {
 
           // if (err) this.usage(5, [err]);
           const sha = Array.from(
-              new Uint8Array(sha1(inbytes!)),
+              new Uint8Array(createHash().update(inbytes!).digest()),
               x => x.toString(16).padStart(2, '0')).join('');
           if (sha === shaTag) {
             fullRom = Uint8Array.from(inbytes!);
