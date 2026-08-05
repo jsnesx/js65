@@ -11,6 +11,7 @@ import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
+import { createHash } from 'sha1-uint8array';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
@@ -42,6 +43,23 @@ function isSizeOfSymbol(name: string): boolean {
  */
 const PREDECLARED_SEGMENTS = new Map<string, mod.Segment>([
   ['ZEROPAGE', {name: 'ZEROPAGE', addressing: 1}],
+]);
+
+const ANON_SEGMENT_ATTR_REASONS = new Map<string, string>([
+  ['off', `output offset is determined by the position in the file`],
+  ['mem', `PC address is determined by the segment value`],
+  ['out', `it always goes to the main output file`],
+  ['load', ''],
+  ['run', ''],
+  ['alignload', ''],
+  ['zp', `cannot write to a ram segment`],
+  ['zeropage', `cannot write to a ram segment`],
+  ['bss', `cannot write to a ram segment`],
+  ['optional', ''],
+  ['dedupe', ''],
+  ['default', `cannot write to a default segment`],
+  ['align', `a segment starts where the previous one ended. Use .align instead`],
+  ['define', ''],
 ]);
 
 /**
@@ -360,7 +378,19 @@ export class Assembler {
    */
   private _segmentOffset = 0;
 
+  /** Returns an early error in assembling if you mix segment modes */
+  private _segmentMode?: 'named'|'anon';
+
   constructor(readonly cpu = Cpu.P02, readonly opts: Options = {}) {}
+
+  private generateAnonSegmentName(memory: number, size: number): string {
+    // reuse _segmentOffset for a count of segments used in this file to help make the hash unique.
+    const file = this.opts.moduleName ?? this._source?.file ?? '';
+    const input = [file, String(this._segmentOffset++),
+                   String(memory), String(size)].join('\0');
+    const hash = createHash().update(input).digest('hex').slice(0, 12);
+    return `${mod.ANON_SEGMENT_PREFIX}${hash}`;
+  }
 
   /** Sets the current source location for debug info from an external source. */
   setSource(source?: Tokens.SourceInfo) {
@@ -863,6 +893,7 @@ export class Assembler {
       if (symbol.export != null) out.export = symbol.export;
       symbols.push(out);
     }
+    // declaration order is important here because anon segments define their output in order
     const segments: mod.Segment[] = [...this.segmentData.values()];
 
     // Collect all symbols from all scopes for debug purposes
@@ -1481,8 +1512,22 @@ export class Assembler {
     this._name = name;
   }
 
+  private setSegmentMode(mode: 'named'|'anon', at?: Token) {
+    if (this._segmentMode && this._segmentMode !== mode) {
+      this.fail(mode === 'anon'
+          ? `Cannot use an anonymous .segment after a named .segment; ` +
+            `a module uses one style or the other`
+          : `Cannot use a named .segment after an anonymous .segment; ` +
+            `a module uses one style or the other`, at);
+    }
+    this._segmentMode = mode;
+  }
+
   segment(...segments: Array<string|mod.Segment>) {
     // Usage: .segment "1a", "1b", ...
+    for (const s of segments) {
+      this.setSegmentMode(mod.Segment.isAnon(s) ? 'anon' : 'named');
+    }
     // A trailing `.align` belongs to the segment it appeared in, so pad it out
     // here rather than letting it leak onto the next segment's chunk.
     this.flushPendingAlign();
@@ -1982,6 +2027,7 @@ export class Assembler {
   }
 
   pushSeg(...segments: Array<string|mod.Segment>) {
+    this.preventInvalidAnonSegChange('.pushseg');
     this.flushPendingAlign();
     this.segmentStack.push([this.segments, this._chunk]);
     // If pushseg was called without any segments, just keep the current segment
@@ -1991,10 +2037,18 @@ export class Assembler {
   }
 
   popSeg() {
+    this.preventInvalidAnonSegChange('.popseg');
     if (!this.segmentStack.length) this.fail(`.popseg without .pushseg`);
     this.flushPendingAlign();
     [this.segments, this._chunk] = this.segmentStack.pop()!;
     this._org = this._chunk?.org;
+  }
+
+  private preventInvalidAnonSegChange(directive: string) {
+    if (this._segmentMode === 'anon') {
+      this.fail(`${directive} cannot be used with anonymous segments; ` +
+                `they are sequential file positions, not a stack`);
+    }
   }
 
   setCpu(name: string) {
@@ -2112,8 +2166,16 @@ export class Assembler {
       }
       this.fail(`Expected a segment list`, tokens[start - 1]);
     }
-    return Tokens.parseArgList(tokens, 1).map(ts => {
+    return Tokens.parseArgList(tokens, 1).map((ts, _i, all) => {
+      // `.segment $8000 :size $4000` - an address rather than a name.
+      if (ts[0]?.token === 'num') return this.parseAnonSegment(ts, all.length);
       const str = this._segmentPrefix + Tokens.expectString(ts[0]);
+      // Check the composed name so `.segmentprefix "@"` can't smuggle one in.
+      if (str.startsWith(mod.RESERVED_SEGMENT_PREFIX)) {
+        this.fail(
+            `Segment name may not start with '${mod.RESERVED_SEGMENT_PREFIX}', which is reserved: ${str}`,
+            ts[0]);
+      }
       if (ts.length === 1) return str;
       if (!Tokens.eq(ts[1], Tokens.COLON)) {
         this.fail(`Expected comma or colon: ${Tokens.name(ts[1])}`, ts[1]);
@@ -2157,6 +2219,59 @@ export class Assembler {
       }
       return seg;
     });
+  }
+
+  /**
+   * Parses an anonymous segment: `.segment $8000 :size $4000 [:fill <$ff>]`.
+   *
+   * The positional address is the segment's `memory`. There is deliberately no
+   * `offset` parameter. Anonymous segments are laid out sequentially by the
+   * linker in module-read order.
+   */
+  parseAnonSegment(ts: Token[], argCount: number): mod.Segment {
+    if (argCount > 1) {
+      this.fail(`An anonymous .segment may not appear in a comma-separated list`,
+                ts[0]);
+    }
+    const colon = Tokens.find(ts, Tokens.COLON, 0);
+    if (colon < 0) {
+      this.fail(`An anonymous .segment requires :size`, ts[0]);
+    }
+    // allow math expressions in the PC address
+    const memory = this.parseConst(ts.slice(0, colon), 0);
+
+    let size: number|undefined;
+    let fill: number|undefined;
+    let bank: number|undefined;
+    for (const [key, val] of Tokens.parseAttrList(ts, colon)) {
+      const rejected = ANON_SEGMENT_ATTR_REASONS.get(key);
+      if (rejected != null) {
+        this.fail(`Segment attr ${key} is not allowed on an anonymous .segment` +
+                  (rejected ? `: ${rejected}` : ''), ts[0]);
+      }
+      switch (key) {
+        case 'size': size = this.parseConst(val, 0); break;
+        // `:fill` with no value fills with zeros, like ld65's `fill = yes`.
+        case 'fill': fill = val.length ? this.parseConst(val, 0) : 0; break;
+        // Pure metadata, for `^` bank-byte exprs and LinkSegment.bank.
+        case 'bank': bank = this.parseConst(val, 0); break;
+        // js65 has no read-only concept, so accept and ignore ld65's types.
+        case 'ro': case 'rw': break;
+        default: this.fail(`Unknown segment attr: ${key}`, ts[0]);
+      }
+    }
+    if (size === undefined) {
+      this.fail(`An anonymous .segment requires :size`, ts[0]);
+    }
+
+    const seg: mod.Segment = {name: this.generateAnonSegmentName(memory, size), memory, size};
+    if (bank !== undefined) seg.bank = bank;
+    if (fill !== undefined) {
+      seg.fill = fill;
+      seg.free = [[memory, memory + size]];
+    }
+
+    return seg;
   }
 
   parseResArgs(tokens: Token[]): [number, number?] {
@@ -2359,6 +2474,7 @@ export interface Options {
   overwriteMode?: mod.OverwriteMode;
   refExtractor?: RefExtractor;
   generateDebugInfo?: boolean;
+  moduleName?: string;
 }
 
 

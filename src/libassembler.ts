@@ -249,8 +249,9 @@ export async function assemble(
       }
 
       if (input.type === 'actions') {
-        const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
         let module_name = input.name ?? `module_${i}`;
+        const asm = currentAssembler =
+            new Assembler(Cpu.P02, {...asmOpts, moduleName: module_name});
         const original_module_name = module_name;
 
         for (const action of input.actions) {
@@ -396,7 +397,8 @@ export async function assemble(
       }
 
       // Process source code
-      const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
+      const asm = currentAssembler =
+          new Assembler(Cpu.P02, {...asmOpts, moduleName: input.name});
       const toks = new TokenStream(
         callbacks?.readText,
         callbacks?.readBinary,
