@@ -9,6 +9,12 @@ build/
 .vscode/
 .DS_Store
 
+# Hugo site (website/)
+website/public/
+website/resources/
+website/_vendor/
+website/.hugo_build.lock
+
 # Logs
 logs
 *.log
