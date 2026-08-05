@@ -750,7 +750,9 @@ lbl2:
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
       expect(errors.map(e => e.message)).toEqual([
-        'Expected constant string: NUM[$3039]',
+        // A numeric `.segment` is the anonymous form, so this is now the
+        // missing-`:size` error rather than "expected a string".
+        'An anonymous .segment requires :size',
         'Missing term',
         'No close paren: (',
         'Bad address mode add for nop',

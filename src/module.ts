@@ -127,8 +127,15 @@ export interface Segment {
   free?: number[][];
 }
 
+export const RESERVED_SEGMENT_PREFIX = '@';
+
+export const ANON_SEGMENT_PREFIX = '@anon@';
+
 // deno-lint-ignore no-namespace
 export namespace Segment {
+  export function isAnon(s: Segment|string): boolean {
+    return (typeof s === 'string' ? s : s.name).startsWith(ANON_SEGMENT_PREFIX);
+  }
   export function merge(a: Segment, b: Segment): Segment {
     const seg = {...a, ...b};
     const free = [...(a.free || []), ...(b.free || [])];
