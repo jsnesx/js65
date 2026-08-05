@@ -1,0 +1,10 @@
+# Per-OS download links for the /download/ page.
+- id: windows
+  label: Windows
+  url: "#"
+- id: macos
+  label: macOS
+  url: "#"
+- id: linux
+  label: Linux
+  url: "#"

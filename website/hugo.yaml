@@ -1,0 +1,64 @@
+baseURL: "https://jsnesx.github.io/js65/"
+locale: en-US
+title: js65
+
+module:
+  imports:
+    - path: github.com/imfing/hextra
+
+enableRobotsTXT: true
+enableGitInfo: false
+
+taxonomies: {}
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true
+  highlight:
+    noClasses: false
+
+menu:
+  main:
+    - name: Docs
+      pageRef: /docs
+      weight: 1
+    - name: Download
+      pageRef: /download
+      weight: 2
+    - name: Search
+      weight: 3
+      params:
+        type: search
+    - name: GitHub
+      weight: 4
+      url: "https://github.com/jsnesx/js65"
+      params:
+        icon: github
+
+params:
+  description: Patching assembler for 6502
+
+  navbar:
+    displayTitle: true
+    displayLogo: false
+
+  theme:
+    default: system
+    displayToggle: true
+
+  footer:
+    displayCopyright: false
+    displayPoweredBy: false
+    width: normal
+
+  editURL:
+    enable: true
+    base: "https://github.com/jsnesx/js65/edit/main/website/content"
+
+  toc:
+    displayToc: true
+
+  search:
+    enable: true
+    type: flexsearch

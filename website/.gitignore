@@ -1,0 +1,7 @@
+# Hugo build output
+public/
+resources/
+.hugo_build.lock
+
+# Hugo Modules vendor (regenerate with `hugo mod vendor`)
+_vendor/
