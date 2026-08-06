@@ -4,7 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
 import {FreeSpace, Linker} from '../src/linker.ts';
-import {type Module} from '../src/module.ts';
+import {type Module, type Segment} from '../src/module.ts';
 import {SourceError} from '../src/token.ts';
 import * as util from '../src/util.ts';
 
@@ -1400,6 +1400,192 @@ describe('Linker with an ld65 config', function() {
     }
     expect(err).toBeInstanceOf(SourceError);
     expect((err as SourceError).source).toMatchObject({file: 'test.cfg'});
+  });
+});
+
+describe('anonymous segments', function() {
+  function anon(hash: string, memory: number, size: number,
+                extra: Partial<Segment> = {}): Segment {
+    return {name: `@anon@bank.s:${LINES[hash] ?? 1}:${hash}`, memory, size, ...extra};
+  }
+  const LINES: Record<string, number> = {aaa: 1, bbb: 2, ccc: 3};
+  const nameOf = (hash: string) => anon(hash, 0, 0).name;
+
+  it('should hand out sequential file offsets within one module', function() {
+    const m = {
+      chunks: [
+        {segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)},
+        {segments: [nameOf('bbb')], org: 0x8000, data: Uint8Array.of(3, 4)},
+      ],
+      segments: [anon('aaa', 0x8000, 0x10), anon('bbb', 0x8000, 0x10)],
+    };
+    // Both segments keep memory $8000, but land at file offsets 0 and $10.
+    expect(chunks(link(m))).toEqual([[0, [1, 2]], [0x10, [3, 4]]]);
+  });
+
+  it('should hand out offsets across modules in read order', function() {
+    const a = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    const b = {
+      chunks: [{segments: [nameOf('bbb')], org: 0x9000, data: Uint8Array.of(3, 4)}],
+      segments: [anon('bbb', 0x9000, 0x10)],
+    };
+    expect(chunks(link(a, b))).toEqual([[0, [1, 2]], [0x10, [3, 4]]]);
+  });
+
+  it('should reverse the offsets when the module order reverses', function() {
+    const a = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    const b = {
+      chunks: [{segments: [nameOf('bbb')], org: 0x9000, data: Uint8Array.of(3, 4)}],
+      segments: [anon('bbb', 0x9000, 0x10)],
+    };
+    // Link order is the single source of truth for layout.
+    expect(chunks(link(b, a))).toEqual([[0, [3, 4]], [0x10, [1, 2]]]);
+  });
+
+  it('should keep declaration order when it disagrees with every other key', function() {
+    // Validate that the declaration order for the segments matches the link order
+    // if these got outta sync with a future change, it could cause headaches.
+    const m = {
+      chunks: [
+        {segments: [nameOf('ccc')], org: 0xa000, data: Uint8Array.of(5, 6)},
+        {segments: [nameOf('bbb')], org: 0x9000, data: Uint8Array.of(3, 4)},
+        {segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)},
+      ],
+      segments: [anon('ccc', 0xa000, 0x10), anon('bbb', 0x9000, 0x10),
+                 anon('aaa', 0x8000, 0x10)],
+    };
+    // Declared ccc, bbb, aaa -> that is the file order, addresses notwithstanding.
+    expect(chunks(link(m)))
+        .toEqual([[0, [5, 6]], [0x10, [3, 4]], [0x20, [1, 2]]]);
+  });
+
+  it('should reserve file space for an empty segment', function() {
+    const m = {
+      chunks: [
+        {segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)},
+        {segments: [nameOf('ccc')], org: 0xa000, data: Uint8Array.of(5, 6)},
+      ],
+      // The middle segment holds no chunks, but still owns its $10 of file.
+      segments: [anon('aaa', 0x8000, 0x10), anon('bbb', 0x9000, 0x10),
+                 anon('ccc', 0xa000, 0x10)],
+    };
+    expect(chunks(link(m))).toEqual([[0, [1, 2]], [0x20, [5, 6]]]);
+  });
+
+  it('should fill the whole range of a :fill segment', function() {
+    const m = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8002, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x8,
+                      {fill: 0xff, free: [[0x8000, 0x8008]]})],
+    };
+    expect(chunks(link(m)))
+        .toEqual([[0, [0xff, 0xff, 1, 2, 0xff, 0xff, 0xff, 0xff]]]);
+  });
+
+  it('should reject mixing with a named segment', function() {
+    const a = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    const b = {
+      chunks: [{segments: ['code'], org: 0x9000, data: Uint8Array.of(3, 4)}],
+      segments: [{name: 'code', memory: 0x9000, size: 0x10, offset: 0x10}],
+    };
+    expect(() => link(a, b))
+        .toThrow(/Anonymous segments cannot be combined with named segments/);
+  });
+
+  it('should reject mixing with an ld65 config', function() {
+    const m = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    const cfg = `
+      MEMORY { PRG: start = $8000, size = $10, file = %O; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const linker = new Linker({linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+    expect(() => linker.read(m).link())
+        .toThrow(/A linker config cannot be combined with anonymous segments/);
+  });
+
+  it('should reject mixing with a --target', function() {
+    const m = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    const linker = new Linker({target: 'nes-nrom'});
+    expect(() => linker.read(m).link())
+        .toThrow(/--target nes-nrom cannot be combined with anonymous segments/);
+  });
+
+  it('should reject a duplicate anonymous segment name', function() {
+    // Two modules that somehow minted the same hash would otherwise be merged
+    // last-wins, silently fusing two banks into one.
+    const a = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    const b = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(3, 4)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    expect(() => link(a, b))
+        .toThrow(/Duplicate anonymous segment @anon@bank\.s:1:aaa/);
+  });
+
+  it('should reject a chunk that named no segment', function() {
+    const m = {
+      chunks: [{segments: [], data: Uint8Array.of(1, 2)},
+               {segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(3, 4)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    expect(() => link(m)).toThrow(/emitted before the first \.segment/);
+  });
+
+  it('should reject an .org outside its segment', function() {
+    const m = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x9000, data: Uint8Array.of(1, 2)}],
+      segments: [anon('aaa', 0x8000, 0x10)],
+    };
+    expect(() => link(m)).toThrow(
+        /\.org \$9000 is outside the anonymous segment @bank\.s:1 \$8000/);
+  });
+
+  it('should label anonymous segments by declaration site in the map',
+     function() {
+    const m = {
+      chunks: [
+        {segments: [nameOf('aaa')], org: 0x8000, data: Uint8Array.of(1, 2)},
+        {segments: [nameOf('bbb')], org: 0x8000, data: Uint8Array.of(3, 4)},
+      ],
+      // Two banks at the same address: only the line tells them apart.
+      segments: [anon('aaa', 0x8000, 0x10), anon('bbb', 0x8000, 0x10)],
+    };
+    const linker = new Linker();
+    linker.read(m).link();
+    const report = linker.report();
+    expect(report).toContain('@bank.s:1 $8000');
+    expect(report).toContain('@bank.s:2 $8000');
+    // The hash never reaches the report.
+    expect(report).not.toContain('@anon@');
+  });
+
+  it('should fall back to the raw name when it has no source', function() {
+    // A hand-built module (or an older object file) whose name isn't in the
+    // generated shape still links, and prints as-is rather than crashing.
+    const m = {
+      chunks: [{segments: ['@anon@bare'], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [{name: '@anon@bare', memory: 0x8000, size: 0x10}],
+    };
+    const linker = new Linker();
+    expect(chunks(linker.read(m).link())).toEqual([[0, [1, 2]]]);
+    expect(linker.report()).toContain('@anon@bare');
   });
 });
 

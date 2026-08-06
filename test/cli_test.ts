@@ -390,6 +390,65 @@ describe('CLI', function() {
       return written;
     }
   });
+
+  describe('anonymous segments', function() {
+    const source = `
+.segment $8000 :size $10
+Start:
+  lda #$42
+  rts
+
+.segment $9000 :size $10
+  jsr Start
+  rts
+`;
+
+    it('should survive the .o round trip', async function() {
+      // Anon-ness lives in the segment name, so this also confirms nothing in
+      // the gzip + JSON + validate round trip strips the reserved prefix.
+      const objs = await run({'main.s': source},
+                             ['-c', '-o', 'main.o', 'main.s']);
+      const obj = objs.get('main.o');
+      expect(obj).toBeTruthy();
+
+      const linked = await run({'main.o': obj!}, ['-o', 'out.bin', 'main.o']);
+      const oneStep = await run({'main.s': source},
+                                ['-o', 'out.bin', 'main.s']);
+      expect([...linked.get('out.bin')!]).toEqual([...oneStep.get('out.bin')!]);
+      // Sanity check the layout actually made it through.
+      expect([...oneStep.get('out.bin')!.slice(0, 3)]).toEqual([0xa9, 0x42, 0x60]);
+      expect([...oneStep.get('out.bin')!.slice(0x10, 0x14)])
+          .toEqual([0x20, 0x00, 0x80, 0x60]);
+    });
+
+    /** Runs the CLI over an in-memory filesystem keyed by filename. */
+    async function run(fs: Record<string, string|Uint8Array>, args: string[]) {
+      const written = new Map<string, Uint8Array>();
+      let exitCode = 0;
+      const get = (filename: string) => {
+        const f = fs[filename] ?? fs[joinDir('', filename)];
+        if (f == null) throw new Error(`no such file: ${filename}`);
+        return f;
+      };
+      const cli = new Cli({
+        fsReadString: async (_path, filename) => {
+          const f = get(filename);
+          return typeof f === 'string' ? f : new TextDecoder().decode(f);
+        },
+        fsReadBytes: async (_path, filename) => {
+          const f = get(filename);
+          return typeof f === 'string' ? new TextEncoder().encode(f) : f;
+        },
+        fsWriteString: async () => {},
+        fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
+        fsWalk: async () => {},
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(args);
+      if (exitCode !== 0) throw new Error(`cli exited with code ${exitCode}`);
+      return written;
+    }
+  });
 });
 
 async function make(args: string[], input: string, bytes: Uint8Array|null = null) : Promise<[string, Uint8Array]> {
