@@ -131,10 +131,37 @@ export const RESERVED_SEGMENT_PREFIX = '@';
 
 export const ANON_SEGMENT_PREFIX = '@anon@';
 
+/** Where an anonymous segment was declared, recovered from its name. */
+export interface AnonSegmentSource {
+  file: string;
+  /** Undefined when the module was assembled without debug info. */
+  line?: number;
+}
+
+export function anonSegmentName(file: string, line: number|undefined,
+                                hash: string): string {
+  return `${ANON_SEGMENT_PREFIX}${file}:${line ?? ''}:${hash}`;
+}
+
 // deno-lint-ignore no-namespace
 export namespace Segment {
   export function isAnon(s: Segment|string): boolean {
     return (typeof s === 'string' ? s : s.name).startsWith(ANON_SEGMENT_PREFIX);
+  }
+  /** Parses the anonSegmentName into a file:line pair for slightly better error reporting */
+  export function anonSource(s: Segment|string): AnonSegmentSource|undefined {
+    const name = typeof s === 'string' ? s : s.name;
+    if (!isAnon(name)) return undefined;
+    const body = name.substring(ANON_SEGMENT_PREFIX.length);
+    const hashAt = body.lastIndexOf(':');
+    if (hashAt < 0) return undefined;
+    const lineAt = body.lastIndexOf(':', hashAt - 1);
+    if (lineAt < 0) return undefined;
+    const file = body.substring(0, lineAt);
+    const lineStr = body.substring(lineAt + 1, hashAt);
+    if (!file) return undefined;
+    if (lineStr && !/^\d+$/.test(lineStr)) return undefined;
+    return {file, line: lineStr ? Number(lineStr) : undefined};
   }
   export function merge(a: Segment, b: Segment): Segment {
     const seg = {...a, ...b};

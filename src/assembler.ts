@@ -385,11 +385,14 @@ export class Assembler {
 
   private generateAnonSegmentName(memory: number, size: number): string {
     // reuse _segmentOffset for a count of segments used in this file to help make the hash unique.
-    const file = this.opts.moduleName ?? this._source?.file ?? '';
-    const input = [file, String(this._segmentOffset++),
+    // Prefer the tokenizer's file name over the module name
+    // For an `.include`d file that's the file the user actually wrote the `.segment` in.
+    const file = this._source?.file ?? this.opts.moduleName ?? '';
+    const line = this._source?.line;
+    const input = [file, String(line ?? ''), String(this._segmentOffset++),
                    String(memory), String(size)].join('\0');
     const hash = createHash().update(input).digest('hex').slice(0, 12);
-    return `${mod.ANON_SEGMENT_PREFIX}${hash}`;
+    return mod.anonSegmentName(file, line, hash);
   }
 
   /** Sets the current source location for debug info from an external source. */
@@ -1546,6 +1549,11 @@ export class Assembler {
     }
     this._chunk = undefined;
     this._name = undefined;
+    // An anonymous segment's positional address doubles as an implicit `.org`
+    if (segments.length === 1 && typeof segments[0] === 'object' &&
+        mod.Segment.isAnon(segments[0]) && segments[0].memory != null) {
+      this._org = segments[0].memory;
+    }
   }
 
   assert(expr: Expr, _level?: string, message?: string) {

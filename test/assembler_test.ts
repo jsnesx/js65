@@ -1312,6 +1312,218 @@ describe('Assembler', function() {
     });
   });
 
+  describe('anonymous .segment', function() {
+    // Assembles under a caller-chosen module name, since that name seeds the
+    // generated segment-name hash.
+    async function assembleNamed(body: string, name: string,
+                                 generateDebugInfo = false): Promise<Module> {
+      const result = await libAssemble(
+          [{type: 'source', code: body, name} as AssemblyInput],
+          {generateDebugInfo});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      return result.modules[0];
+    }
+
+    // @anon@<file>:<line>:<hash>. The line is empty without debug info, which
+    // is how `assembleModule` runs.
+    const ANON = /^@anon@[^\0]+:\d*:[0-9a-f]{12}$/;
+
+    it('should take the address positionally and require :size', async function() {
+      const m = await assembleModule(`.segment $8000 :size $4000\n`);
+      expect(m.segments!.length).toBe(1);
+      const [seg] = m.segments!;
+      expect(seg.name).toMatch(ANON);
+      expect(seg.memory).toBe(0x8000);
+      expect(seg.size).toBe(0x4000);
+      // The linker hands out file offsets, so the module must not carry one.
+      expect(seg.offset).toBeUndefined();
+    });
+
+    it('should carry the file and line in the name', async function() {
+      const m = await assembleNamed(
+          `\n\n.segment $8000 :size $10\n`, 'bank.s', true);
+      expect(m.segments![0].name).toMatch(/^@anon@bank\.s:3:[0-9a-f]{12}$/);
+    });
+
+    it('should leave the line empty without debug info', async function() {
+      const m = await assembleNamed(`.segment $8000 :size $10\n`, 'bank.s');
+      expect(m.segments![0].name).toMatch(/^@anon@bank\.s::[0-9a-f]{12}$/);
+    });
+
+    it('should distinguish two segments on different lines', async function() {
+      // The line is part of the hash, so identical declarations still differ.
+      const m = await assembleNamed(
+          `.segment $8000 :size $10\n.segment $8000 :size $10\n`, 'bank.s', true);
+      expect(m.segments![0].name).toMatch(/^@anon@bank\.s:1:/);
+      expect(m.segments![1].name).toMatch(/^@anon@bank\.s:2:/);
+    });
+
+    it('should generate the same name for the same source twice', async function() {
+      const src = `.segment $8000 :size $4000\n.segment $c000 :size $4000\n`;
+      const a = await assembleModule(src);
+      const b = await assembleModule(src);
+      expect(a.segments!.map(s => s.name)).toEqual(b.segments!.map(s => s.name));
+    });
+
+    it('should generate distinct names for two segments in one module',
+       async function() {
+      const m = await assembleModule(
+          `.segment $8000 :size $4000\n.segment $8000 :size $4000\n`);
+      // Same address and size: only the sequence number distinguishes them.
+      expect(m.segments!.length).toBe(2);
+      expect(m.segments![0].name).not.toBe(m.segments![1].name);
+    });
+
+    it('should generate distinct names for the same source at two paths',
+       async function() {
+      const src = `.segment $8000 :size $4000\n`;
+      const a = await assembleNamed(src, 'a.s');
+      const b = await assembleNamed(src, 'b.s');
+      expect(a.segments![0].name).not.toBe(b.segments![0].name);
+    });
+
+    it('should synthesize a free range for :fill', async function() {
+      const m = await assembleModule(`.segment $8000 :size $4000 :fill $ff\n`);
+      expect(m.segments![0].fill).toBe(0xff);
+      expect(m.segments![0].free).toEqual([[0x8000, 0xc000]]);
+    });
+
+    it('should evaluate the address as an expression', async function() {
+      const m = await assembleModule(`.segment $8000+16 :size $10\n`);
+      expect(m.segments![0].memory).toBe(0x8010);
+    });
+
+    it('should accept :bank as metadata', async function() {
+      const m = await assembleModule(`.segment $8000 :size $10 :bank 3\n`);
+      expect(m.segments![0].bank).toBe(3);
+    });
+
+    it('should ignore ld65 read-only attributes', async function() {
+      const m = await assembleModule(`.segment $8000 :size $10 :ro\n`);
+      expect(m.segments![0]).toEqual(
+          {name: m.segments![0].name, memory: 0x8000, size: 0x10});
+    });
+
+    it('should bind following data to the generated segment', async function() {
+      const m = await assembleModule(`.segment $8000 :size $10\n.byte 1\n`);
+      expect(m.chunks![0].segments).toEqual([m.segments![0].name]);
+    });
+
+    it('should imply .org at the declared address', async function() {
+      // The address is part of the segment, so no explicit `.org` is needed.
+      const m = await assembleModule(`.segment $8000 :size $10\n.byte 1\n`);
+      expect(m.chunks![0].org).toBe(0x8000);
+    });
+
+    it('should re-imply .org for each anonymous segment', async function() {
+      const m = await assembleModule(
+          `.segment $8000 :size $10\n.byte 1\n` +
+          `.segment $9000 :size $10\n.byte 2\n`);
+      expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x9000]);
+    });
+
+    it('should resolve labels against the implied .org', async function() {
+      const m = await assembleModule(
+          `.segment $8000 :size $10\nStart:\n  .byte 1\n  .word Start\n`);
+      expect(m.chunks![0].org).toBe(0x8000);
+      expect([...m.chunks![0].data]).toEqual([1, 0x00, 0x80]);
+    });
+
+    it('should let an explicit .org move within the segment', async function() {
+      const m = await assembleModule(
+          `.segment $8000 :size $100\n.byte 1\n.org $8040\n.byte 2\n`);
+      expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8040]);
+    });
+
+    it('should let .reloc drop the implied .org', async function() {
+      const m = await assembleModule(
+          `.segment $8000 :size $100\n.reloc\n.byte 1\n`);
+      expect(m.chunks![0].org).toBeUndefined();
+    });
+
+    it('should let .free carve a range out of the segment', async function() {
+      // `.free` needs a PC, which the segment's implied `.org` supplies.
+      const m = await assembleModule(
+          `.segment $8000 :size $100\n.byte 1\n.free $20\n`);
+      expect(m.segments![0].free).toEqual([[0x8001, 0x8021]]);
+    });
+
+    it('should reject a missing :size', async function() {
+      await expect(assembleModule(`.segment $8000\n`))
+          .rejects.toThrow(/An anonymous \.segment requires :size/);
+      await expect(assembleModule(`.segment $8000 :fill $ff\n`))
+          .rejects.toThrow(/An anonymous \.segment requires :size/);
+    });
+
+    it('should reject a comma-separated list', async function() {
+      await expect(assembleModule(
+              `.segment $8000 :size $10, $9000 :size $10\n`))
+          .rejects.toThrow(
+              /anonymous \.segment may not appear in a comma-separated list/);
+    });
+
+    for (const attr of ['off $0', 'mem $8000', 'out "x.bin"', 'load "A"',
+                        'run "A"', 'alignload $10', 'zp', 'zeropage', 'bss',
+                        'optional', 'dedupe', 'default', 'align $10',
+                        'define']) {
+      const key = attr.split(' ')[0];
+      it(`should reject :${key}`, async function() {
+        await expect(assembleModule(`.segment $8000 :size $10 :${attr}\n`))
+            .rejects.toThrow(new RegExp(
+                `Segment attr ${key} is not allowed on an anonymous \\.segment`));
+      });
+    }
+
+    it('should reject an unknown segment attribute', async function() {
+      await expect(assembleModule(`.segment $8000 :size $10 :overlay "A"\n`))
+          .rejects.toThrow(/Unknown segment attr: overlay/);
+    });
+
+    it('should reject an anonymous segment after a named one', async function() {
+      await expect(assembleModule(
+              `.segment "A" :size $10\n.segment $8000 :size $10\n`))
+          .rejects.toThrow(
+              /Cannot use an anonymous \.segment after a named \.segment/);
+    });
+
+    it('should reject a named segment after an anonymous one', async function() {
+      await expect(assembleModule(
+              `.segment $8000 :size $10\n.segment "A" :size $10\n`))
+          .rejects.toThrow(
+              /Cannot use a named \.segment after an anonymous \.segment/);
+    });
+
+    it('should reject an anonymous segment after .code', async function() {
+      // `.code` bypasses parseSegmentList entirely, so this pins the latch
+      // living in segment() rather than in the parser.
+      await expect(assembleModule(`.code\n.segment $8000 :size $10\n`))
+          .rejects.toThrow(
+              /Cannot use an anonymous \.segment after a named \.segment/);
+    });
+
+    it('should reject .pushseg in anonymous mode', async function() {
+      await expect(assembleModule(`.segment $8000 :size $10\n.pushseg\n`))
+          .rejects.toThrow(/\.pushseg cannot be used with anonymous segments/);
+    });
+
+    it('should reject .popseg in anonymous mode', async function() {
+      await expect(assembleModule(
+              `.segment $8000 :size $10\n.popseg\n`))
+          .rejects.toThrow(/\.popseg cannot be used with anonymous segments/);
+    });
+
+    it('should reject a user segment name starting with @', async function() {
+      await expect(assembleModule(`.segment "@foo"\n`))
+          .rejects.toThrow(/Segment name may not start with '@'/);
+    });
+
+    it('should reject an @ segment prefix', async function() {
+      // The check is on the composed name, so a prefix can't smuggle one in.
+      await expect(assembleModule(`.segmentprefix "@"\n.segment "x"\n`))
+          .rejects.toThrow(/Segment name may not start with '@'.*@x/);
+    });
+  });
+
   describe('predeclared ZEROPAGE segment', function() {
     function chunkIn(m: Module, segment: string) {
       const chunk = (m.chunks ?? []).find(c => c.segments.includes(segment));

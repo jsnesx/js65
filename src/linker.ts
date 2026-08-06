@@ -89,11 +89,13 @@ export class Linker {
     // I don't think its worth trying to sort out using both for now.
     // Maybe at some point we start issuing warnings if they mix the two.
     if (this.opts.linkerConfig != null) {
+      this._link.checkAnonMode('A linker config');
       this._link.setConfig(parseLinkerConfig(this.opts.linkerConfig,
                                              this.opts.linkerConfigName));
     } else {
       const target = Targets.get(this.opts.target?.toLowerCase())
       if (target) {
+        this._link.checkAnonMode(`--target ${this.opts.target}`);
         target.segments.forEach( seg => this._link.addRawSegment(seg) );
       }
     }
@@ -545,6 +547,14 @@ function impossible(msg: string): never {
   throw new Error(msg);
 }
 
+/** User friendly string name for anon segments */
+function anonSegmentLabel(name: string, memory: number): string {
+  const src = Segment.anonSource(name);
+  if (!src) return name;
+  const at = src.line != null ? `${src.file}:${src.line}` : src.file;
+  return `@${at} $${memory.toString(16)}`;
+}
+
 /** Rounds up to the next multiple of `align`, which must be positive. */
 function alignUp(value: number, align: number): number {
   // NOTE: arithmetic rather than bit twiddling, since offsets in RAM segments
@@ -797,6 +807,14 @@ class LinkChunk {
       }
     }
     if (eligibleSegments.length !== 1) {
+      // If the user is in an anon segment but then `.org`s outside of that range
+      if (!eligibleSegments.length && this.segments.length === 1 &&
+          Segment.isAnon(this.segments[0])) {
+        const s = this.linker.segments.get(this.segments[0])!;
+        this.linker.fail(`.org $${this._org.toString(16)} is outside the ${''
+            }anonymous segment ${anonSegmentLabel(s.name, s.memory)} ${''
+            }(size $${s.size.toString(16)})`, this.at());
+      }
       this.linker.fail(`Non-unique segment for ${this.name}:\n${''
           }Segments: ${this.segments.join(',')}, ${''
           }org: $${this.org?.toString(16)}, ${''
@@ -1050,6 +1068,10 @@ class Link {
    * order they are passed into the link command)
    */
   segmentOrder: string[] = [];
+  /** Linker ordering for anon segments. Ordered by files passed in, then top to bottom of each file. */
+  private anonDeclarationOrder: string[] = [];
+  /** True once any named (non-anonymous) segment has been registered. */
+  private hasNamedSegment = false;
   private segmentIndex = new Map<string, number>();
   /** Names of mapped segments that other unmapped segments are written to. */
   private segmentMappings = new Set<string>();
@@ -1202,6 +1224,8 @@ class Link {
   }
 
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
+    // Catch a cross-module named/anon mix before any state is half-built.
+    this.checkAnonMode();
     // Preserve the order that the segments are declared
     for (const name of [...this.segmentOrder, ...this.rawSegments.keys()]) {
       if (this.segmentIndex.has(name)) continue;
@@ -1564,9 +1588,9 @@ class Link {
       const seg = merged.get(name);
       // Skip over unmapped segments here.
       if (!seg || needsLowering(seg) || seg.bss) continue;
-      // Any anything without an output file nor an offset.
-      // These are RAM, which takes no file space.
-      if (seg.out == null && seg.offset == null) continue;
+      // Skip things that aren't getting written out to the file.
+      // Anon segments ARE written to file, and will get :out assigned after this.
+      if (!Segment.isAnon(seg) && seg.out == null && seg.offset == null) continue;
       const file = seg.out || '%O';
       const base = this.fileBase(file);
       let cursor = fileLocations.get(file) ?? 0;
@@ -1769,7 +1793,8 @@ class Link {
    */
   eligibleSegments(chunk: LinkChunk): readonly string[] {
     let segments = chunk.segments;
-    if (!segments.length) {
+    // Don't allow default segment bytes to get placed when anon segments are used.
+    if (!segments.length && !this.anonDeclarationOrder.length) {
       // if this chunk doesn't have a predefined segment, and there is a default segment defined, then use that one
       for (const [name, raw] of this.rawSegments) {
         if (raw.some(s => s.default)) {
@@ -1840,8 +1865,13 @@ class Link {
     }
     if (DEBUG) console.log(`Initial:\n${this.initialReport}`);
     const name = chunk.name ? `${chunk.name} ` : '';
-    const where = segments.length ? segments.join(', ') : '(no segment)';
     const aligned = align > 1 ? `${align}-byte aligned ` : '';
+    if (!segments.length && this.anonDeclarationOrder.length) {
+      this.fail(`${size}-byte chunk ${name}was emitted before the first ` +
+                `.segment. All bytes must be placed in a segment`, chunk.at());
+    }
+    const where = segments.length ?
+        segments.map(n => this.segmentLabel(n)).join(', ') : '(no segment)';
     this.fail(`Could not find space for ${aligned}${size}-byte chunk ${
         name}in ${where}`, chunk.at());
   }
@@ -1928,9 +1958,28 @@ class Link {
   }
 
   addRawSegment(segment: Segment) {
+    if (Segment.isAnon(segment)) {
+      if (this.rawSegments.has(segment.name)) {
+        // Merging them would silently fuse two banks into one, since
+        // Segment.merge is last-wins.
+        this.fail(`Duplicate anonymous segment ${segment.name}; ` +
+                  `this is a js65 bug, please report it`);
+      }
+      this.anonDeclarationOrder.push(segment.name);
+    } else {
+      this.hasNamedSegment = true;
+    }
     let list = this.rawSegments.get(segment.name);
     if (!list) this.rawSegments.set(segment.name, list = []);
     list.push(segment);
+  }
+
+  checkAnonMode(what?: string) {
+    if (!this.anonDeclarationOrder.length) return;
+    if (what) this.fail(`${what} cannot be combined with anonymous segments`);
+    if (this.hasNamedSegment) {
+      this.fail(`Anonymous segments cannot be combined with named segments.`);
+    }
   }
 
   buildExports(): Map<string, Export> {
@@ -1952,6 +2001,12 @@ class Link {
     return map;
   }
 
+  private segmentLabel(name: string): string {
+    if (!Segment.isAnon(name)) return name;
+    const memory = this.segments.get(name)?.memory ?? 0;
+    return anonSegmentLabel(name, memory);
+  }
+
   /**
    * Bare bones segment list report used for comparing against ca65 built projects.
    */
@@ -1968,18 +2023,21 @@ class Link {
       const end = chunk.org + chunk.size - seg.memory;
       used.set(seg.name, Math.max(used.get(seg.name) ?? 0, end));
     }
+    // Chop the name of the anon segment to 20 characters so it fits nicer in the output
+    const rows = this.segmentOrder.filter(n => this.segments.has(n))
+        .map(n => [n, this.segmentLabel(n)] as const);
+    const width = Math.max(20, ...rows.map(([, label]) => label.length));
     let out = 'Segment list:\n-------------\n';
-    out += 'Name                   Start     End    Size    Used  Align  FileOffs  File\n';
-    out += '----------------------------------------------------------------------------\n';
-    for (const name of this.segmentOrder) {
-      const s = this.segments.get(name);
-      if (!s) continue;
+    out += `${'Name'.padEnd(width)}   Start     End    Size    Used  Align  FileOffs  File\n`;
+    out += '-'.repeat(width + 56) + '\n';
+    for (const [name, label] of rows) {
+      const s = this.segments.get(name)!;
       const end = s.memory + Math.max(s.size - 1, 0);
       // A segment that emits nothing has no offset worth printing.
       const file = s.isRam ? '' : (s.out || '%O');
       const offs = s.isRam ?
           '      ' : hex(s.offset - (this.fileBases.get(file) ?? 0));
-      out += `${name.padEnd(20)}  ${hex(s.memory)}  ${hex(end)}  ${
+      out += `${label.padEnd(width)}  ${hex(s.memory)}  ${hex(end)}  ${
              hex(s.size)}  ${hex(used.get(name) ?? 0)}  ${
              hex(this.segmentAlign.get(name) ?? 1, 5)}  ${offs}  ${file}\n`;
     }

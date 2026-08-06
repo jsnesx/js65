@@ -222,6 +222,116 @@ Relocatable:
       const result = await compileSource(source);
       expect(result).toBeTruthy();
     });
+
+    it('should place anonymous segments sequentially', async function() {
+      const source = `
+.segment $8000 :size $4000
+Bank0Start:
+  lda #$42
+  rts
+
+.segment $C000 :size $4000
+  jsr Bank0Start
+  rts
+`;
+      const result = await compileSource(source);
+      // Bank 0 goes to file offset 0, the fixed bank to $4000.
+      expect([...result.slice(0, 3)]).toEqual([0xa9, 0x42, 0x60]);
+      expect([...result.slice(0x4000, 0x4004)])
+          .toEqual([0x20, 0x00, 0x80, 0x60]);
+    });
+
+    it('should place two modules of anonymous segments in link order',
+       async function() {
+      const first: AssemblyInput = {type: 'source', name: 'first.s', code: `
+.segment $8000 :size $10
+Exported:
+  .byte $11
+.export Exported
+`};
+      const second: AssemblyInput = {type: 'source', name: 'second.s', code: `
+.segment $9000 :size $10
+  .byte $22
+  .word Exported
+.import Exported
+`};
+      const result = await compile([first, second], {lineContinuations: true});
+      if (!result.success) {
+        throw new Error(JSON.stringify(result.messages));
+      }
+      const data = result.outputs[0].data;
+      expect(data[0]).toBe(0x11);
+      // Second module's segment starts at file offset $10, and the cross-module
+      // reference still resolves to the first module's CPU address.
+      expect([...data.slice(0x10, 0x13)]).toEqual([0x22, 0x00, 0x80]);
+    });
+
+    it('should leave base ROM bytes alone without :fill', async function() {
+      const baseRom = new Uint8Array(0x20).fill(0xff);
+      const input: AssemblyInput = {type: 'source', name: 'test.s', code: `
+.segment $8000 :size $20
+.org $8004
+  .byte $11, $22
+`};
+      const result = await compile([input], {lineContinuations: true},
+                                   undefined, baseRom);
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const data = result.outputs[0].data;
+      expect([...data.slice(0x02, 0x08)])
+          .toEqual([0xff, 0xff, 0x11, 0x22, 0xff, 0xff]);
+    });
+
+    it('should blank the whole bank with :fill', async function() {
+      // The documented way to add a new, empty bank when expanding a ROM.
+      const baseRom = new Uint8Array(0x20).fill(0xff);
+      const input: AssemblyInput = {type: 'source', name: 'test.s', code: `
+.segment $8000 :size $20 :fill $00
+.org $8004
+  .byte $11, $22
+`};
+      const result = await compile([input], {lineContinuations: true},
+                                   undefined, baseRom);
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const data = result.outputs[0].data;
+      expect([...data.slice(0x02, 0x08)])
+          .toEqual([0x00, 0x00, 0x11, 0x22, 0x00, 0x00]);
+      expect(data.length).toBe(0x20);
+    });
+
+    it('should pack a later chunk into a .free range', async function() {
+      const source = `
+.segment $8000 :size $20
+  .byte $01, $02, $03, $04
+.free $10
+
+.reloc
+Packed:
+  .byte $aa, $bb
+`;
+      const result = await compileSource(source);
+      expect([...result.slice(0, 6)])
+          .toEqual([0x01, 0x02, 0x03, 0x04, 0xaa, 0xbb]);
+    });
+
+    it('should report anonymous segments in the map file', async function() {
+      const input: AssemblyInput = {type: 'source', name: 'test.s', code: `
+.segment $8000 :size $10
+  .byte $01
+.segment $8000 :size $10
+  .byte $02
+`};
+      const result = await compile(
+          [input], {lineContinuations: true, generateMapFile: true,
+                    generateDebugInfo: true});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const map = result.outputs.find(o => o.type === 'map');
+      expect(map).toBeTruthy();
+      const text = new TextDecoder().decode(map!.data);
+      // Two banks at the same address, told apart by the line they were
+      // declared on, with sequential file offsets.
+      expect(text).toMatch(/@test\.s:2 \$8000\s+008000\s+00800F\s+000010\s+\S+\s+\S+\s+000000/);
+      expect(text).toMatch(/@test\.s:4 \$8000\s+008000\s+00800F\s+000010\s+\S+\s+\S+\s+000010/);
+    });
   });
 
   describe('ROM patching with base ROM', function() {
