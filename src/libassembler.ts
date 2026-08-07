@@ -8,7 +8,8 @@ import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
-import { Tokenizer } from './tokenizer.ts';
+import { Tokenizer, type Options as TokenizerOptions } from './tokenizer.ts';
+import * as Tokens from './token.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest } from "./validate_modules.ts";
@@ -81,6 +82,12 @@ function throwIfCancelled(signal?: CancelSignal): void {
   if (signal?.aborted) throw new Error('Compilation cancelled');
 }
 
+export interface SymbolDefine {
+  name: string;
+  /** Kept as a string for compatibility with the integration libraries */
+  value: string;
+}
+
 /**
  * Options for assembly phase
  */
@@ -90,6 +97,7 @@ export interface AssemblerOptions {
   lineContinuations?: boolean;
   numberSeparators?: boolean;
   generateDebugInfo?: boolean;
+  defines?: SymbolDefine[];
 }
 
 /**
@@ -138,6 +146,8 @@ export interface Js65Options {
   linkerConfig?: string;
   /** Name to report `linkerConfig` parse errors against. */
   linkerConfigName?: string;
+  /** `-D` defines. will be parsed into .set values or .define macros later */
+  defines?: SymbolDefine[];
 }
 
 /**
@@ -197,6 +207,27 @@ function toSourceInfo(source?: ActionSource): SourceInfo | undefined {
 
 function toValueExpr(v: number | { op: 'sym', sym: string }): Expr {
   return typeof v === 'number' ? { op: 'num', num: v } : v;
+}
+
+async function applyDefines(asm: Assembler, pre: Preprocessor,
+                            defines: SymbolDefine[] | undefined,
+                            opts: TokenizerOptions) {
+  for (const {name, value} of defines ?? []) {
+    const toks = await new Tokenizer(value, '<command line>', opts).next() ?? [];
+    // Drop the trailing EOL the tokenizer appends so a lone number is length 1.
+    const body = toks.length && Tokens.eq(toks[toks.length - 1], Tokens.EOL)
+        ? toks.slice(0, -1) : toks;
+    if (body.length === 1 && body[0].token === 'num') {
+      asm.set(name, body[0].num);
+      continue;
+    }
+    if (!body.length) {
+      // `-D FOO=` with an empty value expands to nothing like CPP would do
+      await pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}]);
+      continue;
+    }
+    await pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}, ...body]);
+  }
 }
 
 /**
@@ -275,6 +306,7 @@ export async function assemble(
               const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
               toks.enter(tokenizer);
               const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
+              await applyDefines(asm, pre, options?.defines, opts);
               await asm.tokens(pre, signal);
               break;
             }
@@ -411,6 +443,7 @@ export async function assemble(
       const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
       toks.enter(tokenizer);
       const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
+      await applyDefines(asm, pre, options?.defines, opts);
       await asm.tokens(pre, signal);
 
       const module = asm.module();
@@ -694,6 +727,7 @@ export async function compile(
       lineContinuations: options.lineContinuations,
       numberSeparators: options.numberSeparators,
       generateDebugInfo: options.generateDebugInfo,
+      defines: options.defines,
     };
     const linkerOpts: LinkerOptions = {
       target: options.target,

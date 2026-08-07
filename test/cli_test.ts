@@ -588,6 +588,72 @@ describe('CLI', function() {
       });
     });
 
+    describe('-D defines', function() {
+      const defines = (...args: string[]) => cli.parseArgs(args).options.defines;
+
+      it('accepts every -D spelling', function() {
+        const one = [{name: 'FOO', value: '1'}];
+        expect(defines('-D', 'FOO=1')).toEqual(one);
+        expect(defines('-DFOO=1')).toEqual(one);
+        expect(defines('--define', 'FOO=1')).toEqual(one);
+        expect(defines('--define=FOO=1')).toEqual(one);
+      });
+
+      it('defaults a bare name to 1', function() {
+        expect(defines('-D', 'FOO')).toEqual([{name: 'FOO', value: '1'}]);
+        expect(defines('-DFOO')).toEqual([{name: 'FOO', value: '1'}]);
+      });
+
+      it('splits on the first = only', function() {
+        // The value is parsed as a number later; the split must not eat it.
+        expect(defines('-D', 'FOO=1=2')).toEqual([{name: 'FOO', value: '1=2'}]);
+      });
+
+      it('keeps repeated defines in order so the last one wins', function() {
+        expect(defines('-DFOO=1', '-DBAR=2', '-DFOO=3')).toEqual([
+          {name: 'FOO', value: '1'},
+          {name: 'BAR', value: '2'},
+          {name: 'FOO', value: '3'},
+        ]);
+      });
+
+      it('preserves the value text for the assembler to parse', function() {
+        expect(defines('-DFOO=$1f')).toEqual([{name: 'FOO', value: '$1f'}]);
+        expect(defines('-DFOO=%1010')).toEqual([{name: 'FOO', value: '%1010'}]);
+      });
+
+      it('defines nothing when no -D is given', function() {
+        expect(defines('main.s')).toEqual([]);
+      });
+
+      it('rejects -D with an empty symbol name', function() {
+        const s = strict();
+        s.parse(['-D', '=1']);
+        expect(s.exits).toEqual([1]);
+      });
+
+      it('rejects a -D whose value was forgotten', function() {
+        // `-D -c main.s` must not quietly define a symbol named `-c` and drop
+        // the -c option along with it.
+        const s = strict();
+        const args = s.parse(['-D', '-c', 'main.s']);
+        expect(s.exits).toEqual([1]);
+        expect(args.options.defines).toEqual([]);
+      });
+
+      it('rejects a symbol name that is not an identifier', function() {
+        for (const bad of ['1FOO', 'FOO-BAR', 'foo bar']) {
+          const s = strict();
+          s.parse([`-D${bad}=1`]);
+          expect(s.exits).toEqual([1]);
+        }
+      });
+
+      it('accepts identifier names with digits and underscores', function() {
+        expect(defines('-D_FOO2=1')).toEqual([{name: '_FOO2', value: '1'}]);
+      });
+    });
+
     describe('-- end of options', function() {
       it('treats a dash-led argument after -- as a filename', function() {
         const s = strict();
@@ -621,6 +687,146 @@ describe('CLI', function() {
         expect(args.op).toBeUndefined();
         expect(args.files).toEqual(['rehydrate']);
       });
+    });
+  });
+
+  // Proves -D reaches the assembler as a real symbol rather than merely being
+  // parsed. Each case is a source that only assembles to these bytes if the
+  // define landed.
+  describe('-D end to end', function() {
+    async function bytes(args: string[], src: string) {
+      const files = await makeFiles(
+          ['--target', 'sim', '--stdin', '-o', 'out.bin', ...args], src);
+      return [...files.get('out.bin')!];
+    }
+
+    it('makes the symbol visible to .ifdef', async function() {
+      expect(await bytes(['-D', 'FOO=3'], '.ifdef FOO\nlda #FOO\n.endif\n'))
+          .toEqual([0xa9, 3]);
+    });
+
+    it('leaves .ifdef false without the define', async function() {
+      expect(await bytes([], '.ifdef FOO\nlda #FOO\n.endif\n')).toEqual([]);
+    });
+
+    it('makes the symbol visible to .ifsym', async function() {
+      expect(await bytes(['-DFOO=7'], '.ifsym FOO\nlda #FOO\n.endif\n'))
+          .toEqual([0xa9, 7]);
+    });
+
+    it('is as visible to .ifconst as an in-source .set is', async function() {
+      const viaDefine = await bytes(['-DFOO=7'], '.ifconst FOO\nlda #FOO\n.endif\n');
+      const viaSet = await bytes([], 'FOO .set 7\n.ifconst FOO\nlda #FOO\n.endif\n');
+      expect(viaDefine).toEqual(viaSet);
+    });
+
+    it('defaults a bare -D to 1', async function() {
+      expect(await bytes(['-D', 'FOO'], 'lda #FOO\n')).toEqual([0xa9, 1]);
+    });
+
+    it('parses a $hex value', async function() {
+      expect(await bytes(['-DFOO=$1f'], 'lda #FOO\n')).toEqual([0xa9, 0x1f]);
+    });
+
+    it('parses a %binary value', async function() {
+      expect(await bytes(['-DFOO=%1010'], 'lda #FOO\n')).toEqual([0xa9, 0b1010]);
+    });
+
+    it('lets a later -D override an earlier one, like .set', async function() {
+      expect(await bytes(['-DFOO=1', '-DFOO=9'], 'lda #FOO\n')).toEqual([0xa9, 9]);
+    });
+
+    it('lets the source reassign the symbol, since it is a .set', async function() {
+      expect(await bytes(['-DFOO=1'], 'FOO .set 4\nlda #FOO\n')).toEqual([0xa9, 4]);
+    });
+
+    it('does not define a macro, so .definedmacro stays false', async function() {
+      // ca65's -D defines a symbol, not a .define macro. This is the assertion
+      // that pins that distinction.
+      expect(await bytes(['-DFOO=3'], '.ifdef FOO\n.byte 1\n.endif\n' +
+                                      '.if .definedmacro(FOO)\n.byte 2\n.endif\n'))
+          .toEqual([1]);
+    });
+
+    // A non-numeric value is a `.define` macro instead of a `.set` symbol, so
+    // `-DNAME=text` works the way a C compiler's -D does.
+    it('makes a non-numeric value a .define macro', async function() {
+      expect(await bytes(['-DFOO=BAR'], 'BAR = 7\nlda #FOO\n')).toEqual([0xa9, 7]);
+    });
+
+    it('expands a macro define into an expression', async function() {
+      expect(await bytes(['-DFOO=1+2'], 'lda #FOO\n')).toEqual([0xa9, 3]);
+    });
+
+    it('makes a macro define visible to .ifdef', async function() {
+      expect(await bytes(['-DFOO=bar'], '.ifdef FOO\n.byte 5\n.endif\n'))
+          .toEqual([5]);
+    });
+
+    it('treats an empty value as a macro expanding to nothing', async function() {
+      expect(await bytes(['-DFOO='], '.ifdef FOO\n.byte 1\n.endif\n'))
+          .toEqual([1]);
+    });
+
+    // Mirrors js65's own `.define`, which is invisible to `.definedmacro` -
+    // that predicate covers only `.macro`. See preprocessor.ts's note on it.
+    it('is as visible to .definedmacro as an in-source .define is',
+       async function() {
+      const viaDefine = await bytes(
+          ['-DFOO=bar'], '.if .definedmacro(FOO)\n.byte 42\n.endif\n');
+      const viaSource = await bytes(
+          [], '.define FOO bar\n.if .definedmacro(FOO)\n.byte 42\n.endif\n');
+      expect(viaDefine).toEqual(viaSource);
+    });
+
+    it('keeps a numeric define a symbol, not a macro', async function() {
+      // The numeric path must stay ca65-exact: a symbol, reassignable by .set.
+      expect(await bytes(['-DFOO=3'], 'FOO .set 4\nlda #FOO\n')).toEqual([0xa9, 4]);
+    });
+
+    it('applies a macro define to every input module', async function() {
+      // Each module gets its own Preprocessor and so its own macro table;
+      // seeding all of them must not collide with "Already defined".
+      const written = new Map<string, Uint8Array>();
+      const src: Record<string, string> = {
+        'a.s': 'BAR = 7\n.byte FOO\n',
+        'b.s': 'BAR = 9\n.byte FOO\n',
+      };
+      let exitCode = 0;
+      const cli = new Cli({
+        fsReadString: async (_p, f) => src[f],
+        fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
+        fsWriteString: async () => {},
+        fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
+        fsWalk: async () => {},
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(['--target', 'sim', '-DFOO=BAR', '-o', 'out.bin', 'a.s', 'b.s']);
+      expect(exitCode).toBe(0);
+      // Each module resolves BAR in its own scope.
+      expect([...written.get('out.bin')!]).toEqual([7, 9]);
+    });
+
+    it('applies defines to every input module', async function() {
+      // Both inputs are assembled by separate Assemblers; the define has to
+      // reach each one.
+      const written = new Map<string, Uint8Array>();
+      const src: Record<string, string> = {
+        'a.s': '.ifdef FOO\n.byte FOO\n.endif\n',
+        'b.s': '.ifdef FOO\n.byte FOO+1\n.endif\n',
+      };
+      let exitCode = 0;
+      const cli = new Cli({
+        fsReadString: async (_p, f) => src[f],
+        fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
+        fsWriteString: async () => {},
+        fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
+        fsWalk: async () => {},
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(['--target', 'sim', '-DFOO=5', '-o', 'out.bin', 'a.s', 'b.s']);
+      expect(exitCode).toBe(0);
+      expect([...written.get('out.bin')!]).toEqual([5, 6]);
     });
   });
 
