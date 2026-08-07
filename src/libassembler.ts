@@ -658,11 +658,14 @@ function messageFromException(err: unknown): AssemblerMessage {
  * Serialize a module to the .o JSON format, base64-encoding chunk data.
  * This data will get compressed later for the final output.
  */
-function serializeModule(m: Module): string {
+function serializeModule(m: Module, keepDebugInfo = true): string {
   const base64 = new Base64();
   return JSON.stringify(m, (k, v) => {
     if (k === 'data' && v instanceof Uint8Array) {
       return base64.encode(v);
+    }
+    if (!keepDebugInfo && k === 'source') {
+      return undefined;
     }
     // Convert maps to [key, value] arrays so we can properly save it to the module
     if (v instanceof Map) {
@@ -685,9 +688,11 @@ export function isGzip(data: Uint8Array): boolean {
  * compress the object files to save a lotta space. In my testing its around 10x just
  * from gzip + another 2.5x saved just from cutting indents outta the json file.
  */
-export async function serializeObjectFile(m: Module): Promise<Uint8Array> {
+export async function serializeObjectFile(
+    m: Module, keepDebugInfo = true): Promise<Uint8Array> {
   const { gzipSync, strToU8 } = await import('fflate/browser');
-  return gzipSync(strToU8(serializeModule(m)), { level: 1, mtime: 0, filename: m.name });
+  return gzipSync(strToU8(serializeModule(m, keepDebugInfo)),
+                  { level: 1, mtime: 0, filename: m.name });
 }
 
 /**
@@ -797,7 +802,7 @@ export async function compile(
     if (outputFormat === 'object') {
       const outputs: OutputFile[] = await Promise.all(asm.modules.map(async m => ({
         name: `${m.name || 'module'}.o`,
-        data: await serializeObjectFile(m),
+        data: await serializeObjectFile(m, !!options.generateDebugInfo),
         type: 'object',
       })));
       return { success: true, outputs, messages: asm.messages };

@@ -127,9 +127,7 @@ export class Tokenizer implements Tokens.Source {
     };
     try {
       const tok = this.tokenInternal();
-      if (this.opts.generateDebugInfo) {
-        tok.source = source;
-      }
+      tok.source = source;
       return tok;
     } catch (err:any) {
       // Add a `near` part to the message if we know what the last token was

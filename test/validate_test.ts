@@ -177,6 +177,37 @@ loop:
     expect(chunk.sourceMap!.get(0)).toMatchObject({ file: 't.s', line: 6 }); // the `lda`
   });
 
+  it('keeps source info out of a .o built without debug info', async () => {
+    // Locations are gathered during assembly either way so that errors can
+    // point at a line; `generateDebugInfo` decides what reaches the file.
+    const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "CODE"
+.org $8000
+start:
+    lda #$01
+    jmp start
+`;
+    const opts = {lineContinuations: true, outputFormat: 'object' as const};
+    const off = await compile([{ type: 'source', code: source, name: 't.s' }], opts);
+    expect(off.success).toBe(true);
+
+    const m = await deserializeObjectFile(off.outputs[0].data);
+    expect(m.chunks![0].sourceMap).toBeUndefined();
+    expect(m.chunks![0].labelIndex).toBeUndefined();
+    // The symbol exprs carry a `source` in memory, but it must not be written.
+    expect(JSON.stringify(m)).not.toContain('"source"');
+
+    // ...and it still links to the same bytes as the debug build.
+    const on = await compile([{ type: 'source', code: source, name: 't.s' }],
+                             { ...opts, generateDebugInfo: true });
+    expect(on.success).toBe(true);
+    const withDebug = await deserializeObjectFile(on.outputs[0].data);
+    expect(JSON.stringify(withDebug)).toContain('"source"');
+    expect(Array.from(link([m], {}, 'binary').data))
+        .toEqual(Array.from(link([withDebug], {}, 'binary').data));
+  });
+
   it('writes .o files as gzip and reads them back losslessly', async () => {
     const source = `
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000

@@ -540,11 +540,7 @@ TestLabel:
 
     it('reports a missing include as an error rather than succeeding silently', async function() {
       const input: AssemblyInput = { type: 'source', code: '.include "nope.s"\n  nop\n', name: 'test.s' };
-      // generateDebugInfo is what makes the tokenizer stamp source info onto tokens, so it
-      // has to be on for the diagnostic to carry a location (the CLI turns it on by default).
-      const result = await compile([input],
-                                   { includePaths: ['missing'], generateDebugInfo: true },
-                                   callbacks);
+      const result = await compile([input], { includePaths: ['missing'] }, callbacks);
 
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
@@ -869,6 +865,35 @@ lbl2:
       ]);
       // One error per source line, in order.
       expect(errors.map(e => e.source?.line)).toEqual([4, 5, 6, 7]);
+    });
+
+    it('should locate errors identically with and without debug info',
+       async function() {
+      // `generateDebugInfo` controls what gets written out, not whether source
+      // locations are tracked so diagnostics have to point at a line either way.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .byte 1,,2
+  lda #(1+
+  nop nop
+  rts
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const locations = async (generateDebugInfo: boolean) => {
+        const result = await compile(
+          [input], { lineContinuations: true, generateDebugInfo });
+        expect(result.success).toBe(false);
+        return result.messages.filter(m => m.level === 'error')
+            .map(m => `${m.message} @ ${m.source?.file}:${m.source?.line}`);
+      };
+
+      expect(await locations(false)).toEqual([
+        'Missing term @ test.s:4',
+        'No close paren: ( @ test.s:5',
+        'Bad address mode add for nop @ test.s:6',
+      ]);
+      expect(await locations(false)).toEqual(await locations(true));
     });
 
     it('should collect expression evaluation errors and keep going', async function() {
