@@ -2391,6 +2391,71 @@ lda #$03
       expect(warnings[0].source?.file).toBe('test.s');
       expect(warnings[0].source?.line).toBe(4);
     });
+
+    // `options.features` is what `--feature` and the JSON transports fill in.
+    // It resolves through the same table as the directive, so the two agree.
+    describe('from options.features', function() {
+      function build(body: string, features: string[]) {
+        const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+${body}`;
+        return compile([{type: 'source', code, name: 'test.s'} as AssemblyInput],
+                       {features});
+      }
+
+      it('should apply an assembler feature before any source is read',
+         async function() {
+        const result = await build('lda [$10],y\n', ['bracket_as_indirect']);
+        expect(result.success).toBe(true);
+        expect(Array.from(result.outputs[0].data)).toEqual([0xb1, 0x10]);
+      });
+
+      it('should apply a tokenizer feature before any source is read',
+         async function() {
+        const result = await build('lda #1_0\n', ['underline_in_numbers']);
+        expect(result.success).toBe(true);
+        expect(Array.from(result.outputs[0].data)).toEqual([0xa9, 10]);
+      });
+
+      it('should fail on an unknown name, as the directive does',
+         async function() {
+        const result = await build('lda #$03\n', ['nonsense']);
+        expect(result.success).toBe(false);
+        expect(result.messages.map(m => m.message))
+            .toEqual([expect.stringMatching(/Unknown feature: nonsense/)]);
+      });
+
+      it('should fail on a name js65 cannot support', async function() {
+        const result = await build('lda #$03\n', ['dollar_is_pc']);
+        expect(result.success).toBe(false);
+        expect(result.messages.map(m => m.message))
+            .toEqual([expect.stringMatching(/Unsupported feature: dollar_is_pc/)]);
+      });
+
+      it('should report every bad name, not just the first', async function() {
+        const result = await build('lda #$03\n', ['nonsense', 'dollar_is_pc']);
+        expect(result.messages.map(m => m.message)).toEqual([
+          expect.stringMatching(/Unknown feature: nonsense/),
+          expect.stringMatching(/Unsupported feature: dollar_is_pc/),
+        ]);
+      });
+
+      it('should warn once for a feature js65 always applies', async function() {
+        const result = await build('lda #$03\n', ['string_escapes']);
+        expect(result.success).toBe(true);
+        expect(result.messages.map(m => m.level)).toEqual(['warning']);
+        expect(result.messages[0].message)
+            .toMatch(/Cannot change feature string_escapes/);
+      });
+
+      it('should let a later .feature turn an option back off', async function() {
+        // The flag is a starting state, not a lock: the source still owns the
+        // option from the point `.feature` appears.
+        const result = await build('.feature bracket_as_indirect off\nlda [$10],y\n',
+                                   ['bracket_as_indirect']);
+        expect(result.success).toBe(false);
+      });
+    });
   });
 
   describe('.assert', function() {

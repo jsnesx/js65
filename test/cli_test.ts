@@ -654,6 +654,40 @@ describe('CLI', function() {
       });
     });
 
+    describe('--feature', function() {
+      const features = (...args: string[]) => cli.parseArgs(args).options.features;
+
+      it('accepts every --feature spelling', function() {
+        expect(features('--feature', 'c_comments')).toEqual(['c_comments']);
+        expect(features('--feature=c_comments')).toEqual(['c_comments']);
+      });
+
+      it('splits a comma separated list, like ca65', function() {
+        expect(features('--feature', 'c_comments,pc_assignment'))
+            .toEqual(['c_comments', 'pc_assignment']);
+        expect(features('--feature=c_comments, pc_assignment'))
+            .toEqual(['c_comments', 'pc_assignment']);
+      });
+
+      it('keeps repeated features in order', function() {
+        expect(features('--feature', 'c_comments', '--feature=force_range,pc_assignment'))
+            .toEqual(['c_comments', 'force_range', 'pc_assignment']);
+      });
+
+      it('enables nothing when no --feature is given', function() {
+        expect(features('main.s')).toEqual([]);
+      });
+
+      it('does not validate the name, leaving that to the assembler', function() {
+        // One list, one validator: `.feature` and `--feature` have to agree, so
+        // the name goes through untouched and is checked where `.feature` is.
+        const s = strict();
+        expect(s.parse(['--feature', 'nonsense']).options.features)
+            .toEqual(['nonsense']);
+        expect(s.exits).toEqual([]);
+      });
+    });
+
     describe('-- end of options', function() {
       it('treats a dash-led argument after -- as a filename', function() {
         const s = strict();
@@ -827,6 +861,114 @@ describe('CLI', function() {
       await cli.run(['--target', 'sim', '-DFOO=5', '-o', 'out.bin', 'a.s', 'b.s']);
       expect(exitCode).toBe(0);
       expect([...written.get('out.bin')!]).toEqual([5, 6]);
+    });
+  });
+
+  // Each case here is a source that only assembles - or only assembles to these
+  // bytes - if the flag actually reached the assembler's options, so a
+  // parsed-but-ignored --feature fails them.
+  describe('--feature end to end', function() {
+    async function bytes(args: string[], src: string) {
+      const files = await makeFiles(
+          ['--target', 'sim', '--stdin', '-o', 'out.bin', ...args], src);
+      return [...files.get('out.bin')!];
+    }
+
+    /** Runs a build expected to fail, returning everything it printed. */
+    async function failure(args: string[], src: string) {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      try {
+        await expect(bytes(args, src)).rejects.toThrow();
+      } finally {
+        console.log = log;
+      }
+      return lines.join('\n');
+    }
+
+    it('turns on underline_in_numbers', async function() {
+      expect(await bytes(['--feature', 'underline_in_numbers'], 'lda #1_0\n'))
+          .toEqual([0xa9, 10]);
+    });
+
+    it('leaves underline_in_numbers off without the flag', async function() {
+      expect(await failure([], 'lda #1_0\n')).toContain('Bad decimal number');
+    });
+
+    it('turns on bracket_as_indirect', async function() {
+      const viaFeature = await bytes(['--feature=bracket_as_indirect'],
+                                     'lda [$10],y\n');
+      expect(viaFeature).toEqual(await bytes([], 'lda ($10),y\n'));
+    });
+
+    it('leaves bracket_as_indirect off without the flag', async function() {
+      expect(await failure([], 'lda [$10],y\n')).toContain('Bad expression token');
+    });
+
+    it('applies every name in a comma separated list', async function() {
+      expect(await bytes(['--feature', 'underline_in_numbers,bracket_as_indirect'],
+                         'lda #1_0\nlda [$10],y\n'))
+          .toEqual([0xa9, 10, 0xb1, 0x10]);
+    });
+
+    it('produces the same result as the equivalent .feature line',
+       async function() {
+      const viaFlag = await bytes(['--feature', 'bracket_as_indirect'],
+                                  'lda [$10],y\n');
+      const viaSource = await bytes([], '.feature bracket_as_indirect\nlda [$10],y\n');
+      expect(viaFlag).toEqual(viaSource);
+    });
+
+    it('reports an unknown name the way .feature does', async function() {
+      // One name list, one error - a name js65 has never heard of has to fail
+      // identically whichever side it came from.
+      const viaFlag = await failure(['--feature', 'nonsense'], 'lda #1\n');
+      const viaSource = await failure([], '.feature nonsense\n');
+      expect(viaFlag).toContain('Unknown feature: nonsense');
+      expect(viaSource).toContain('Unknown feature: nonsense');
+    });
+
+    it('reports a name js65 cannot support as unsupported', async function() {
+      expect(await failure(['--feature', 'dollar_is_pc'], 'lda #1\n'))
+          .toContain('Unsupported feature: dollar_is_pc');
+    });
+
+    it('warns without failing for a feature js65 always applies',
+       async function() {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      try {
+        expect(await bytes(['--feature', 'string_escapes'], 'lda #1\n'))
+            .toEqual([0xa9, 1]);
+      } finally {
+        console.log = log;
+      }
+      expect(lines.join('\n')).toContain('Cannot change feature string_escapes');
+    });
+
+    it('applies the feature to every input module', async function() {
+      // Each module builds its own options from the same base, so the flag has
+      // to survive that copy rather than only reaching the first file.
+      const written = new Map<string, Uint8Array>();
+      const src: Record<string, string> = {
+        'a.s': '.byte 1_0\n',
+        'b.s': '.byte 2_0\n',
+      };
+      let exitCode = 0;
+      const cli = new Cli({
+        fsReadString: async (_p, f) => src[f],
+        fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
+        fsWriteString: async () => {},
+        fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
+        fsWalk: async () => {},
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(['--target', 'sim', '--feature', 'underline_in_numbers',
+                     '-o', 'out.bin', 'a.s', 'b.s']);
+      expect(exitCode).toBe(0);
+      expect([...written.get('out.bin')!]).toEqual([10, 20]);
     });
   });
 
