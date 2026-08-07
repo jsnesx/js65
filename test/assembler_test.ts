@@ -6,6 +6,7 @@ import {Cpu} from '../src/cpu.ts';
 import {type Expr} from '../src/expr.ts';
 import {type Module} from '../src/module.ts';
 import {Assembler} from '../src/assembler.ts';
+import {FEATURE_NAMES, type TokenizerOptions} from '../src/options.ts';
 import {assemble as libAssemble, compile, type AssemblyInput} from '../src/libassembler.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
@@ -27,6 +28,15 @@ async function assembleErrors(body: string): Promise<string[]> {
   const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
   if (result.success) throw new Error('Expected the assembly to fail');
   return result.messages.filter(m => m.level === 'error').map(m => m.message);
+}
+
+// Same as `assemble`, but for sources that are expected to succeed while
+// reporting something. Returns the recorded warnings rather than the bytes.
+async function assembleWarnings(body: string): Promise<string[]> {
+  const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
+  const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+  if (!result.success) throw new Error(JSON.stringify(result.messages));
+  return result.messages.filter(m => m.level === 'warning').map(m => m.message);
 }
 
 // Assembles a snippet through the full tokenizer/preprocessor pipeline and returns
@@ -2162,6 +2172,225 @@ BLANK_TILE = $12
       a.directive([cs('.popcpu')]);
       expect(() => a.directive([cs('.popcpu')]))
           .toThrow(/\.popcpu without \.pushcpu/);
+    });
+  });
+
+  describe('.feature', function() {
+    // A directly-driven assembler has no tokenizer to configure; the names are
+    // still validated, so most cases don't need one.
+    function feature(...tokens: Token[]) {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.feature'), ...tokens]);
+      return a;
+    }
+
+    // Names js65 doesn't implement yet. Delete a line here when one lands - the
+    // "everything else is accepted" test below then covers it automatically.
+    const UNSUPPORTED = ['leading_dot_in_identifiers', 'dollar_in_identifiers',
+                         'dollar_is_pc'];
+
+    it('should accept every ca65 feature name it implements', function() {
+      for (const name of FEATURE_NAMES) {
+        if (UNSUPPORTED.includes(name)) continue;
+        expect(() => feature(ident(name))).not.toThrow();
+      }
+    });
+
+    it('should reject an unknown feature name', function() {
+      expect(() => feature(ident('nonsense')))
+          .toThrow(/Unknown feature: nonsense/);
+    });
+
+    it('should keep FEATURE_NAMES in sync with applyFeature', function() {
+      // The list is hand-maintained next to the switch, so pin that no name in
+      // it falls through to the unknown case.
+      for (const name of FEATURE_NAMES) {
+        expect(() => feature(ident(name))).not.toThrow(/Unknown feature/);
+      }
+    });
+
+    it('should reject a feature it does not implement', function() {
+      for (const name of UNSUPPORTED) {
+        expect(() => feature(ident(name)))
+            .toThrow(new RegExp(`Unsupported feature: ${name}`));
+      }
+    });
+
+    it('should require at least one name', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.directive([cs('.feature')]))
+          .toThrow(/Expected feature name/);
+    });
+
+    it('should set the option a feature maps to', function() {
+      expect(feature(ident('bracket_as_indirect')).opts.allowBrackets).toBe(true);
+      expect(feature(ident('pc_assignment')).opts.pcAssignment).toBe(true);
+      expect(feature(ident('labels_without_colons')).opts.labelsWithoutColons)
+          .toBe(true);
+      expect(feature(ident('force_range')).opts.forceRange).toBe(true);
+    });
+
+    it('should be case insensitive, like ca65', function() {
+      expect(feature(ident('Bracket_As_Indirect')).opts.allowBrackets).toBe(true);
+    });
+
+    it('should accept a comma separated list', function() {
+      const a = feature(ident('pc_assignment'), COMMA, ident('force_range'),
+                        COMMA, ident('string_escapes'));
+      expect(a.opts.pcAssignment).toBe(true);
+      expect(a.opts.forceRange).toBe(true);
+    });
+
+    it('should accept the `name on` and `name off` forms', function() {
+      expect(feature(ident('pc_assignment'), ident('on')).opts.pcAssignment)
+          .toBe(true);
+      expect(feature(ident('pc_assignment'), ident('off')).opts.pcAssignment)
+          .toBe(false);
+      expect(feature(ident('pc_assignment'), op('+')).opts.pcAssignment)
+          .toBe(true);
+      expect(feature(ident('pc_assignment'), op('-')).opts.pcAssignment)
+          .toBe(false);
+    });
+
+    it('should accept per-name states in a list', function() {
+      const a = feature(ident('pc_assignment'), ident('off'), COMMA,
+                        ident('force_range'), ident('on'));
+      expect(a.opts.pcAssignment).toBe(false);
+      expect(a.opts.forceRange).toBe(true);
+    });
+
+    it('should reject a state that is not on/off/+/-', function() {
+      expect(() => feature(ident('pc_assignment'), ident('maybe')))
+          .toThrow(/Expected on, off, \+ or -/);
+      expect(() => feature(ident('pc_assignment'), num(1)))
+          .toThrow(/Expected on, off, \+ or -/);
+    });
+
+    it('should reject a name that is not an identifier', function() {
+      expect(() => feature(str('pc_assignment')))
+          .toThrow(/Expected identifier/);
+    });
+
+    it('should write tokenizer features through to the tokenizer options',
+       function() {
+      // These land on the tokenizer's options object rather than the
+      // assembler's, which is how a `.feature` mid-file reaches files that
+      // haven't been tokenized yet.
+      const tokenizerOptions: TokenizerOptions = {};
+      const a = new Assembler(Cpu.P02, {tokenizerOptions});
+      a.directive([cs('.feature'), ident('c_comments')]);
+      expect(tokenizerOptions.cComments).toBe(true);
+      a.directive([cs('.feature'), ident('underline_in_numbers')]);
+      expect(tokenizerOptions.numberSeparators).toBe(true);
+      a.directive([cs('.feature'), ident('line_continuations'), ident('off')]);
+      expect(tokenizerOptions.lineContinuations).toBe(false);
+    });
+
+    // js65 behaves these ways unconditionally, so there is no option to set.
+    // If one of these ever becomes a real toggle, it moves out of this list.
+    const UNCONDITIONAL = ['at_in_identifiers', 'addrsize', 'string_escapes',
+                           'loose_char_term', 'loose_string_term',
+                           'missing_char_term', 'org_per_seg',
+                           'ubiquitous_idents'];
+
+    it('should leave the options alone for a feature already always on',
+       function() {
+      for (const name of [...UNCONDITIONAL, 'long_jsr_jmp_rts']) {
+        const tokenizerOptions: TokenizerOptions = {};
+        const a = new Assembler(Cpu.P02, {tokenizerOptions});
+        a.directive([cs('.feature'), ident(name)]);
+        expect(tokenizerOptions).toEqual({});
+        expect(a.opts.allowBrackets).toBeUndefined();
+        expect(a.opts.pcAssignment).toBeUndefined();
+        expect(a.opts.labelsWithoutColons).toBeUndefined();
+        expect(a.opts.forceRange).toBeUndefined();
+      }
+    });
+
+    it('should warn, not fail, for a feature already always on', function() {
+      // The source asked for something it already has, so assembly continues -
+      // but silently ignoring the request would hide that `.feature ... off`
+      // didn't take, so each one is reported once as a warning.
+      for (const name of UNCONDITIONAL) {
+        const a = feature(ident(name));
+        expect(a.hasErrors()).toBe(false);
+        expect(a.getMessages().map(m => m.level)).toEqual(['warning']);
+        expect(a.getMessages()[0].message)
+            .toMatch(new RegExp(`Cannot change feature ${name} \\(.+\\)`));
+      }
+    });
+
+    it('should warn when a feature already always on is turned off',
+       function() {
+      // The `off` case is the one that actually changes behavior from what the
+      // source asked for, so it has to warn too rather than pass silently.
+      const a = feature(ident('string_escapes'), ident('off'));
+      expect(a.hasErrors()).toBe(false);
+      expect(a.getMessages().map(m => m.level)).toEqual(['warning']);
+      expect(a.getMessages()[0].message)
+          .toMatch(/Cannot change feature string_escapes/);
+    });
+
+    it('should warn per name and keep going through a list', function() {
+      // A warning mid-list must not swallow the names after it.
+      const a = feature(ident('addrsize'), COMMA, ident('org_per_seg'), COMMA,
+                        ident('pc_assignment'));
+      expect(a.getMessages().map(m => m.message)).toEqual([
+        expect.stringMatching(/Cannot change feature addrsize/),
+        expect.stringMatching(/Cannot change feature org_per_seg/),
+      ]);
+      expect(a.opts.pcAssignment).toBe(true);
+    });
+
+    it('should not warn for a 65816-only feature', function() {
+      // js65 assembles 6502 only, so this one is simply irrelevant rather than
+      // a request js65 is declining - nothing to tell the user about.
+      expect(feature(ident('long_jsr_jmp_rts')).getMessages()).toEqual([]);
+    });
+
+    it('should not warn for a feature it really applies', function() {
+      const tokenizerOptions: TokenizerOptions = {};
+      const a = new Assembler(Cpu.P02, {tokenizerOptions});
+      a.directive([cs('.feature'), ident('bracket_as_indirect')]);
+      a.directive([cs('.feature'), ident('c_comments')]);
+      expect(a.getMessages()).toEqual([]);
+    });
+
+    it('should parse through the full pipeline', async function() {
+      // `.feature` used to be silently swallowed, so this pins that a real
+      // source file reaches the new handler.
+      expect(await assemble('.feature bracket_as_indirect\nlda #$03\n'))
+          .toEqual([0xa9, 0x03]);
+      expect(await assembleErrors('.feature nonsense\n'))
+          .toEqual([expect.stringMatching(/Unknown feature: nonsense/)]);
+    });
+
+    it('should carry the warning through the full pipeline', async function() {
+      // The warning has to survive out to the caller's message list, and must
+      // not turn a working source into a failed build.
+      expect(await assemble('.feature string_escapes\nlda #$03\n'))
+          .toEqual([0xa9, 0x03]);
+      expect(await assembleWarnings('.feature string_escapes\nlda #$03\n'))
+          .toEqual([expect.stringMatching(/Cannot change feature string_escapes/)]);
+    });
+
+    it('should locate the warning at the line that caused it', async function() {
+      // A file-level warning with no source location is hard to act on. Tokens
+      // only carry a location when debug info is on, which is the same
+      // condition every other located diagnostic is under.
+      const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+lda #$03
+.feature org_per_seg
+`;
+      const result = await compile(
+          [{type: 'source', code, name: 'test.s'} as AssemblyInput],
+          {generateDebugInfo: true});
+      expect(result.success).toBe(true);
+      const warnings = result.messages.filter(m => m.level === 'warning');
+      expect(warnings.length).toBe(1);
+      expect(warnings[0].source?.file).toBe('test.s');
+      expect(warnings[0].source?.line).toBe(4);
     });
   });
 

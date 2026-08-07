@@ -15,6 +15,10 @@ import type { Expr, Meta } from './expr.ts';
 import type { SourceInfo } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
 
+/** The keys of `T` whose value is an optional boolean. */
+type BooleanKeys<T> =
+    {[K in keyof T]-?: boolean | undefined extends T[K] ? K : never}[keyof T];
+
 export type Validated<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
@@ -492,10 +496,17 @@ function validateOptions(v: unknown, path: string): Js65Options {
               value: reqString(d.value, `${p}.value`)};
     });
   }
-  const lineContinuations = optBoolean(v.lineContinuations, `${path}.lineContinuations`);
-  if (lineContinuations !== undefined) out.lineContinuations = lineContinuations;
-  const numberSeparators = optBoolean(v.numberSeparators, `${path}.numberSeparators`);
-  if (numberSeparators !== undefined) out.numberSeparators = numberSeparators;
+  const flag = (key: BooleanKeys<Js65Options>) => {
+    const val = optBoolean(v[key], `${path}.${key}`);
+    if (val !== undefined) out[key] = val;
+  };
+  flag('lineContinuations');
+  flag('numberSeparators');
+  flag('cComments');
+  flag('allowBrackets');
+  flag('labelsWithoutColons');
+  flag('pcAssignment');
+  flag('forceRange');
   const generateDebugInfo = optBoolean(v.generateDebugInfo, `${path}.generateDebugInfo`);
   if (generateDebugInfo !== undefined) out.generateDebugInfo = generateDebugInfo;
   const debugLevel = optNumber(v.debugLevel, `${path}.debugLevel`);

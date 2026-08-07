@@ -6,6 +6,9 @@ import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
 import { ErrorCollector } from './error.ts';
+import { type TokenizerOptions } from './options.ts';
+
+export type { TokenizerOptions as Options };
 
 const NEWLINE = /(\r\n|\n|\r)/y;
 
@@ -39,7 +42,7 @@ export class Tokenizer implements Tokens.Source {
 
   constructor(str: string,
               readonly file = 'input.s',
-              readonly opts: Options = {},
+              readonly opts: TokenizerOptions = {},
               readonly sourceContents?: SourceContents,
               readonly errorCollector?: ErrorCollector) {
     this.buffer = new Buffer(str);
@@ -248,28 +251,4 @@ function parseBin(str: string): Token {
   return {token: 'num', num: Number.parseInt(str, 2), width: Math.ceil(str.length / 8)};
 }
 
-/**
- * Options for assembly and linking
- *
- * includePaths: when a file is included, the file path will be appended to each include path
- *               and will attempt to be loaded from the FS callbacks.
- *
- * lineContinuations: if enabled, the assembler will allow the `\` to escape a newline to continue
- *               a single line declaration across multiple lines.
- *
- * numberSeparators: if enabled, you can use the single quote `'` character as an arbitrary number separator
- *
- * generateDebugInfo: when enabled, information from the source files are stored for linking in a `SourceContents`
- *               class. Passing this class into the linker will allow it to generate a `mlb` file
- *               with symbols for linking
- */
-export interface Options {
-  includePaths?: string[];
-  /** Search path for `.incbin`.*/
-  binIncludePaths?: string[];
-  // caseInsensitive?: boolean; // handle elsewhere?
-  lineContinuations?: boolean;
-  numberSeparators?: boolean;
-  generateDebugInfo?: boolean;
-}
 

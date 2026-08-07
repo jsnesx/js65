@@ -10,12 +10,15 @@ import type { AssemblerMessage, ErrorLevel } from './error.ts';
 import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
+import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
+         type AssemblerOptions } from './options.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 import { createHash } from 'sha1-uint8array';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
 export { ErrorCollector, RecoverableError } from './error.ts';
+export type { AssemblerOptions as Options } from './options.ts';
 
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
@@ -381,7 +384,7 @@ export class Assembler {
   /** Returns an early error in assembling if you mix segment modes */
   private _segmentMode?: 'named'|'anon';
 
-  constructor(readonly cpu = Cpu.P02, readonly opts: Options = {}) {}
+  constructor(readonly cpu = Cpu.P02, readonly opts: AssemblerOptions = {}) {}
 
   private generateAnonSegmentName(memory: number, size: number): string {
     // reuse _segmentOffset for a count of segments used in this file to help make the hash unique.
@@ -1086,6 +1089,7 @@ export class Assembler {
         case '.warning': return this.log('warn', tokens);
         case '.error': return this.log('error', tokens);
         case '.fatal': return this.log('error', tokens, true);
+        case '.feature': return this.feature(tokens);
 
         case '.a8':
         case '.i8':
@@ -1112,7 +1116,6 @@ export class Assembler {
         case '.linecont':
         case '.localchar':
         case '.case':
-        case '.feature':
         case '.autoimport':
         // Probably not going to add these.
         case '.condes':
@@ -2110,6 +2113,53 @@ export class Assembler {
     this.cpuStack.pop();
   }
 
+  /** .feature name [on|off|+|-] [, name [on|off|+|-] ...] */
+  feature(tokens: Token[]) {
+    if (tokens.length < 2) this.fail(`Expected feature name(s)`, tokens[0]);
+    // no tokenizerOptions is a valid case when doing tests or getting used as a library
+    const tokOpts = this.opts.tokenizerOptions ?? {};
+    for (const term of Tokens.parseArgList(tokens, 1)) {
+      const nameTok = term[0];
+      const name = Tokens.expectIdentifier(nameTok, tokens[0]);
+      const on = this.parseFeatureState(term, nameTok);
+      try {
+        applyFeature(name, this.opts, tokOpts, on);
+      } catch (err) {
+        if (err instanceof RecoverableError) {
+          this.errorCollector.add('warning', err.message, this._source);
+          continue;
+        }
+        if (err instanceof UnknownFeatureError) {
+          this.fail(`Unknown feature: ${err.message}`, nameTok);
+        }
+        if (err instanceof UnsupportedFeatureError) {
+          this.fail(`Unsupported feature: ${err.message}`, nameTok);
+        }
+        throw err;
+      }
+    }
+  }
+
+  /** The optional `on`/`off`/`+`/`-` trailing a name in `.feature`. */
+  private parseFeatureState(term: Token[], nameTok: Token): boolean {
+    if (term.length === 1) return true;
+    const tok = term[1];
+    if (term.length === 2) {
+      if (tok.token === 'ident') {
+        const state = Tokens.str(tok).toLowerCase();
+        if (state === 'on') return true;
+        if (state === 'off') return false;
+      }
+      // `+`/`-` tokenize as operators, and RE_OPERATOR is greedy about runs of
+      // them, so only a single character counts.
+      if (tok.token === 'op') {
+        if (tok.str === '+') return true;
+        if (tok.str === '-') return false;
+      }
+    }
+    this.fail(`Expected on, off, + or - after feature name`, tok ?? nameTok);
+  }
+
   move(size: number, source: Expr) {
     this.append({op: '.move', args: [source], meta: {size}}, size);
   }
@@ -2511,15 +2561,6 @@ type ArgMode =
     'rel' | 'zpg' | 'zpx' | 'zpy';
 
 export type Arg = ['acc' | 'imp'] | [ArgMode, Expr];
-
-export interface Options {
-  allowBrackets?: boolean;
-  reentrantScopes?: boolean;
-  overwriteMode?: mod.OverwriteMode;
-  refExtractor?: RefExtractor;
-  generateDebugInfo?: boolean;
-  moduleName?: string;
-}
 
 
 type ParsedSymbol = {type: 'pc'|'none'}|{type: 'anon'|'rel'|'rts', num: number};
