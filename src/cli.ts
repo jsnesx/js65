@@ -44,6 +44,7 @@ class Arguments {
     includePaths: [],
     binIncludePaths: [],
     defines: [],
+    features: [],
     lineContinuations: true,
     debugLevel: 0, // -1 = disabled, 0 = comments/labels only, 1 = full source
     generateDebugInfo: true,
@@ -132,6 +133,13 @@ const OPTIONS: Option[] = [
      }
      out.options.defines!.push(
          {name, value: eq < 0 ? '1' : value.substring(eq + 1)});
+   }},
+  {names: ['--feature'], arity: 1,
+   apply(out, value) {
+     // Features can be comma separated too so we need to comma split here
+     for (const name of value.split(',')) {
+       out.options.features!.push(name.trim());
+     }
    }},
 ];
 
@@ -561,6 +569,10 @@ optional arguments:
                           were created as \`.define NAME VALUE\` just like how C compilers
                           treat the option. Repeatable.
                           EX: -DFOO=bar -DFOO= -D FOO=3+5
+  --feature NAME[,NAME]   Enable a feature before any source is read, as if the
+                          file started with \`.feature NAME\`. Takes a comma separated
+                          list. Repeatable.
+                          EX: --feature c_comments --feature pc_assignment,force_range
   -h/--help               Print this help text and exit.
   --                      Ends the option list. Everything after this will be parsed as an input file.
 

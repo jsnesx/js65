@@ -9,7 +9,8 @@ import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { type AssemblerOptions as AsmOptions,
+import { applyFeatures,
+         type AssemblerOptions as AsmOptions,
          type TokenizerOptions } from './options.ts';
 import * as Tokens from './token.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
@@ -98,6 +99,7 @@ export interface AssemblerOptions {
   binIncludePaths?: string[];
   generateDebugInfo?: boolean;
   defines?: SymbolDefine[];
+  features?: string[];
 
   lineContinuations?: boolean;
   numberSeparators?: boolean;
@@ -162,6 +164,8 @@ export interface Js65Options {
   linkerConfigName?: string;
   /** `-D` defines. will be parsed into .set values or .define macros later */
   defines?: SymbolDefine[];
+  /** features passed in through --feature */
+  features?: string[];
 }
 
 /**
@@ -279,6 +283,11 @@ export async function assemble(
     pcAssignment: options?.pcAssignment,
     forceRange: options?.forceRange,
   };
+  const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
+  allMessages.push(...featureMessages);
+  if (featureMessages.some(m => m.level === 'error')) {
+    return { success: false, modules, messages: allMessages };
+  }
   /**
    * Set up the options so that the same TokenizerOptions object is passed to all preprocessor instances
    * This is needed to keep midmodule `.feature` changes rolling down through `.include`d files
@@ -758,6 +767,7 @@ export async function compile(
       binIncludePaths: options.binIncludePaths,
       generateDebugInfo: options.generateDebugInfo,
       defines: options.defines,
+      features: options.features,
       allowBrackets: options.allowBrackets,
       labelsWithoutColons: options.labelsWithoutColons,
       pcAssignment: options.pcAssignment,

@@ -496,6 +496,12 @@ function validateOptions(v: unknown, path: string): Js65Options {
               value: reqString(d.value, `${p}.value`)};
     });
   }
+  if (v.features !== undefined) {
+    // The names themselves are checked by the assembler, which is where
+    // `.feature` validates them too.
+    out.features = reqArray(v.features, `${path}.features`)
+      .map((s, i) => reqString(s, `${path}.features[${i}]`));
+  }
   const flag = (key: BooleanKeys<Js65Options>) => {
     const val = optBoolean(v[key], `${path}.${key}`);
     if (val !== undefined) out[key] = val;

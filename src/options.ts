@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import { RecoverableError, type ErrorCollector } from './error.ts';
+import { RecoverableError, type AssemblerMessage, type ErrorCollector } from './error.ts';
 import type { OverwriteMode } from './module.ts';
 import type { RefExtractor } from './assembler.ts';
 
@@ -99,6 +99,29 @@ export function applyFeature(name: string, asm: AssemblerOptions, tok: Tokenizer
       throw new UnknownFeatureError(name);
     }
   }
+}
+
+// Applies the list of features provided by the cli or library
+export function applyFeatures(names: readonly string[],
+                              asm: AssemblerOptions,
+                              tok: TokenizerOptions): AssemblerMessage[] {
+  const messages: AssemblerMessage[] = [];
+  for (const name of names) {
+    try {
+      applyFeature(name, asm, tok);
+    } catch (err) {
+      if (err instanceof RecoverableError) {
+        messages.push({level: 'warning', message: err.message});
+      } else if (err instanceof UnknownFeatureError) {
+        messages.push({level: 'error', message: `Unknown feature: ${err.message}`});
+      } else if (err instanceof UnsupportedFeatureError) {
+        messages.push({level: 'error', message: `Unsupported feature: ${err.message}`});
+      } else {
+        throw err;
+      }
+    }
+  }
+  return messages;
 }
 
 const UNCONDITIONAL = new Map<string, string>([
