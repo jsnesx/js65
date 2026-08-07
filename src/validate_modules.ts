@@ -484,6 +484,14 @@ function validateOptions(v: unknown, path: string): Js65Options {
     out.includePaths = reqArray(v.includePaths, `${path}.includePaths`)
       .map((s, i) => reqString(s, `${path}.includePaths[${i}]`));
   }
+  if (v.defines !== undefined) {
+    out.defines = reqArray(v.defines, `${path}.defines`).map((d, i) => {
+      const p = `${path}.defines[${i}]`;
+      if (!isObject(d)) fail(p, 'expected object');
+      return {name: reqString(d.name, `${p}.name`),
+              value: reqString(d.value, `${p}.value`)};
+    });
+  }
   const lineContinuations = optBoolean(v.lineContinuations, `${path}.lineContinuations`);
   if (lineContinuations !== undefined) out.lineContinuations = lineContinuations;
   const numberSeparators = optBoolean(v.numberSeparators, `${path}.numberSeparators`);

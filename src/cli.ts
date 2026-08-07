@@ -43,6 +43,7 @@ class Arguments {
   options: Js65Options = {
     includePaths: [],
     binIncludePaths: [],
+    defines: [],
     lineContinuations: true,
     debugLevel: 0, // -1 = disabled, 0 = comments/labels only, 1 = full source
     generateDebugInfo: true,
@@ -50,6 +51,8 @@ class Arguments {
 }
 
 const DEPFILE_FLAGS = ['--create-dep', '--create-full-dep', '--create-deps'];
+
+const RE_SYMBOL_NAME = /^[a-z_][a-z0-9_]*$/i;
 
 interface Option {
   /** various accepted spellings for the option */
@@ -119,6 +122,17 @@ const OPTIONS: Option[] = [
    }},
   {names: ['--target'], arity: 1,
    apply(out, value) { out.options.target = value; }},
+  {names: ['-D', '--define'], arity: 1, attached: true,
+   apply(out, value) {
+     const eq = value.indexOf('=');
+     const name = eq < 0 ? value : value.substring(0, eq);
+     if (!RE_SYMBOL_NAME.test(name)) {
+       this.usage(1, [new Error(`Invalid symbol name for -D: '${name}'`)]);
+       return;
+     }
+     out.options.defines!.push(
+         {name, value: eq < 0 ? '1' : value.substring(eq + 1)});
+   }},
 ];
 
 /** The positional subcommands, which are words rather than flags. */
@@ -538,7 +552,17 @@ optional arguments:
                           including and the directories of the input files. Repeatable.
   --bin-include-dir=DIR   Add DIR to the \`.incbin\` search path. If none are given,
                           \`.incbin\` falls back to the -I directories. Repeatable.
+  -D NAME[=VALUE]/--define=NAME[=VALUE]
+                          Define NAME before any source is read. VALUE defaults to 1.
+                          Accepts numeric values (binary, decimal, hexidecimal) as if they
+                          were created as \`NAME .set VALUE\`
+                          EX: -D FOO=1 -DFOO -DFOO=$1f -DFOO=%1010
+                          Also accepts other values such as strings or expressions as if they
+                          were created as \`.define NAME VALUE\` just like how C compilers
+                          treat the option. Repeatable.
+                          EX: -DFOO=bar -DFOO= -D FOO=3+5
   -h/--help               Print this help text and exit.
+  --                      Ends the option list. Everything after this will be parsed as an input file.
 
 ===
 

@@ -110,7 +110,7 @@ export class Preprocessor implements Tokens.Source {
     }
   }
 
-  
+
   async tokens() {
     const tokens = [];
     let tok;
@@ -699,7 +699,7 @@ export class Preprocessor implements Tokens.Source {
     '.repeat': (line) => this.parseRepeat(line),
   };
 
-  private async parseDefine(line: Token[]) {
+  async parseDefine(line: Token[]) {
     const name = Tokens.expectIdentifier(line[1], line[0]);
     const define = Define.from(line);
     const prev = this.macros.get(name);
