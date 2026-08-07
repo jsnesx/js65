@@ -6,7 +6,7 @@ import { Cpu } from './cpu.ts';
 import { type ErrorCollector, FatalError, RecoverableError } from './error.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
-import { type CfgSymbols, type LinkerConfig, configSymbols, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
+import { type CfgSymbols, type LinkerConfig, configSymbols, linkerDefines, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
 import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
@@ -74,7 +74,7 @@ export class Linker {
 
   constructor(opts: LinkerOptions = {}) {
     this.opts = opts;
-    this._link = new Link(opts.errorCollector);
+    this._link = new Link(opts.errorCollector, linkerDefines(opts.defines));
   }
 
   read(file: Module): Linker {
@@ -1083,7 +1083,9 @@ class Link {
   /** Imports already reported missing, so each is named once per run. */
   private missingImports = new Set<string>();
 
-  constructor(readonly errorCollector?: ErrorCollector) {}
+  constructor(readonly errorCollector?: ErrorCollector,
+              /** `-D` overrides for config `SYMBOLS`, already reduced to numbers. */
+              private readonly defines: CfgSymbols = new Map()) {}
 
   fail(msg: string, at?: {source?: SourceInfo}): never {
     if (!this.errorCollector) Tokens.fail(msg, at);
@@ -1743,10 +1745,11 @@ class Link {
    * the earlier ones and against every segment `define`, so
    * `value = __RAM_LAST__` works.
    */
-  private defineConfigSymbols(defines: CfgSymbols) {
+  private defineConfigSymbols(segmentSymbols: CfgSymbols) {
     if (!this.config) return;
     const symbols: CfgSymbols =
-        new Map([...configSymbols(this.config, this.objectExports), ...defines]);
+        new Map([...configSymbols(this.config, this.objectExports, this.defines),
+                 ...segmentSymbols]);
     this.collect(this.config.symbols, sym => {
       if (sym.type === 'import') {
         if (!this.exports.has(sym.name)) {
@@ -1758,7 +1761,9 @@ class Link {
       // An object file's definition wins, which is what `weak` asks for and
       // what js65 does for `export` too (ld65 would call that a conflict).
       if (this.exports.has(sym.name)) return;
-      const value =
+      // A `-D` on the command line replaces the config's value.
+      const define = this.defines.get(sym.name);
+      const value = define ??
           resolveCfgExpr(sym.value!, symbols, `Value of '${sym.name}'`);
       symbols.set(sym.name, value);
       this.addLinkerSymbol(sym.name, value);
@@ -1930,7 +1935,7 @@ class Link {
     }
     this.config = cfg;
     this.objectExports = exported;
-    for (const segment of lowerLinkerConfig(cfg, exported)) {
+    for (const segment of lowerLinkerConfig(cfg, exported, this.defines)) {
       this.addRawSegment(segment);
       this.segmentOrder.push(segment.name);
     }

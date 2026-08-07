@@ -864,6 +864,127 @@ describe('CLI', function() {
     });
   });
 
+  // js65 is one binary playing both the ca65 and the ld65 role, so the single
+  // -D list also feeds the linker, where a numeric define overrides a config
+  // SYMBOLS entry the way ld65's -D does.
+  describe('-D linker overrides', function() {
+    /** Runs the CLI over a literal file tree, returning everything it wrote. */
+    async function build(files: Record<string, string>, args: string[]) {
+      const written = new Map<string, Uint8Array>();
+      let exitCode = 0;
+      const read = (path: string, filename: string) => {
+        const key = joinDir(path, filename);
+        if (!(key in files)) throw new Error(`ENOENT ${key}`);
+        return files[key];
+      };
+      const cli = new Cli({
+        fsReadString: async (path, filename) => read(path, filename),
+        fsReadBytes: async (path, filename) =>
+            new TextEncoder().encode(read(path, filename)),
+        fsWriteString: async () => {},
+        fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
+        fsWalk: async () => {},
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(args);
+      if (exitCode !== 0) throw new Error(`cli exited with code ${exitCode}`);
+      return written;
+    }
+
+    /** Links main.s against nes.cfg, returning the output bytes. */
+    async function bytes(cfg: string, src: string, args: string[] = []) {
+      const written = await build({'main.s': src, 'nes.cfg': cfg},
+                                  ['-C', 'nes.cfg', '-o', 'rom.nes', ...args,
+                                   'main.s']);
+      return [...written.get('rom.nes')!];
+    }
+
+    const IMPORT_CFG = `
+      SYMBOLS { FOO: type = export, value = $12; }
+      MEMORY { PRG: start = $8000, size = $4, file = %O, fill = yes,
+               fillval = $ff; }
+      SEGMENTS { CODE: load = PRG; }`;
+    const IMPORT_SRC = '.segment "CODE"\n.import FOO\nlda #FOO\n';
+
+    it('uses the config value when no -D is given', async function() {
+      expect(await bytes(IMPORT_CFG, IMPORT_SRC))
+          .toEqual([0xa9, 0x12, 0xff, 0xff]);
+    });
+
+    it('overrides a config SYMBOLS value in the linked output', async function() {
+      expect(await bytes(IMPORT_CFG, IMPORT_SRC, ['-D', 'FOO=$34']))
+          .toEqual([0xa9, 0x34, 0xff, 0xff]);
+    });
+
+    it('lets an .import take the name back from the assembler side',
+       async function() {
+      // The same -D also defines FOO as a `.set` symbol for the assembler, so
+      // without the handoff this collides with `Symbol 'FOO' already defined`.
+      // .importzp takes the same path as .import.
+      expect(await bytes(IMPORT_CFG, '.segment "CODE"\n.importzp FOO\nlda FOO\n',
+                         ['-DFOO=$34'])).toEqual([0xa5, 0x34, 0xff, 0xff]);
+    });
+
+    it('does not let a -D satisfy an .import on its own', async function() {
+      // Proof that the import really came from the link: with nothing exporting
+      // FOO, the define must not quietly stand in for it.
+      const cfg = `
+        MEMORY { PRG: start = $8000, size = $4, file = %O, fill = yes,
+                 fillval = $ff; }
+        SEGMENTS { CODE: load = PRG; }`;
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      try {
+        await expect(bytes(cfg, IMPORT_SRC, ['-DFOO=$34'])).rejects.toThrow();
+      } finally {
+        console.log = log;
+      }
+      expect(lines.join('\n')).toContain('FOO');
+    });
+
+    it('overrides a symbol the config geometry is built from', async function() {
+      const cfg = `
+        SYMBOLS { __PAD__: type = weak, value = $2; }
+        MEMORY { PRG: start = $8000, size = $2 + __PAD__, file = %O,
+                 fill = yes, fillval = $ff; }
+        SEGMENTS { CODE: load = PRG; }`;
+      const src = '.segment "CODE"\nlda #3\n';
+      expect(await bytes(cfg, src)).toEqual([0xa9, 3, 0xff, 0xff]);
+      expect(await bytes(cfg, src, ['-D__PAD__=6']))
+          .toEqual([0xa9, 3, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    });
+
+    it('ignores a define the linker has no use for', async function() {
+      // A -D meant for the assembler - a name the config never mentions, or a
+      // value that is not a number - must not disturb the link.
+      expect(await bytes(IMPORT_CFG, IMPORT_SRC,
+                         ['-DDEBUG=1', '-DGREETING=hello', '-DEXPR=1+2']))
+          .toEqual([0xa9, 0x12, 0xff, 0xff]);
+    });
+
+    it('lets the last -D of a name win on the linker side', async function() {
+      expect(await bytes(IMPORT_CFG, IMPORT_SRC, ['-DFOO=$34', '-DFOO=$56']))
+          .toEqual([0xa9, 0x56, 0xff, 0xff]);
+    });
+
+    it('collides with a source definition of the same name', async function() {
+      // Only `.import` hands the name to the linker. A source file that
+      // defines the name itself conflicts with the assembler half of the -D,
+      // exactly as `ca65 -D FOO=1` on a file containing `FOO = $78` does.
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      try {
+        await expect(bytes(IMPORT_CFG, '.segment "CODE"\nFOO = $78\nlda #FOO\n',
+                           ['-DFOO=$34'])).rejects.toThrow();
+      } finally {
+        console.log = log;
+      }
+      expect(lines.join('\n')).toContain('FOO');
+    });
+  });
+
   // Each case here is a source that only assembles - or only assembles to these
   // bytes - if the flag actually reached the assembler's options, so a
   // parsed-but-ignored --feature fails them.
