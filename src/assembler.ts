@@ -275,7 +275,8 @@ export class Assembler {
   private zeropageGlobals = new Set<string>();
 
   /** Current state for tracking .struct and .enum members */
-  private structContext: Array<{kind: 'struct'|'enum', offset: number, name?: string}> = [];
+  private structContext:
+      Array<{kind: 'struct'|'enum', offset: number, name?: string, count: number}> = [];
 
   /**
    * When a `.sizeof` operation is used in a non-const context, we can defer the check
@@ -1209,7 +1210,21 @@ export class Assembler {
     if (this.opts.generateDebugInfo && tokens[0].source) {
       this._source = tokens[0].source;
     }
-    this.assign(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
+    const name = Tokens.str(tokens[0]);
+    const expr = this.parseExpr(tokens, 2);
+    const ctx = this.structContext[this.structContext.length - 1];
+    if (ctx?.kind !== 'enum') {
+      this.assign(name, expr);
+      return;
+    }
+    // enum value with assignment, so parse the value passed to the enum.
+    // assign will happen in enumMember instead, along with setting the offset
+    // to the new value passed in.
+    const val = this.evaluate(expr);
+    if (val == null) {
+      this.fail(`enum member '${name}' needs a constant value`, tokens[0]);
+    }
+    this.enumMember(name, val);
   }
 
   setSym(tokens: Token[]) {
@@ -1587,16 +1602,18 @@ export class Assembler {
   beginStruct(tokens: Token[], kind: 'struct'|'enum') {
     const name = this.parseOptionalIdentifier(tokens);
     if (name != null) this.enterScope(name, 'scope');
-    this.structContext.push({kind, offset: 0, name: name ?? undefined});
+    this.structContext.push({kind, offset: 0, name: name ?? undefined, count: 0});
   }
 
   endStruct(kind: 'struct'|'enum') {
     const ctx = this.structContext.pop();
     if (!ctx || ctx.kind !== kind) this.fail(`.end${kind} without a matching .${kind}`);
     if (ctx!.name != null) {
-      // A struct tag names a scope, not a value - its size lives in that scope's
-      // size symbol, reachable only through `.sizeof`, as in ca65.
-      const size: Expr = {op: 'num', num: ctx!.offset, meta: Exprs.size(ctx!.offset)};
+      // The size of the structs are stored in the offset, while
+      // the size of the enum is the count of the fields because ... it just is.
+      // i guess its useful, but still!
+      const num = ctx!.kind === 'enum' ? ctx!.count : ctx!.offset;
+      const size: Expr = {op: 'num', num, meta: Exprs.size(num)};
       this.defineSizeOfScope(this.currentScope, ctx!.name, size);
       this.exitScope('scope');
     }
@@ -1605,11 +1622,25 @@ export class Assembler {
   structMember(tokens: Token[]) {
     const ctx = this.structContext[this.structContext.length - 1];
     const name = Tokens.str(tokens[0]);
+    if (ctx.kind === 'enum') {
+      // No explicit value, so the member takes the running counter in offset.
+      Tokens.expectEol(tokens[1]);
+      this.enumMember(name, ctx.offset);
+      return;
+    }
     this.assign(name, ctx.offset);
-    const size = ctx.kind === 'enum' ? 1 : this.structMemberSize(tokens);
+    const size = this.structMemberSize(tokens);
     // The member's own symbol holds its offset, so its width goes in a size symbol.
     this.defineSizeOfSymbol(this.currentScope, name, size);
     ctx.offset += size;
+  }
+
+  private enumMember(name: string, value: number) {
+    const ctx = this.structContext[this.structContext.length - 1];
+    this.assign(name, value);
+    this.defineSizeOfSymbol(this.currentScope, name, 1);
+    ctx.offset = value + 1;
+    ctx.count++;
   }
 
   // Parses out the rest of a struct member to figure out the size of it
