@@ -391,6 +391,239 @@ describe('CLI', function() {
     }
   });
 
+  // Pins every spelling of every flag the option table has to keep working.
+  // These are pure parseArgs assertions with no filesystem behind them, so they
+  // are the regression net for the table refactor.
+  describe('argument parsing', function() {
+    const cli = new Cli({
+      fsReadString: async () => '',
+      fsReadBytes: async () => new Uint8Array(0),
+      fsWriteString: async () => {},
+      fsWriteBytes: async () => {},
+      fsWalk: async () => {},
+      exit: () => {},
+    });
+
+    /** parseArgs with a stub that records exit codes instead of exiting. */
+    function strict() {
+      const exits: number[] = [];
+      const c = new Cli({
+        fsReadString: async () => '',
+        fsReadBytes: async () => new Uint8Array(0),
+        fsWriteString: async () => {},
+        fsWriteBytes: async () => {},
+        fsWalk: async () => {},
+        exit: (code: number) => { exits.push(code); },
+      });
+      return {
+        exits,
+        parse(args: string[]) {
+          const log = console.log;
+          console.log = () => {};
+          try {
+            return c.parseArgs(args);
+          } finally {
+            console.log = log;
+          }
+        },
+      };
+    }
+
+    it('accepts every -h spelling', function() {
+      expect(cli.parseArgs(['-h']).help).toBe(true);
+      expect(cli.parseArgs(['--help']).help).toBe(true);
+      expect(cli.parseArgs(['main.s']).help).toBe(false);
+    });
+
+    it('accepts every output file spelling', function() {
+      expect(cli.parseArgs(['-o', 'a.nes']).outfile).toBe('a.nes');
+      expect(cli.parseArgs(['--outfile', 'a.nes']).outfile).toBe('a.nes');
+      expect(cli.parseArgs(['--output', 'a.nes']).outfile).toBe('a.nes');
+      expect(cli.parseArgs(['--output=a.nes']).outfile).toBe('a.nes');
+      expect(cli.parseArgs(['--outfile=a.nes']).outfile).toBe('a.nes');
+    });
+
+    it('rejects a repeated output file', function() {
+      const s = strict();
+      s.parse(['-o', 'a.nes', '-o', 'b.nes']);
+      expect(s.exits).toEqual([1]);
+    });
+
+    it('accepts every --dbgfile spelling', function() {
+      expect(cli.parseArgs(['--dbgfile', 'a.dbg']).dbgfile).toBe('a.dbg');
+      expect(cli.parseArgs(['--dbgfile=a.dbg']).dbgfile).toBe('a.dbg');
+    });
+
+    it('rejects a repeated --dbgfile', function() {
+      const s = strict();
+      s.parse(['--dbgfile', 'a.dbg', '--dbgfile', 'b.dbg']);
+      expect(s.exits).toEqual([1]);
+    });
+
+    it('accepts every map file spelling', function() {
+      expect(cli.parseArgs(['-m', 'a.map']).mapfile).toBe('a.map');
+      expect(cli.parseArgs(['--mapfile', 'a.map']).mapfile).toBe('a.map');
+      expect(cli.parseArgs(['--mapfile=a.map']).mapfile).toBe('a.map');
+      expect(cli.parseArgs(['-m=a.map']).mapfile).toBe('a.map');
+    });
+
+    it('rejects a repeated map file', function() {
+      const s = strict();
+      s.parse(['-m', 'a.map', '--mapfile', 'b.map']);
+      expect(s.exits).toEqual([1]);
+    });
+
+    it('rejects a repeated config file', function() {
+      const s = strict();
+      s.parse(['-C', 'a.cfg', '--config=b.cfg']);
+      expect(s.exits).toEqual([1]);
+    });
+
+    it('parses the debug level flags', function() {
+      const off = cli.parseArgs(['--no-debuginfo']).options;
+      expect(off.debugLevel).toBe(-1);
+      expect(off.generateDebugInfo).toBe(false);
+      for (const flag of ['-g', '-g0']) {
+        const on = cli.parseArgs([flag]).options;
+        expect(on.debugLevel).toBe(0);
+        expect(on.generateDebugInfo).toBe(true);
+      }
+      const full = cli.parseArgs(['-g1']).options;
+      expect(full.debugLevel).toBe(1);
+      expect(full.generateDebugInfo).toBe(true);
+    });
+
+    it('defaults to comments-and-labels debug info', function() {
+      const opts = cli.parseArgs(['main.s']).options;
+      expect(opts.debugLevel).toBe(0);
+      expect(opts.generateDebugInfo).toBe(true);
+      expect(opts.lineContinuations).toBe(true);
+    });
+
+    it('accepts every --compileonly spelling', function() {
+      for (const flag of ['-c', '--compileonly']) {
+        const args = cli.parseArgs([flag]);
+        expect(args.compileonly).toBe(true);
+        expect(args.options.outputFormat).toBe('object');
+      }
+    });
+
+    it('accepts every rom spelling', function() {
+      expect(cli.parseArgs(['-r', 'base.nes']).rom).toBe('base.nes');
+      expect(cli.parseArgs(['--rom', 'base.nes']).rom).toBe('base.nes');
+      expect(cli.parseArgs(['--rom=base.nes']).rom).toBe('base.nes');
+    });
+
+    it('accepts every --target spelling', function() {
+      expect(cli.parseArgs(['--target', 'sim']).options.target).toBe('sim');
+      expect(cli.parseArgs(['--target=sim']).options.target).toBe('sim');
+    });
+
+    it('parses --ips', function() {
+      const args = cli.parseArgs(['--ips']);
+      expect(args.patch).toBe('ips');
+      expect(args.options.outputFormat).toBe('ips');
+    });
+
+    it('parses --stdin as an input file', function() {
+      expect(cli.parseArgs(['--stdin']).files).toEqual([Cli.STDIN]);
+    });
+
+    it('parses the rehydrate and dehydrate subcommands', function() {
+      expect(cli.parseArgs(['rehydrate', 'main.s']).op).toBeDefined();
+      expect(cli.parseArgs(['dehydrate', 'main.s']).op).toBeDefined();
+      expect(cli.parseArgs(['main.s']).op).toBeUndefined();
+      // The subcommand itself is not an input file.
+      expect(cli.parseArgs(['rehydrate', 'main.s']).files).toEqual(['main.s']);
+    });
+
+    it('collects input files in order', function() {
+      expect(cli.parseArgs(['a.s', '-o', 'out.nes', 'b.s']).files)
+          .toEqual(['a.s', 'b.s']);
+    });
+
+    describe('unknown options', function() {
+      it('rejects an unknown long flag', function() {
+        const s = strict();
+        s.parse(['--nonsense', 'main.s']);
+        expect(s.exits).toEqual([1]);
+      });
+
+      it('rejects an unknown short flag', function() {
+        const s = strict();
+        s.parse(['-Z', 'main.s']);
+        expect(s.exits).toEqual([1]);
+      });
+
+      it('names the offending flag in the error', function() {
+        const lines: string[] = [];
+        const log = console.log;
+        console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+        try {
+          cli.parseArgs(['--nonsense', 'main.s']);
+        } finally {
+          console.log = log;
+        }
+        expect(lines.join('\n')).toContain('--nonsense');
+      });
+
+      it('does not treat an unknown flag as an input file', function() {
+        const s = strict();
+        const args = s.parse(['--nonsense', 'main.s']);
+        expect(args.files).not.toContain('--nonsense');
+      });
+
+      it('accepts a bare - as a filename', function() {
+        const s = strict();
+        const args = s.parse(['-']);
+        expect(args.files).toEqual(['-']);
+        expect(s.exits).toEqual([]);
+      });
+
+      it('does not reject a plain filename that contains a dash', function() {
+        const s = strict();
+        const args = s.parse(['my-file.s']);
+        expect(args.files).toEqual(['my-file.s']);
+        expect(s.exits).toEqual([]);
+      });
+    });
+
+    describe('-- end of options', function() {
+      it('treats a dash-led argument after -- as a filename', function() {
+        const s = strict();
+        const args = s.parse(['--', '-weird-name.s']);
+        expect(args.files).toEqual(['-weird-name.s']);
+        expect(s.exits).toEqual([]);
+      });
+
+      it('stops interpreting known flags after --', function() {
+        const s = strict();
+        const args = s.parse(['--', '-c', '--stdin']);
+        expect(args.files).toEqual(['-c', '--stdin']);
+        expect(args.compileonly).toBe(false);
+        expect(s.exits).toEqual([]);
+      });
+
+      it('still parses flags given before --', function() {
+        const args = cli.parseArgs(['-c', '-o', 'out.o', '--', '-in.s']);
+        expect(args.compileonly).toBe(true);
+        expect(args.outfile).toBe('out.o');
+        expect(args.files).toEqual(['-in.s']);
+      });
+
+      it('treats a second -- as a filename', function() {
+        const args = cli.parseArgs(['--', '--', 'main.s']);
+        expect(args.files).toEqual(['--', 'main.s']);
+      });
+
+      it('does not treat a subcommand after -- as a subcommand', function() {
+        const args = cli.parseArgs(['--', 'rehydrate']);
+        expect(args.op).toBeUndefined();
+        expect(args.files).toEqual(['rehydrate']);
+      });
+    });
+  });
+
   describe('anonymous segments', function() {
     const source = `
 .segment $8000 :size $10

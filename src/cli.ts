@@ -51,6 +51,82 @@ class Arguments {
 
 const DEPFILE_FLAGS = ['--create-dep', '--create-full-dep', '--create-deps'];
 
+interface Option {
+  /** various accepted spellings for the option */
+  names: string[];
+  /** number of parameters this takes in */
+  arity: 0 | 1;
+  /** Allows the value to be glued onto a short name like `-Iinc` */
+  attached?: boolean;
+  /** function called to write the option when found */
+  apply(this: Cli, out: Arguments, value: string): void;
+}
+
+/** wraps an apply function to keep it from getting called multiple times */
+function once(get: (out: Arguments) => string,
+              set: (out: Arguments, value: string) => void) {
+  return function(this: Cli, out: Arguments, value: string) {
+    if (get(out)) this.usage();
+    set(out, value);
+  };
+}
+
+const OPTIONS: Option[] = [
+  {names: ['-h', '--help'], arity: 0,
+   apply(out) { out.help = true; }},
+  {names: ['-o', '--outfile', '--output'], arity: 1,
+   apply: once(out => out.outfile, (out, v) => { out.outfile = v; })},
+  {names: ['--dbgfile'], arity: 1,
+   apply: once(out => out.dbgfile, (out, v) => { out.dbgfile = v; })},
+  {names: ['-m', '--mapfile'], arity: 1,
+   apply: once(out => out.mapfile, (out, v) => { out.mapfile = v; })},
+  {names: DEPFILE_FLAGS, arity: 1,
+   apply: once(out => out.depfile, (out, v) => { out.depfile = v; })},
+  {names: ['-C', '--config'], arity: 1,
+   apply: once(out => out.cfgfile, (out, v) => { out.cfgfile = v; })},
+  {names: ['-g', '-g0'], arity: 0,
+   apply(out) {
+     out.options.debugLevel = 0; // Comments and labels only
+     out.options.generateDebugInfo = true;
+   }},
+  {names: ['-g1'], arity: 0,
+   apply(out) {
+     out.options.debugLevel = 1; // Full source code
+     out.options.generateDebugInfo = true;
+   }},
+  {names: ['--no-debuginfo'], arity: 0,
+   apply(out) {
+     out.options.debugLevel = -1; // Disable debug info generation
+     out.options.generateDebugInfo = false;
+   }},
+  {names: ['-c', '--compileonly'], arity: 0,
+   apply(out) {
+     out.compileonly = true;
+     out.options.outputFormat = 'object';
+   }},
+  {names: ['--stdin'], arity: 0,
+   apply(out) { out.files.push(Cli.STDIN); }},
+  {names: ['-r', '--rom'], arity: 1,
+   apply(out, value) { out.rom = value; }},
+  {names: ['--bin-include-dir'], arity: 1,
+   apply(out, value) { out.options.binIncludePaths!.push(value); }},
+  {names: ['-I', '--include-dir'], arity: 1, attached: true,
+   apply(out, value) { out.options.includePaths!.push(value); }},
+  {names: ['--ips'], arity: 0,
+   apply(out) {
+     out.patch = 'ips';
+     out.options.outputFormat = 'ips';
+   }},
+  {names: ['--target'], arity: 1,
+   apply(out, value) { out.options.target = value; }},
+];
+
+/** The positional subcommands, which are words rather than flags. */
+const SUBCOMMANDS = new Map<string, (src: string, cpu: Cpu, prg: Uint8Array) => string>([
+  ['rehydrate', smudge],
+  ['dehydrate', clean],
+]);
+
 /** Make doesn't accept windows style paths */
 function escapeMakePath(path: string): string {
   return path.replace(/ /g, '\\ ');
@@ -124,77 +200,44 @@ export class Cli {
     return { type: 'source', code, name: filename };
   }
 
+  private matchOption(arg: string): {option: Option, value?: string} | undefined {
+    for (const option of OPTIONS) {
+      for (const name of option.names) {
+        if (arg === name) return {option};
+        if (option.arity === 0) continue;
+        if (arg.startsWith(`${name}=`)) {
+          return {option, value: arg.substring(name.length + 1)};
+        }
+        if (option.attached && arg.length > name.length && arg.startsWith(name)) {
+          return {option, value: arg.substring(name.length)};
+        }
+      }
+    }
+    return undefined;
+  }
+
   parseArgs(args : string[]) : Arguments {
     const out = new Arguments();
+    // `--` sets the rest of the command line to be filenames only
+    let filesOnly = false;
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === '-h' || arg === '--help') {
-        out.help = true;
-      } else if (arg === '-o' || arg === '--outfile' || arg === '--output') {
-        if (out.outfile) this.usage();
-        out.outfile = args[++i];
-      } else if (arg === '--dbgfile') {
-        if (out.dbgfile) this.usage();
-        out.dbgfile = args[++i];
-      } else if (arg === '-m' || arg === '--mapfile') {
-        if (out.mapfile) this.usage();
-        out.mapfile = args[++i];
-      } else if (arg.startsWith('--mapfile=')) {
-        out.mapfile = arg.substring('--mapfile='.length);
-      } else if (DEPFILE_FLAGS.some(f => arg === f)) {
-        if (out.depfile) this.usage();
-        out.depfile = args[++i];
-      } else if (DEPFILE_FLAGS.some(f => arg.startsWith(`${f}=`))) {
-        if (out.depfile) this.usage();
-        out.depfile = arg.substring(arg.indexOf('=') + 1);
-      } else if (arg === '-C' || arg === '--config') {
-        if (out.cfgfile) this.usage();
-        out.cfgfile = args[++i];
-      } else if (arg.startsWith('--config=')) {
-        if (out.cfgfile) this.usage();
-        out.cfgfile = arg.substring('--config='.length);
-      } else if (arg === '-g' || arg === '-g0') {
-        out.options.debugLevel = 0; // Comments and labels only
-        out.options.generateDebugInfo = true;
-      } else if (arg === '-g1') {
-        out.options.debugLevel = 1; // Full source code
-        out.options.generateDebugInfo = true;
-      } else if (arg === '--no-debuginfo') {
-        out.options.debugLevel = -1; // Disable debug info generation
-        out.options.generateDebugInfo = false;
-      } else if (arg === '-c' || arg === '--compileonly') {
-        out.compileonly = true;
-        out.options.outputFormat = 'object';
-      } else if (arg.startsWith('--output=')) {
-        if (out.outfile) this.usage();
-        out.outfile = arg.substring('--output='.length);
-      } else if (arg === 'rehydrate') {
-        out.op = smudge;
-      } else if (arg === 'dehydrate') {
-        out.op = clean;
-      } else if (arg === '--stdin') {
-        out.files.push(Cli.STDIN);
-      } else if (arg === '-r' || arg === '--rom') {
-        out.rom = args[++i];
-      } else if (arg.startsWith('--rom=')) {
-        out.rom = arg.substring('--rom='.length);
-      } else if (arg === '--bin-include-dir') {
-        out.options.binIncludePaths!.push(args[++i]);
-      } else if (arg.startsWith('--bin-include-dir=')) {
-        out.options.binIncludePaths!.push(arg.substring('--bin-include-dir='.length));
-      } else if (arg === '-I' || arg === '--include-dir') {
-        out.options.includePaths!.push(args[++i]);
-      } else if (arg === '--ips') {
-        out.patch = "ips";
-        out.options.outputFormat = 'ips';
-      } else if (arg.startsWith('--include-dir=')) {
-        out.options.includePaths!.push(arg.substring('--include-dir='.length));
-      } else if (arg.startsWith('-I')) {
-        out.options.includePaths!.push(arg.substring('-I'.length));
-      } else if (arg === '--target') {
-        out.options.target = args[++i];
-      } else if (arg.startsWith('--target=')) {
-        out.options.target = arg.substring('--target='.length);
+      if (!filesOnly && arg === '--') {
+        filesOnly = true;
+        continue;
+      }
+      const match = filesOnly ? undefined : this.matchOption(arg);
+      if (match) {
+        const {option} = match;
+        // An `--x VAL` option takes the next argument; the `--x=VAL` and
+        // `-xVAL` spellings carried their value in with them.
+        const value = option.arity === 0 ? arg
+            : match.value ?? args[++i];
+        option.apply.call(this, out, value);
+      } else if (!filesOnly && SUBCOMMANDS.has(arg)) {
+        out.op = SUBCOMMANDS.get(arg);
+      } else if (!filesOnly && arg.length > 1 && arg.startsWith('-')) {
+        this.usage(1, [new Error(`Unknown option: ${arg}`)]);
       } else {
         out.files.push(arg);
       }
