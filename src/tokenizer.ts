@@ -19,6 +19,9 @@ const NEWLINE = /(\r\n|\n|\r)/y;
 // nor do we need to reallocate the string with a slice.
 const RE_COMMENT = /;.*/y;
 const RE_LINE_CONT = /\\(\r\n|\n|\r)/y;
+const RE_BLOCK_COMMENT = /\/\*[^]*?\*\//y;
+const RE_BLOCK_COMMENT_OPEN = /\/\*/y;
+const RE_REST_OF_FILE = /[^]*/y;
 const RE_AT_IDENT = /@+[a-z0-9_]*/iy;
 // Notably missing from the IDENT is the scope :: qualifier, since this
 // is actually treated as a separate token in ca65. We glue it back together
@@ -102,9 +105,25 @@ export class Tokenizer implements Tokens.Source {
   protected skipIgnored(): void {
     while (this.buffer.space() ||
            this.buffer.token(RE_COMMENT) ||
-           (this.opts.lineContinuations && this.buffer.token(RE_LINE_CONT))) {
+           (this.opts.lineContinuations && this.buffer.token(RE_LINE_CONT)) ||
+           (this.opts.cComments && this.blockComment())) {
             // intentionally empty
            }
+  }
+
+  private blockComment(): boolean {
+    if (!this.buffer.lookingAt(RE_BLOCK_COMMENT_OPEN)) return false;
+    const source = {
+      file: this.file,
+      line: this.buffer.line,
+      column: this.buffer.column,
+    };
+    if (this.buffer.token(RE_BLOCK_COMMENT)) return true;
+    // No closing `*/`. Swallow the rest of the file rather than tokenizing the
+    // comment body as code, and report where the comment started.
+    this.buffer.token(RE_REST_OF_FILE);
+    this.unterminated(`Unterminated comment, expected */`, source);
+    return true;
   }
 
   /** `%` is a binary literal prefix in ca65, but used for special `%O` and `%S` flags in linkercfg. */

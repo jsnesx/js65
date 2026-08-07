@@ -65,6 +65,10 @@ interface Env {
   referencedSymbol(sym: string): boolean;
   /** Whether the name is an opcode mnemonic of the CPU being assembled for. */
   isMnemonic(name: string): boolean;
+  /** Whether `* = addr` is accepted */
+  allowsPcAssignment(): boolean;
+  /** Whether a leading identifier is a label even without a trailing `:` */
+  allowsLabelWithoutColon(): boolean;
   evaluate(expr: Expr): number|undefined;
   /** Expression a defined symbol (or `*`) stands for, without interning it. */
   definedValue(sym: string): Expr|undefined;
@@ -162,6 +166,15 @@ export class Preprocessor implements Tokens.Source {
             this.env.assignSym(line);
           } else if (Tokens.eq(line[1], Tokens.SET)) {
             this.env.setSym(line);
+          } else if (this.isLabelWithoutColon(line)) {
+            // Same split as the `foo:` case above, but there isn't a colon,
+            // so we just add one here to use the regular label code path.
+            line.splice(0, 1);
+            const label: Token[] =
+                [line.length ? {...front, labelsData: true} : front,
+                 {token: 'op', str: ':'}];
+            this.outQueue.push(label);
+            break;
           }
           if (!this.tryExpandMacro(line)) this.outQueue.push(line);
           return true;
@@ -171,6 +184,16 @@ export class Preprocessor implements Tokens.Source {
           return true;
 
         case 'op':
+          // `* = $8000`, which is just another spelling of `.org $8000`.
+          if (front.str === '*' && Tokens.eq(line[1], Tokens.ASSIGN)) {
+            if (!this.env.allowsPcAssignment()) {
+              Tokens.fail(
+                  `\`*=\` requires the pc_assignment feature`, front);
+            }
+            // Rewrite it as `.org` and let the loop dispatch it as a directive.
+            line.splice(0, 2, {token: 'cs', str: '.org', source: front.source});
+            break;
+          }
           // Probably an anonymous label...
           if (/^[-+]+$/.test(front.str)) {
             const label: Token[] = [front];
@@ -227,6 +250,13 @@ export class Preprocessor implements Tokens.Source {
   /** Whether a name is an instruction or a `.macro`, and so can't be a scope. */
   private isCallable(name: string): boolean {
     return this.macros.get(name) instanceof Macro || this.env.isMnemonic(name);
+  }
+
+  private isLabelWithoutColon(line: Token[]): boolean {
+    const front = line[0];
+    if (front.token !== 'ident') return false;
+    if (!this.env.allowsLabelWithoutColon()) return false;
+    return !this.isCallable(front.str);
   }
 
   /**

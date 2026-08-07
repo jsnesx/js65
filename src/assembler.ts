@@ -496,6 +496,17 @@ export class Assembler {
     return name.toLowerCase() in this.cpu.table;
   }
 
+  /** ca65 `pc_assignment`: `* = $8000` is sugar for `.org $8000`. */
+  allowsPcAssignment(): boolean {
+    return Boolean(this.opts.pcAssignment);
+  }
+
+  allowsLabelWithoutColon(): boolean {
+    // Inside a `.struct`/`.enum` a leading identifier declares a member instead,
+    // so the feature doesn't apply there.
+    return Boolean(this.opts.labelsWithoutColons) && !this.structContext.length;
+  }
+
   evaluate(expr: Expr): number|undefined {
     expr = this.resolve(expr);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num;
@@ -1462,6 +1473,9 @@ export class Assembler {
 
   opcode(op: number, arglen: number, expr: Expr) {
     // Emit some bytes.
+    // Performing the resolve will remove the branch tag on the expression,
+    // so save it so we can pass it down later
+    const isBranch = Boolean(expr?.meta?.branch);
     if (arglen) expr = this.resolve(expr); // BEFORE opcode (in case of *)
     const {chunk} = this;
     this.markWritten(1 + arglen);
@@ -1473,7 +1487,7 @@ export class Assembler {
 
     chunk.data.push(op);
     if (arglen) {
-      this.append(expr, arglen);
+      this.append(expr, arglen, isBranch);
     }
     if (!chunk.name) chunk.name = `Code`;
     // TODO - for relative, if we're in the same chunk, just compare
@@ -1496,7 +1510,7 @@ export class Assembler {
     }
   }
 
-  append(expr: Expr, size: number) {
+  append(expr: Expr, size: number, isBranch?: boolean) {
     const {chunk} = this;
     // Save the ref, as long as it's actually interesting.
     if (this.opts.refExtractor?.ref && chunk.org != null) {
@@ -1513,10 +1527,14 @@ export class Assembler {
     if (expr.op !== 'num' || expr.meta?.rel) {
       // use a placeholder and add a substitution
       const offset = chunk.data.length;
-      (chunk.subs || (chunk.subs = [])).push({offset, size, expr});
+      const sub: mod.Substitution = {offset, size, expr};
+      // The linker is what range-checks a substituted value, so the feature has
+      // to ride along with the substitution to get there.
+      if (this.opts.forceRange) sub.forceRange = true;
+      (chunk.subs || (chunk.subs = [])).push(sub);
       this.writeNumber(chunk.data, size); // write goes after subs
     } else {
-      this.writeNumber(chunk.data, size, val);
+      this.writeNumber(chunk.data, size, val, isBranch);
     }
   }
 
@@ -2500,17 +2518,13 @@ export class Assembler {
     throw new RecoverableError(fullMsg, source);
   }
 
-  writeNumber(data: number[], size: number, val?: number) {
-    // TODO - if val is a signed/unsigned 32-bit number, it's not clear
-    // whether we need to treat it one way or the other...?  but maybe
-    // it doesn't matter since we're only looking at 32 bits anyway.
-
-    // If the size doesn't match the incoming value, we silently truncate to the size
-    // const s = (size) << 3;
-    // if (val != null && (val < (-1 << s) || val >= (1 << s))) {
-    //   const name = ['byte', 'word', 'farword', 'dword'][size - 1];
-    //   this.fail(`Not a ${name}: $${val.toString(16)}`);
-    // }
+  writeNumber(data: number[], size: number, val?: number, isBranch?: boolean) {
+    if (val != null && !this.opts.forceRange && !Exprs.fits(val, size, isBranch)) {
+      // We have to write the bytes even if this should error out so that the
+      // rest of the error diagnostics match up correctly.
+      this.errorCollector.add(
+          'error', Exprs.rangeErrorMessage(val, size, isBranch), this._source);
+    }
     for (let i = 0; i < size; i++) {
       data.push(val != null ? val & 0xff : 0xff);
       if (val != null) val >>= 8;

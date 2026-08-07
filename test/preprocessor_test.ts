@@ -30,8 +30,7 @@ describe('Preprocessor', function() {
     const code = lines.join('\n');
     const toks = new TokenStream();
     toks.enter(new Tokenizer(code, 'input.s'));
-    // deno-lint-ignore no-explicit-any
-    const preprocessor = new Preprocessor(toks, {} as any);
+    const preprocessor = new Preprocessor(toks, new Assembler());
     await expect((async () => { while (await preprocessor.next()); })())
         .rejects.toThrow(msg);
   }

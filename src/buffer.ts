@@ -11,6 +11,7 @@ class State {
 
 const RE_SPACE = /[ \t]+/y;
 const RE_NEWLINE = /(\r\n|\n|\r)/y;
+const RE_NEWLINE_GLOBAL = /\r\n|\n|\r/g;
 
 export class Buffer {
   pos = 0;
@@ -31,8 +32,9 @@ export class Buffer {
     // to the next line/column/etc
     // s is the freshly-matched token text starting at this.pos.
     this.pos += s.length;
-    s = s.replace('\n', s.includes('\r') ? '' : '\r');
-    const lines = s.split(/\r/g);
+    // A multiline comment can go across multiple lines,
+    // so split on every line terminator rather than just the first.
+    const lines = s.split(RE_NEWLINE_GLOBAL);
     if (lines.length > 1) {
       this.line += lines.length - 1;
       this.column = 0;

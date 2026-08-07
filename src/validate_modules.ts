@@ -115,11 +115,14 @@ function validateExpr(v: unknown, path: string): Expr {
 
 function validateSubstitution(v: unknown, path: string): Substitution {
   if (!isObject(v)) fail(path, 'expected object');
-  return {
+  const out: Substitution = {
     offset: reqNumber(v.offset, `${path}.offset`),
     size: reqNumber(v.size, `${path}.size`),
     expr: validateExpr(v.expr, `${path}.expr`),
   };
+  const forceRange = optBoolean(v.forceRange, `${path}.forceRange`);
+  if (forceRange !== undefined) out.forceRange = forceRange;
+  return out;
 }
 
 function validateSymbol(v: unknown, path: string): Symbol {
