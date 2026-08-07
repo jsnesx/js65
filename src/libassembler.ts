@@ -8,7 +8,9 @@ import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
-import { Tokenizer, type Options as TokenizerOptions } from './tokenizer.ts';
+import { Tokenizer } from './tokenizer.ts';
+import { type AssemblerOptions as AsmOptions,
+         type TokenizerOptions } from './options.ts';
 import * as Tokens from './token.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
@@ -94,10 +96,16 @@ export interface SymbolDefine {
 export interface AssemblerOptions {
   includePaths?: string[];
   binIncludePaths?: string[];
-  lineContinuations?: boolean;
-  numberSeparators?: boolean;
   generateDebugInfo?: boolean;
   defines?: SymbolDefine[];
+
+  lineContinuations?: boolean;
+  numberSeparators?: boolean;
+  cComments?: boolean;
+  allowBrackets?: boolean;
+  labelsWithoutColons?: boolean;
+  pcAssignment?: boolean;
+  forceRange?: boolean;
 }
 
 /**
@@ -134,9 +142,15 @@ export type OutputFormat = 'binary' | 'ips' | 'object';
 export interface Js65Options {
   includePaths?: string[];
   binIncludePaths?: string[];
+  generateDebugInfo?: boolean;
+
   lineContinuations?: boolean;
   numberSeparators?: boolean;
-  generateDebugInfo?: boolean;
+  cComments?: boolean;
+  allowBrackets?: boolean;
+  labelsWithoutColons?: boolean;
+  pcAssignment?: boolean;
+  forceRange?: boolean;
   debugLevel?: number;
   target?: string;
   baseRomOffset?: number;
@@ -250,16 +264,29 @@ export async function assemble(
   const modules: Module[] = [];
   const allMessages: AssemblerMessage[] = [];
 
-  const opts = {
+  const baseOpts: TokenizerOptions = {
     includePaths: options?.includePaths || [],
     binIncludePaths: options?.binIncludePaths,
+    generateDebugInfo: options?.generateDebugInfo,
     lineContinuations: options?.lineContinuations ?? true,
     numberSeparators: options?.numberSeparators,
-    generateDebugInfo: options?.generateDebugInfo
+    cComments: options?.cComments,
   };
-  const asmOpts = {
-    generateDebugInfo: options?.generateDebugInfo
+  const baseAsmOpts: AsmOptions = {
+    generateDebugInfo: options?.generateDebugInfo,
+    allowBrackets: options?.allowBrackets,
+    labelsWithoutColons: options?.labelsWithoutColons,
+    pcAssignment: options?.pcAssignment,
+    forceRange: options?.forceRange,
   };
+  /**
+   * Set up the options so that the same TokenizerOptions object is passed to all preprocessor instances
+   * This is needed to keep midmodule `.feature` changes rolling down through `.include`d files
+   */
+  function moduleOpts(moduleName: string): {opts: TokenizerOptions, asmOpts: AsmOptions} {
+    const opts = {...baseOpts};
+    return {opts, asmOpts: {...baseAsmOpts, moduleName, tokenizerOptions: opts}};
+  }
 
   // Reference to the currently processing assembler. If the current file
   // errors out so horribly that it hits the outer try block, then we'd
@@ -281,8 +308,8 @@ export async function assemble(
 
       if (input.type === 'actions') {
         let module_name = input.name ?? `module_${i}`;
-        const asm = currentAssembler =
-            new Assembler(Cpu.P02, {...asmOpts, moduleName: module_name});
+        const {opts, asmOpts} = moduleOpts(module_name);
+        const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
         const original_module_name = module_name;
 
         for (const action of input.actions) {
@@ -429,8 +456,8 @@ export async function assemble(
       }
 
       // Process source code
-      const asm = currentAssembler =
-          new Assembler(Cpu.P02, {...asmOpts, moduleName: input.name});
+      const {opts, asmOpts} = moduleOpts(input.name);
+      const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
       const toks = new TokenStream(
         callbacks?.readText,
         callbacks?.readBinary,
@@ -724,10 +751,15 @@ export async function compile(
     const asmOpts: AssemblerOptions = {
       includePaths: options.includePaths,
       binIncludePaths: options.binIncludePaths,
-      lineContinuations: options.lineContinuations,
-      numberSeparators: options.numberSeparators,
       generateDebugInfo: options.generateDebugInfo,
       defines: options.defines,
+      allowBrackets: options.allowBrackets,
+      labelsWithoutColons: options.labelsWithoutColons,
+      pcAssignment: options.pcAssignment,
+      forceRange: options.forceRange,
+      cComments: options.cComments,
+      lineContinuations: options.lineContinuations,
+      numberSeparators: options.numberSeparators,
     };
     const linkerOpts: LinkerOptions = {
       target: options.target,
