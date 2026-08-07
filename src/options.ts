@@ -24,11 +24,11 @@ export interface TokenizerOptions {
   // caseInsensitive?: boolean; // handle elsewhere?
   generateDebugInfo?: boolean;
 
-  /** `\` escapes a newline, continuing a declaration across lines. */
+  /** ca65 name: `line_continuations` `\` escapes a newline, continuing a declaration across lines. */
   lineContinuations?: boolean;
-  /** `_` is ignored inside a numeric literal, as an arbitrary separator. */
+  /** ca65 name: `underline_in_numbers` `_` is ignored inside a numeric literal. */
   numberSeparators?: boolean;
-  /** `/* ... *\/` block comments. */
+  /** ca65 name: `c_comments` `/* ... *\/` block comments. */
   cComments?: boolean;
 }
 
@@ -41,13 +41,16 @@ export interface AssemblerOptions {
   moduleName?: string;
   tokenizerOptions?: TokenizerOptions;
 
-  /** `[addr]` is indirect addressing, alongside `(addr)`. */
+  /** ca65 name: `bracket_as_indirect` `[addr]` is indirect, alongside `(addr)`. */
   allowBrackets?: boolean;
-  /** A leading identifier is a label even without a trailing `:`. */
+  /** ca65 name: `labels_without_colons` a leading identifier is a label without a `:`. */
   labelsWithoutColons?: boolean;
-  /** `*= $8000` is accepted as sugar for `.org $8000`. */
+  /** ca65 name: `pc_assignment` `*= $8000` is sugar for `.org $8000`. */
   pcAssignment?: boolean;
-  /** Out-of-range values truncate instead of failing. TODO hook up to the linker */
+  /**
+   * ca65 name: `force_range` Passed through onto a symbol to tell the linker
+   * to truncate the width of this value to the correct size.
+   */
   forceRange?: boolean;
 }
 

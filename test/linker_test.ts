@@ -104,6 +104,49 @@ describe('Linker', function() {
     expect(chunks(link(m))).toEqual([[50, [0x78, 0x56, 0x34, 0x12]]]);
   });
 
+  // `force_range` feature, which the assembler records on each
+  // substitution it emits because the range check happens here in the linker.
+  it('should reject a value too big for its substitution', function() {
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        org: 100,
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 1, expr: num(0x1234)}],
+      }],
+      segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
+    };
+    expect(() => link(m)).toThrow(/Not a byte/);
+  });
+
+  it('should truncate an oversized substitution marked forceRange', function() {
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        org: 100,
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 1, expr: num(0x1234), forceRange: true}],
+      }],
+      segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
+    };
+    expect(chunks(link(m))).toEqual([[50, [0x34, 0xff]]]);
+  });
+
+  it('should truncate an out-of-range branch marked forceRange', function() {
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        org: 100,
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 1, size: 1,
+                expr: {op: 'num', num: 200, meta: {branch: true}},
+                forceRange: true}],
+      }],
+      segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
+    };
+    expect(chunks(link(m))).toEqual([[50, [0xff, 200]]]);
+  });
+
   it('should fill in an offset from a symbol', function() {
     const m = {
       chunks: [{

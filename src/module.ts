@@ -18,6 +18,8 @@ export interface Substitution {
   size: number;
   /** Expression to substitute. */
   expr: Expr;
+  /** Truncate the value to the correct range. */
+  forceRange?: boolean;
 }
 
 // Default is "allow"

@@ -733,7 +733,9 @@ describe('Assembler', function() {
         }],
         symbols: [], segments: []});
     });
-    it('should support larger numbers truncated', function() {
+    it('should report larger numbers, and still truncate them', function() {
+      // Truncating keeps everything after this at the address it would have
+      // had, so the reported error is the only thing wrong with the output.
       const a = new Assembler(Cpu.P02);
       a.byte(0x102, 0x20304, 0x3040506);
       expect(strip(a.module())).toEqual({
@@ -743,6 +745,30 @@ describe('Assembler', function() {
           data: Uint8Array.of(2, 4, 6),
         }],
         symbols: [], segments: []});
+      expect(a.getMessages().map(m => m.message)).toEqual([
+        'Not a byte: $102', 'Not a byte: $20304', 'Not a byte: $3040506',
+      ]);
+    });
+
+    it('should take a negative that fits as a signed byte', function() {
+      // ca65 sign-extends to 32 bits and calls this a range error; `.byte -1`
+      // so plainly means $ff that js65 takes it without complaint.
+      const a = new Assembler(Cpu.P02);
+      a.byte(-1, -128, 0, 255);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xff, 0x80, 0x00, 0xff),
+        }],
+        symbols: [], segments: []});
+      expect(a.getMessages()).toEqual([]);
+    });
+
+    it('should report a negative too big to be a signed byte', function() {
+      const a = new Assembler(Cpu.P02);
+      a.byte(-129);
+      expect(a.getMessages().map(m => m.message)).toEqual(['Not a byte: -129']);
     });
 
     it('should support strings', function() {
@@ -2454,6 +2480,260 @@ ${body}`;
         const result = await build('.feature bracket_as_indirect off\nlda [$10],y\n',
                                    ['bracket_as_indirect']);
         expect(result.success).toBe(false);
+      });
+    });
+
+    // Each of these pairs a source that fails without the feature with the same
+    // source assembling with it, which is what tells a wired-up flag apart from
+    // one that only parses.
+    describe('c_comments', function() {
+      it('should not skip a block comment without the feature',
+         async function() {
+        // `/*` is a division followed by the PC, which can't start a line.
+        expect(await assembleErrors('/* nope */\nlda #$03\n'))
+            .toEqual([expect.stringMatching(/Unexpected/)]);
+      });
+
+      it('should skip a comment inside a line', async function() {
+        expect(await assemble('.feature c_comments\nlda /* mid */ #$03\n'))
+            .toEqual([0xa9, 0x03]);
+      });
+
+      it('should skip a comment that spans lines', async function() {
+        // Like whitespace, a comment that runs over a newline joins the lines,
+        // which is what ca65 does.
+        expect(await assemble(
+            '.feature c_comments\nlda /* one\ntwo\nthree */ #$03\n'))
+            .toEqual([0xa9, 0x03]);
+      });
+
+      it('should not nest', async function() {
+        // ca65's block comments end at the first `*/`, so the trailing `*/`
+        // here is left over and is a syntax error rather than a comment.
+        expect(await assembleErrors(
+            '.feature c_comments\n/* outer /* inner */ */\nlda #$03\n'))
+            .not.toEqual([]);
+      });
+
+      it('should report an unterminated comment', async function() {
+        expect(await assembleErrors('.feature c_comments\nlda #$03\n/* forever\n'))
+            .toEqual([expect.stringMatching(/Unterminated comment, expected \*\//)]);
+      });
+
+      it('should keep counting lines through a comment', async function() {
+        // A multi-line token is the one thing that can throw off the line
+        // counter, and every later diagnostic in the file depends on it.
+        const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.feature c_comments
+/* one
+   two
+   three */
+.feature org_per_seg
+`;
+        const result = await compile(
+            [{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+        expect(result.success).toBe(true);
+        const warnings = result.messages.filter(m => m.level === 'warning');
+        expect(warnings.length).toBe(1);
+        expect(warnings[0].source?.line).toBe(7);
+      });
+    });
+
+    describe('pc_assignment', function() {
+      const preamble = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+`;
+
+      it('should reject `*=` without the feature', async function() {
+        expect(await assembleErrors('*= $8100\n'))
+            .toEqual([expect.stringMatching(/requires the pc_assignment feature/)]);
+      });
+
+      it('should move the pc like .org', async function() {
+        const m = await assembleModule(`${preamble}.feature pc_assignment
+lda #$01
+* = $8100
+lda #$02
+`);
+        expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8100]);
+      });
+
+      it('should accept it with no space before the `=`', async function() {
+        const m = await assembleModule(`${preamble}.feature pc_assignment
+lda #$01
+*=$8100
+lda #$02
+`);
+        expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8100]);
+      });
+
+      it('should still read `*` as the pc in an expression', async function() {
+        // Only assignment was missing; reading the pc never needed the feature.
+        expect(await assemble('.word *\n')).toEqual([0x00, 0x80]);
+      });
+    });
+
+    describe('labels_without_colons', function() {
+      it('should reject a bare leading identifier without the feature',
+         async function() {
+        expect(await assembleErrors('foo lda #$01\n')).not.toEqual([]);
+      });
+
+      it('should define a label', async function() {
+        expect(await assemble(
+            '.feature labels_without_colons\nfoo lda #$01\n  jmp foo\n'))
+            .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
+      });
+
+      it('should define a label on a line of its own', async function() {
+        expect(await assemble(
+            '.feature labels_without_colons\nfoo\n  lda #$01\n  jmp foo\n'))
+            .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
+      });
+
+      it('should not turn a mnemonic into a label', async function() {
+        expect(await assemble('.feature labels_without_colons\nlda #$01\n'))
+            .toEqual([0xa9, 0x01]);
+      });
+
+      it('should not turn a macro call into a label', async function() {
+        expect(await assemble(`.feature labels_without_colons
+.macro twonops
+  nop
+  nop
+.endmacro
+twonops
+`)).toEqual([0xea, 0xea]);
+      });
+
+      it('should not turn an assignment into a label', async function() {
+        expect(await assemble(
+            '.feature labels_without_colons\nfoo = $01\nlda #foo\n'))
+            .toEqual([0xa9, 0x01]);
+        expect(await assemble(
+            '.feature labels_without_colons\nfoo .set $02\nlda #foo\n'))
+            .toEqual([0xa9, 0x02]);
+      });
+
+      it('should leave struct members alone', async function() {
+        // Inside a `.struct` a leading identifier declares a member, so the
+        // feature must not steal it away as a label.
+        expect(await assemble(`.feature labels_without_colons
+.struct Point
+  xpos .byte
+  ypos .byte
+.endstruct
+lda #.sizeof(Point)
+`)).toEqual([0xa9, 0x02]);
+      });
+
+      it('should still accept a label with a colon', async function() {
+        expect(await assemble(
+            '.feature labels_without_colons\nfoo: lda #$01\n  jmp foo\n'))
+            .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
+      });
+    });
+
+    describe('force_range', function() {
+      // The assembler range-checks whatever it can resolve on its own; the
+      // linker checks the rest. Both go through `Exprs.fits`, so the feature
+      // has to turn off both of them.
+      it('should fail on an out of range value the assembler resolved',
+         async function() {
+        expect(await assembleErrors('.byte $1234\n')).toEqual(['Not a byte: $1234']);
+        expect(await assembleErrors('lda #300\n')).toEqual(['Not a byte: $12c']);
+        expect(await assembleErrors('.word $12345\n'))
+            .toEqual(['Not a word: $12345']);
+      });
+
+      it('should truncate an out of range value the assembler resolved',
+         async function() {
+        expect(await assemble('.feature force_range\n.byte $1234\n'))
+            .toEqual([0x34]);
+        expect(await assemble('.feature force_range\nlda #300\n'))
+            .toEqual([0xa9, 0x2c]);
+      });
+
+      it('should take a negative that fits as signed either way',
+         async function() {
+        // Not the feature's doing - a negative that fits is always fine.
+        expect(await assemble('.byte -1\n  .word -1\n  lda #-1\n'))
+            .toEqual([0xff, 0xff, 0xff, 0xa9, 0xff]);
+        expect(await assembleErrors('.byte -129\n')).toEqual(['Not a byte: -129']);
+      });
+
+      it('should fail on a branch the assembler resolved out of range',
+         async function() {
+        // A backward branch inside one chunk never reaches the linker, so
+        // before the check landed this was silently truncated to a wrong jump.
+        expect(await assembleErrors('back: nop\n.res 200\n  bne back\n'))
+            .toEqual(['Branch out of range: offset -203 (valid range: -128 to 127)']);
+        expect(await assemble('.feature force_range\nback: nop\n.res 200\n  bne back\n')
+                   .then(d => d.slice(-2)))
+            .toEqual([0xd0, 0x35]);
+      });
+
+      it('should fail on an out of range value without the feature',
+         async function() {
+        // The linker reports each failed substitution once per pass, so match
+        // the message rather than the count.
+        expect(await assembleErrors('.byte far\nfar: nop\n'))
+            .toContain('Not a byte: $8001 at $8000');
+      });
+
+      it('should truncate an out of range value', async function() {
+        // `far` is $8001, which does not fit in the byte the linker has to
+        // write, so the feature keeps the low byte instead of failing.
+        expect(await assemble('.feature force_range\n.byte far\nfar: nop\n'))
+            .toEqual([0x01, 0xea]);
+      });
+
+      it('should fail on a branch out of range without the feature',
+         async function() {
+        expect(await assembleErrors('bne far\n.res 200\nfar: nop\n'))
+            .toContain(
+                'Branch out of range: offset 200 at $8001 (valid range: -128 to 127)');
+      });
+
+      it('should truncate a branch out of range', async function() {
+        const data = await assemble(
+            '.feature force_range\nbne far\n.res 200\nfar: nop\n');
+        expect(data.slice(0, 2)).toEqual([0xd0, 0xc8]);
+      });
+
+      it('should record itself on the substitution it applies to',
+         async function() {
+        // The check lives in the linker, so the flag has to survive assembly -
+        // including a separate `-c` assembly - by riding on the substitution.
+        const m = await assembleModule(
+            '.feature force_range\n.byte far\nfar: nop\n');
+        expect(m.chunks![0].subs).toEqual([
+          {offset: 0, size: 1, expr: expect.anything(), forceRange: true},
+        ]);
+      });
+
+      it('should leave the substitution alone without the feature',
+         async function() {
+        const m = await assembleModule('.byte far\nfar: nop\n');
+        expect(m.chunks![0].subs![0].forceRange).toBeUndefined();
+      });
+    });
+
+    // The features js65 applies unconditionally are only "already on" for as
+    // long as nothing regresses them, so pin a few with no flag set at all.
+    describe('features that are always on', function() {
+      it('should allow `@` in an identifier', async function() {
+        expect(await assemble('@foo: lda #$01\n  jmp @foo\n'))
+            .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
+      });
+
+      it('should honor string escapes', async function() {
+        expect(await assemble('.byte "a\\x42c"\n')).toEqual([0x61, 0x42, 0x63]);
+      });
+
+      it('should accept either quote style', async function() {
+        expect(await assemble('.byte "ab", \'c\'\n')).toEqual([0x61, 0x62, 0x63]);
       });
     });
   });

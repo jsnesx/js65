@@ -36,6 +36,42 @@ function off(num: number, chunk: number) {
 
 describe('Expr', function() {
 
+  // The single definition of "does this value fit", used by the assembler for
+  // what it can resolve and by the linker for what it can't.
+  describe('Exprs.fits', function() {
+    it('should accept a value in unsigned range', function() {
+      expect(Exprs.fits(0, 1)).toBe(true);
+      expect(Exprs.fits(255, 1)).toBe(true);
+      expect(Exprs.fits(256, 1)).toBe(false);
+      expect(Exprs.fits(0xffff, 2)).toBe(true);
+      expect(Exprs.fits(0x10000, 2)).toBe(false);
+    });
+
+    it('should accept a negative that fits as signed', function() {
+      // ca65 divergence: -1 is $ff, not a range error.
+      expect(Exprs.fits(-1, 1)).toBe(true);
+      expect(Exprs.fits(-128, 1)).toBe(true);
+      expect(Exprs.fits(-129, 1)).toBe(false);
+      expect(Exprs.fits(-32768, 2)).toBe(true);
+      expect(Exprs.fits(-32769, 2)).toBe(false);
+    });
+
+    it('should hold a branch to the signed range only', function() {
+      expect(Exprs.fits(127, 1, true)).toBe(true);
+      expect(Exprs.fits(128, 1, true)).toBe(false);
+      expect(Exprs.fits(-128, 1, true)).toBe(true);
+      expect(Exprs.fits(-129, 1, true)).toBe(false);
+    });
+
+    it('should handle a 4-byte value', function() {
+      // 1<<32 wraps around to 1, so the limits need `**` to come out right.
+      expect(Exprs.fits(0xffffffff, 4)).toBe(true);
+      expect(Exprs.fits(-1, 4)).toBe(true);
+      expect(Exprs.fits(2 ** 32, 4)).toBe(false);
+      expect(Exprs.fits(-(2 ** 31) - 1, 4)).toBe(false);
+    });
+  });
+
   describe('Exprs.parse', function() {
     it('should indicate where parsing left off', function() {
       const [expr, next] = Exprs.parse([tnum(5), tnum(6), tnum(7)], 1);

@@ -958,7 +958,8 @@ class LinkChunk {
     // See if we can do it immediately.
     let del = false;
     if (sub.expr.op === 'num' && !sub.expr.meta?.rel) {
-      this.writeValue(sub.offset, sub.expr.num!, sub.size, sub.expr.meta?.branch, sub.expr.source);
+      this.writeValue(sub.offset, sub.expr.num!, sub.size, sub.expr.meta?.branch,
+                      sub.expr.source, sub.forceRange);
       del = true;
     } else if (sub.expr.op === '.move') {
       if (sub.expr.args!.length !== 1) throw new Error(`bad .move`);
@@ -986,30 +987,15 @@ class LinkChunk {
     }
   }
 
-  writeValue(offset: number, val: number, size: number, isBranch?: boolean, source?: SourceInfo) {
-    // Check range based on whether this is a branch (signed) or regular value
-    if (isBranch) {
-      // Branch offsets use signed range
-      const min = -(1 << ((size << 3) - 1));  // -128 for 1 byte, -32768 for 2 bytes
-      const max = (1 << ((size << 3) - 1)) - 1;  // 127 for 1 byte, 32767 for 2 bytes
-      if (val < min || val > max) {
-        this.linker.fail(`Branch out of range: offset ${val} at $${
-            (this.org! + offset).toString(16)} (valid range: ${min} to ${max})`,
-            source && {source});
-      }
-    } else {
-      // Regular values use unsigned range check
-      // NOTE: 2**bits rather than 1<<bits, since a 4-byte value shifts by 32,
-      // which wraps around to 1 and rejects everything.
-      const bits = (size) << 3;
-      const limit = 2 ** bits;
-      if (val != null && (val < -limit || val >= limit)) {
-        const name = ['byte', 'word', 'farword', 'dword'][size - 1];
-        // `source` is the substitution's own location, which is much more use
-        // than the chunk-relative address in the message.
-        this.linker.fail(`Not a ${name}: $${val.toString(16)} at $${
-            (this.org! + offset).toString(16)}`, source && {source});
-      }
+  writeValue(offset: number, val: number, size: number, isBranch?: boolean,
+             source?: SourceInfo, forceRange?: boolean) {
+    // `force_range` says to truncate whatever we're given, which the masking
+    // loop at the bottom already does, so the feature is just a skipped check.
+    if (!forceRange && val != null && !Exprs.fits(val, size, isBranch)) {
+      this.linker.fail(
+          Exprs.rangeErrorMessage(val, size, isBranch,
+                                  ` at $${(this.org! + offset).toString(16)}`),
+          source && {source});
     }
     const bytes = new Uint8Array(size);
     for (let i = 0; i < size; i++) {

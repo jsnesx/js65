@@ -808,3 +808,36 @@ export function size(num: number, token?: Token): Meta {
   }
   return {size: 0 <= num && num < 256 ? 1 : 2};
 }
+
+/**
+ * Whether `num` can be written into `size` bytes. Both the assembler and the
+ * linker ask this, so the rule lives here rather than in either one.
+ *
+ * A value counts as fitting if it is in range read either as unsigned or as
+ * signed, so a byte takes -128 through 255.
+ * This is a change from ca65 which rejects any negative value from -1 to -128
+ * as out of range since it considers them 32 bit numbers.
+ */
+export function fits(num: number, size: number, isBranch = false): boolean {
+  const bits = size << 3;
+  // NOTE: 2**bits rather than 1<<bits, since a 4-byte value shifts by 32,
+  // which wraps around to 1 and rejects everything.
+  const min = -(2 ** (bits - 1));
+  const max = (isBranch ? 2 ** (bits - 1) : 2 ** bits) - 1;
+  return num >= min && num <= max;
+}
+
+/**
+ * The message for a value `fits` rejected. `at` is the address it was being
+ * written to, which the linker knows and the assembler doesn't.
+ */
+export function rangeErrorMessage(num: number, size: number,
+                                  isBranch = false, at = ''): string {
+  const bits = size << 3;
+  if (isBranch) {
+    return `Branch out of range: offset ${num}${at} (valid range: ${
+        -(2 ** (bits - 1))} to ${2 ** (bits - 1) - 1})`;
+  }
+  const name = ['byte', 'word', 'farword', 'dword'][size - 1] ?? `${size} bytes`;
+  return `Not a ${name}: ${num < 0 ? num : `$${num.toString(16)}`}${at}`;
+}
