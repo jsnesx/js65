@@ -72,22 +72,21 @@ const DEFAULT_CPU_NAME = '6502';
 
 export class Symbol {
   /**
-   * Index into the global symbol array.  Only applies to immutable
-   * symbols that need to be accessible at link time.  Mutable symbols
-   * and symbols with known values at use time are not added to the
-   * global list and are therefore have no id.  Mutability is tracked
-   * by storing a -1 here.
+   * Index into the global symbol array used at link time.
+   * Mutable syms aren't kept for link time, so they use -1 here
    */
   id?: number;
   /** Whether the symbol has been explicitly scoped. */
   scoped?: boolean;
   /**
-   * The expression for the symbol.  Must be a statically-evaluatable constant
-   * for mutable symbols.  Undefined for forward-referenced symbols.
+   * The expression for the symbol. Must be a statically-evaluatable constant
+   * for mutable symbols. Undefined for forward-referenced symbols.
    */
   expr?: Expr;
   /** Name this symbol is exported as. */
   export?: string;
+  /** Whether this symbol denotes a location rather than a plain constant */
+  isLabel?: boolean;
   /** Token where this symbol was ref'd. */
   ref?: {source?: Tokens.SourceInfo}; // TODO - plumb this through
 }
@@ -923,6 +922,8 @@ export class Assembler {
         for (const [name, sym] of scope.symbols) {
           // skip adding size symbols to the exported module since its not really a symbol
           if (isSizeOfSymbol(name)) continue;
+          // skip adding syms defined with `=` and not `:=`
+          if (!sym.isLabel) continue;
           if (sym.expr != null) {
             const expr = {...sym.expr};
 
@@ -1194,7 +1195,7 @@ export class Assembler {
         this._chunk.labelIndex.set(ident, this.chunk.data.length);
       }
     }
-    this.assignSymbol(ident, false, expr, token);
+    this.assignSymbol(ident, false, expr, token, /* isLabel= */ true);
     // const symbol = this.scope.resolve(str, true);
     // if (symbol.expr) throw new Error(`Already defined: ${label}`);
     // if (!this.chunk) throw new Error(`Impossible?`);
@@ -1212,9 +1213,11 @@ export class Assembler {
     }
     const name = Tokens.str(tokens[0]);
     const expr = this.parseExpr(tokens, 2);
+    // := marks the sym as a label so it shows up in debuggers
+    const isLabel = Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL);
     const ctx = this.structContext[this.structContext.length - 1];
     if (ctx?.kind !== 'enum') {
-      this.assign(name, expr);
+      this.assign(name, expr, isLabel);
       return;
     }
     // enum value with assignment, so parse the value passed to the enum.
@@ -1235,13 +1238,13 @@ export class Assembler {
     this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
   }
 
-  assign(ident: string, expr: Expr|number) {
+  assign(ident: string, expr: Expr|number, isLabel = false) {
     if (ident.startsWith('@')) {
       this.fail(`Cheap locals may only be labels: ${ident}`);
     }
     // Now make the assignment.
     if (typeof expr !== 'number') expr = this.resolve(expr);
-    this.assignSymbol(ident, false, expr);
+    this.assignSymbol(ident, false, expr, undefined, isLabel);
     // TODO - no longer needed?
     if (this.opts.refExtractor?.assign && typeof expr === 'number') {
       this.opts.refExtractor.assign(ident, expr);
@@ -1257,7 +1260,8 @@ export class Assembler {
     this.assignSymbol(ident, true, expr);
   }
 
-  assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token) {
+  assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token,
+               isLabel = false) {
     // NOTE: * _will_ get current chunk!
 
     if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
@@ -1289,6 +1293,7 @@ export class Assembler {
       this.fail(`Redefining symbol ${ident}${orig}`, token);
     }
     sym.expr = expr;
+    if (isLabel) sym.isLabel = true;
 
     // Add cheap locals to debugLabels for MLB output
     if (isCheapLocal && !mut && this.opts.generateDebugInfo) {

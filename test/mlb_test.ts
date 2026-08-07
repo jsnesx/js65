@@ -201,8 +201,8 @@ Start:
 .segment "PRG"
 .org $8000
 
-PlayerHP = $00
-EnemyHP = $01
+PlayerHP := $00
+EnemyHP := $01
 
 Start:
   lda PlayerHP
@@ -229,8 +229,8 @@ Start:
 .segment "PRG"
 .org $8000
 
-PPU_CTRL = $2000
-PPU_MASK = $2001
+PPU_CTRL := $2000
+PPU_MASK := $2001
 
 Start:
   lda #$00
@@ -259,8 +259,8 @@ Start:
 .segment "PRG"
 .org $8000
 
-SaveData = $6000
-GameFlags = $6100
+SaveData := $6000
+GameFlags := $6100
 
 Start:
   lda SaveData
@@ -288,8 +288,8 @@ Start:
 .segment "PRG"
 .org $8000
 
-CodeLabel = $8000
-AnotherLabel = $C000
+CodeLabel := $8000
+AnotherLabel := $C000
 
 Start:
   jmp CodeLabel
@@ -302,6 +302,52 @@ Start:
 
       // Should have PRG labels
       expect(prgEntries.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Label vs constant assignment', function() {
+    // As in ca65, `=` defines a constant while `:=` also marks the symbol as a
+    // label, so only the latter belongs in the debugger's label file.
+    it('should omit `=` constants but keep `:=` labels', async function() {
+      const source = `
+.segment "PRG"
+.org $8000
+
+PlainConstant = $20
+LabelConstant := $21
+
+Start:
+  lda PlainConstant
+  sta LabelConstant
+`;
+
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'PlainConstant')).toBeUndefined();
+      expect(entries.find(e => e.label === 'LabelConstant')).toBeTruthy();
+      // Regular `label:` definitions are unaffected.
+      expect(entries.find(e => e.label === 'Start')).toBeTruthy();
+    });
+
+    it('should omit `=` constants that alias a label address', async function() {
+      // The constant resolves onto the same address as a real label; excluding
+      // it must not disturb the label that legitimately lives there.
+      const source = `
+.segment "PRG"
+.org $8000
+
+Start:
+  lda #$00
+Alias = Start
+AliasLabel := Start
+`;
+
+      const entries = await assembleAndGetDebugInfo(source);
+
+      expect(entries.find(e => e.label === 'Alias')).toBeUndefined();
+      const start = entries.find(e => e.label === 'Start');
+      const alias = entries.find(e => e.label === 'AliasLabel');
+      expect(start ?? alias).toBeTruthy();
     });
   });
 
@@ -359,11 +405,11 @@ ResetVector:
 .org $8000
 
 ; RAM variables
-PlayerX = $00
-PlayerY = $01
+PlayerX := $00
+PlayerY := $01
 
 ; Hardware registers
-PPU_DATA = $2007
+PPU_DATA := $2007
 
 ; Code
 Init:
@@ -588,15 +634,16 @@ ptr: .res 2
     });
 
     it('should resolve an equate over a relocatable RAM label', async function() {
-      // `held = buttons+2` is resolved before the chunk is placed, so its
+      // `held := buttons+2` is resolved before the chunk is placed, so its
       // value is still relative to the chunk it names.
       // The segment starts at $f1, so a chunk-relative value that never
       // learned where its chunk landed would come out as 2 rather than $f3.
+      // `:=` is used so the equate is marked as a label and reaches the MLB.
       const source = `
 .segment "BIOSZP" :size $f :mem $00f1 :zp
 .segment "BIOSZP"
 buttons: .res 4
-held = buttons+2
+held := buttons+2
 .segment "PRG"
 .org $8000
   lda held
