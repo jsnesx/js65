@@ -1082,6 +1082,86 @@ ValidLabel:
       const result = await compileSource(source);
       expect(Array.from(result)).toEqual([0, 1, 2]);
     });
+
+    it('.enum members continue counting from an explicit value', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.enum
+  CMD_NOP
+  CMD_MOVE = 10
+  CMD_JUMP
+.endenum
+  .byte CMD_NOP, CMD_MOVE, CMD_JUMP
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0, 10, 11]);
+    });
+
+    it('.enum counts up from a negative start and allows aliases', async function() {
+      // The example straight out of the ca65 manual.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.enum
+  EUNKNOWN = -1
+  EOK
+  EFILE
+  EBUSY
+  EAGAIN
+  EWOULDBLOCK = EAGAIN
+.endenum
+  .byte <EUNKNOWN, EOK, EFILE, EBUSY, EAGAIN, EWOULDBLOCK
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0xff, 0, 1, 2, 3, 3]);
+    });
+
+    it('a named .enum takes explicit values through its scope', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.enum T
+  A
+  B = 5
+  C
+  D = T::C
+.endenum
+  .byte T::A, T::B, T::C, T::D, .sizeof(T)
+`;
+      const result = await compileSource(source);
+      // Four members declared, so `.sizeof` stays the member count even though
+      // the values jump around.
+      expect(Array.from(result)).toEqual([0, 5, 6, 6, 4]);
+    });
+
+    it('.enum takes an explicit value from an expression', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+BASE = 20
+.enum
+  A = BASE * 2
+  B
+.endenum
+  .byte A, B
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([40, 41]);
+    });
+
+    it('an .enum value that is not yet constant is an error', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.enum
+  A = LATER
+.endenum
+LATER = 3
+  .byte A
+`;
+      await expectCompileError(source, `needs a constant value`);
+    });
   });
 
   describe('ca65 syntax compatibility', function() {
