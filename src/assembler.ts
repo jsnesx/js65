@@ -1210,8 +1210,9 @@ export class Assembler {
   }
 
   assignSym(tokens: Token[]) {
-    // Set source location for debug info before processing the assignment
-    if (this.opts.generateDebugInfo && tokens[0].source) {
+    // Set source location before processing the assignment, so anything that
+    // fails below is reported against this line.
+    if (tokens[0].source) {
       this._source = tokens[0].source;
     }
     const name = Tokens.str(tokens[0]);
@@ -1234,8 +1235,9 @@ export class Assembler {
   }
 
   setSym(tokens: Token[]) {
-    // Set source location for debug info before processing the assignment
-    if (this.opts.generateDebugInfo && tokens[0].source) {
+    // Set source location before processing the assignment, so anything that
+    // fails below is reported against this line.
+    if (tokens[0].source) {
       this._source = tokens[0].source;
     }
     this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
@@ -1269,8 +1271,9 @@ export class Assembler {
 
     if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
 
-    // Store symbol name and source info in expression for debug info
-    if (this.opts.generateDebugInfo && this._source && !expr.source) {
+    // Store source info in the expression, used for both debug info output
+    // and error message handling
+    if (this._source && !expr.source) {
       expr.source = this._source;
     }
 

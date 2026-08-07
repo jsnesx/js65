@@ -1355,9 +1355,9 @@ describe('Assembler', function() {
       expect(m.segments![0].name).toMatch(/^@anon@bank\.s:3:[0-9a-f]{12}$/);
     });
 
-    it('should leave the line empty without debug info', async function() {
+    it('should still carry the line without debug info', async function() {
       const m = await assembleNamed(`.segment $8000 :size $10\n`, 'bank.s');
-      expect(m.segments![0].name).toMatch(/^@anon@bank\.s::[0-9a-f]{12}$/);
+      expect(m.segments![0].name).toMatch(/^@anon@bank\.s:1:[0-9a-f]{12}$/);
     });
 
     it('should distinguish two segments on different lines', async function() {
@@ -2375,17 +2375,16 @@ BLANK_TILE = $12
     });
 
     it('should locate the warning at the line that caused it', async function() {
-      // A file-level warning with no source location is hard to act on. Tokens
-      // only carry a location when debug info is on, which is the same
-      // condition every other located diagnostic is under.
+      // A file-level warning with no source location is hard to act on, so this
+      // must hold without `generateDebugInfo` - locations are gathered for
+      // diagnostics regardless of whether they get written out.
       const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
 lda #$03
 .feature org_per_seg
 `;
       const result = await compile(
-          [{type: 'source', code, name: 'test.s'} as AssemblyInput],
-          {generateDebugInfo: true});
+          [{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
       expect(result.success).toBe(true);
       const warnings = result.messages.filter(m => m.level === 'warning');
       expect(warnings.length).toBe(1);
