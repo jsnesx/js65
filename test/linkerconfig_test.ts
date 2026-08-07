@@ -3,8 +3,8 @@
 
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
-import {type CfgSymbols, configSymbols, lowerLinkerConfig, parseLinkerConfig,
-        resolveCfgExpr} from '../src/linkerconfig.ts';
+import {type CfgSymbols, configSymbols, linkerDefines, lowerLinkerConfig,
+        parseLinkerConfig, resolveCfgExpr} from '../src/linkerconfig.ts';
 import {SourceError} from '../src/token.ts';
 
 describe('parseLinkerConfig', function() {
@@ -198,6 +198,60 @@ FILES {
       const syms = configSymbols(cfg, new Set(['__WEAK__', '__STRONG__']));
       expect(syms.has('__WEAK__')).toBe(false);
       expect(syms.get('__STRONG__')).toBe(0x2222);
+    });
+
+    it('should let a `-D` define override a SYMBOLS value', function() {
+      const cfg = parseLinkerConfig(`
+        SYMBOLS {
+          __STACKSIZE__: type = weak,   value = $0010;
+          __STRONG__:    type = export, value = $2222;
+          __DERIVED__:   type = export, value = __STACKSIZE__ + 1;
+        }
+      `);
+      const defines = linkerDefines([{name: '__STACKSIZE__', value: '$400'},
+                                     {name: '__STRONG__', value: '17'}]);
+      const syms = configSymbols(cfg, new Set(), defines);
+      expect(syms.get('__STACKSIZE__')).toBe(0x400);
+      expect(syms.get('__STRONG__')).toBe(17);
+      // Later entries see the overridden value, not the config's own.
+      expect(syms.get('__DERIVED__')).toBe(0x401);
+    });
+
+    it('should let an object export still beat a `-D` on a weak symbol', function() {
+      const cfg = parseLinkerConfig(
+          `SYMBOLS { __STACKSIZE__: type = weak, value = $0010; }`);
+      const defines = linkerDefines([{name: '__STACKSIZE__', value: '$400'}]);
+      expect(configSymbols(cfg, new Set(['__STACKSIZE__']), defines).size).toBe(0);
+    });
+
+    it('should not invent a symbol for a `-D` the config never names', function() {
+      const cfg = parseLinkerConfig(`SYMBOLS { A: type = export, value = 1; }`);
+      const defines = linkerDefines([{name: 'DEBUG', value: '1'}]);
+      expect([...configSymbols(cfg, new Set(), defines)]).toEqual([['A', 1]]);
+    });
+
+    it('should read `-D` values in every ld65 number spelling', function() {
+      expect([...linkerDefines([
+        {name: 'DEC', value: '42'},
+        {name: 'HEX', value: '$2a'},
+        {name: 'BIN', value: '%101010'},
+        {name: 'SPACED', value: ' 42 '},
+      ])]).toEqual([['DEC', 42], ['HEX', 42], ['BIN', 42], ['SPACED', 42]]);
+    });
+
+    it('should skip a `-D` value the linker cannot read as a number', function() {
+      // These are meaningful on the assembler side, where the same list goes.
+      expect([...linkerDefines([
+        {name: 'STR', value: '"hello"'},
+        {name: 'EXPR', value: '3+5'},
+        {name: 'EMPTY', value: ''},
+        {name: 'SYM', value: 'OTHER'},
+      ])]).toEqual([]);
+    });
+
+    it('should let the last `-D` of a name win', function() {
+      expect([...linkerDefines([{name: 'A', value: '1'}, {name: 'A', value: '2'}])])
+          .toEqual([['A', 2]]);
     });
 
     it('should contribute no value for an import', function() {
@@ -531,6 +585,16 @@ describe('lowerLinkerConfig', function() {
   function lower(cfg: string) {
     return lowerLinkerConfig(parseLinkerConfig(cfg, 'test.cfg'));
   }
+
+  it('should lower a geometry expression against a `-D` override', function() {
+    const cfg = parseLinkerConfig(`
+      SYMBOLS { __STACKSIZE__: type = weak, value = $0010; }
+      MEMORY { RAM: start = $0080, size = $0080 - __STACKSIZE__; }
+    `, 'test.cfg');
+    expect(lowerLinkerConfig(cfg, new Set(),
+                             linkerDefines([{name: '__STACKSIZE__', value: '$40'}])))
+        .toEqual([{name: 'RAM', memory: 0x80, size: 0x40}]);
+  });
 
   it('should lower an area into a free-standing segment', function() {
     expect(lower(`MEMORY {

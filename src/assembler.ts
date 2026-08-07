@@ -275,6 +275,8 @@ export class Assembler {
   private globalScopes = new Map<string, Scope>();
   /** Symbols declared zeropage (.importzp/.exportzp/.globalzp) */
   private zeropageGlobals = new Set<string>();
+  /** Names a command-line `-D` defined, which an `.import` may take over. */
+  private commandLineDefines = new Set<string>();
 
   /** Current state for tracking .struct and .enum members */
   private structContext:
@@ -1276,6 +1278,16 @@ export class Assembler {
     this.assignSymbol(ident, true, expr);
   }
 
+  /** 
+   * `.set`s a -D value passed in from the CLI, but also marks it as a CLI define
+   * That way, if a user imports this value from the linker, we can use the linker
+   * value instead of the current ASM `.set` value
+   */
+  commandLineSet(ident: string, expr: Expr|number) {
+    this.set(ident, expr);
+    this.commandLineDefines.add(ident);
+  }
+
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token,
                isLabel = false) {
     // NOTE: * _will_ get current chunk!
@@ -2011,6 +2023,10 @@ export class Assembler {
 
   private declareGlobal(ident: string, kind: 'export'|'import'|'global', weak = false) {
     if (weak && this.globals.has(ident)) return;
+    // Use the linker version of the -D cli define instead of the global .set version
+    if (kind === 'import' && this.commandLineDefines.delete(ident)) {
+      this.currentScope.global.symbols.delete(ident);
+    }
     this.globals.set(ident, kind);
     this.globalScopes.set(ident, this.currentScope);
   }

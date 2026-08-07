@@ -15,6 +15,7 @@ import {type Token} from './token.ts';
 import * as Tokens from './token.ts';
 import {Tokenizer} from './tokenizer.ts';
 import {ErrorCollector} from './error.ts';
+import {type SymbolDefine} from './options.ts';
 
 export type AreaType = 'ro' | 'rw';
 export type SegmentType = AreaType | 'bss' | 'zp' | 'overwrite';
@@ -279,12 +280,34 @@ export function resolveCfgExpr(expr: Expr, symbols: CfgSymbols,
   return resolved.num;
 }
 
+/** The numeric values `-D` can carry to the linker */
+const RE_DEFINE_NUM = /^\s*(?:\$([0-9a-f]+)|%([01]+)|([0-9]+))\s*$/i;
+
+/** Builds the list of numberic -D values passed into the linker */
+export function linkerDefines(defines?: readonly SymbolDefine[]): CfgSymbols {
+  const out: CfgSymbols = new Map();
+  for (const {name, value} of defines ?? []) {
+    const m = RE_DEFINE_NUM.exec(value);
+    if (!m) continue;
+    const [, hex, bin, dec] = m;
+    out.set(name, hex != null ? parseInt(hex, 16) :
+                  bin != null ? parseInt(bin, 2) : parseInt(dec, 10));
+  }
+  return out;
+}
+
 export function configSymbols(cfg: LinkerConfig,
-                              objectExports: ReadonlySet<string> = new Set()): CfgSymbols {
+                              objectExports: ReadonlySet<string> = new Set(),
+                              defines: CfgSymbols = new Map()): CfgSymbols {
   const out: CfgSymbols = new Map();
   for (const sym of cfg.symbols) {
     if (sym.value == null) continue;
     if (sym.type === 'weak' && objectExports.has(sym.name)) continue;
+    const define = defines.get(sym.name);
+    if (define != null) {
+      out.set(sym.name, define);
+      continue;
+    }
     try {
       out.set(sym.name, resolveCfgExpr(sym.value, out, `Value of '${sym.name}'`));
     } catch {
@@ -519,8 +542,9 @@ export function parseLinkerConfig(text: string, file = 'linker.cfg',
  */
 export function lowerLinkerConfig(
     cfg: LinkerConfig,
-    objectExports: ReadonlySet<string> = new Set()): Segment[] {
-  const symbols = configSymbols(cfg, objectExports);
+    objectExports: ReadonlySet<string> = new Set(),
+    defines: CfgSymbols = new Map()): Segment[] {
+  const symbols = configSymbols(cfg, objectExports, defines);
   const out: Segment[] = [];
   const areas = new Map<string, Segment>();
   const originalSegments = new Map(cfg.segments.map(s => [s.name, s]));

@@ -11,6 +11,7 @@ import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { applyFeatures,
          type AssemblerOptions as AsmOptions,
+         type SymbolDefine,
          type TokenizerOptions } from './options.ts';
 import * as Tokens from './token.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
@@ -23,7 +24,7 @@ import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } f
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
-export type { Expr, Module, Segment };
+export type { Expr, Module, Segment, SymbolDefine };
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
 export { AsmEngine, AsmModule, sym } from './builder.ts';
@@ -85,12 +86,6 @@ function throwIfCancelled(signal?: CancelSignal): void {
   if (signal?.aborted) throw new Error('Compilation cancelled');
 }
 
-export interface SymbolDefine {
-  name: string;
-  /** Kept as a string for compatibility with the integration libraries */
-  value: string;
-}
-
 /**
  * Options for assembly phase
  */
@@ -121,6 +116,8 @@ export interface LinkerOptions {
   linkerConfig?: string;
   /** Name to report `linkerConfig` parse errors against. */
   linkerConfigName?: string;
+  /** -D define values from the CLI, but only the numeric ones for the linker */
+  defines?: SymbolDefine[];
   /** Debug level for debug info generation:
    * -1 = disabled
    *  0 = comments/labels only
@@ -236,7 +233,7 @@ async function applyDefines(asm: Assembler, pre: Preprocessor,
     const body = toks.length && Tokens.eq(toks[toks.length - 1], Tokens.EOL)
         ? toks.slice(0, -1) : toks;
     if (body.length === 1 && body[0].token === 'num') {
-      asm.set(name, body[0].num);
+      asm.commandLineSet(name, body[0].num);
       continue;
     }
     if (!body.length) {
@@ -548,6 +545,7 @@ export function link(
       target: options?.target,
       linkerConfig: options?.linkerConfig,
       linkerConfigName: options?.linkerConfigName,
+      defines: options?.defines,
       errorCollector: collector,
     });
 
@@ -780,6 +778,7 @@ export async function compile(
       target: options.target,
       baseRom,
       baseRomOffset: options.baseRomOffset,
+      defines: options.defines,
       debugLevel: options.debugLevel,
       generateMapFile: options.generateMapFile,
       linkerConfig: options.linkerConfig,
