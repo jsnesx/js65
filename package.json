@@ -34,6 +34,7 @@
   },
   "sideEffects": false,
   "scripts": {
+    "gen-version": "bun gen-version.ts",
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
     "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build",

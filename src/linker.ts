@@ -95,12 +95,14 @@ export class Linker {
       this._link.checkAnonMode('A linker config');
       this._link.setConfig(parseLinkerConfig(this.opts.linkerConfig,
                                              this.opts.linkerConfigName));
-    } else {
-      const target = Targets.get(this.opts.target?.toLowerCase())
-      if (target) {
-        this._link.checkAnonMode(`--target ${this.opts.target}`);
-        target.segments.forEach( seg => this._link.addRawSegment(seg) );
+    } else if (this.opts.target != null) {
+      const target = Targets.get(this.opts.target.toLowerCase());
+      if (!target) {
+        this._link.fail(`Unknown target: ${this.opts.target}. Supported targets are ${
+            [...Targets.keys()].join(', ')}`);
       }
+      this._link.checkAnonMode(`--target ${this.opts.target}`);
+      target.segments.forEach( seg => this._link.addRawSegment(seg) );
     }
     return this._link.link(signal);
   }

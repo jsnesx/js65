@@ -942,6 +942,18 @@ describe('Linker', function() {
     const [_offset, data] = result[0];
     expect(data[1]).not.toBe(data[3]);  // Different addresses
   });
+
+  it('should reject an unknown target', function() {
+    // Real build systems pass ld65's platform names; without this the link
+    // would go ahead with no layout at all and fail somewhere much less useful.
+    const m = {
+      chunks: [{segments: ['code'], org: 0x8000, data: Uint8Array.of(1, 2)}],
+      segments: [{name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}],
+    };
+    const linker = new Linker({target: 'nes'});
+    expect(() => linker.read(m).link())
+        .toThrow(/Unknown target: nes.*sim, nes-nrom/);
+  });
 });
 
 describe('Linker with an ld65 config', function() {

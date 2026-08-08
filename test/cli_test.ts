@@ -4,6 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {Cli} from '../src/cli.ts'
 import { fromHexString, fromByteString, joinDir } from "../src/util.ts";
+import { VERSION } from '../src/version.ts';
 
 describe('CLI', function() {
   describe('STDIN', function() {
@@ -517,6 +518,35 @@ describe('CLI', function() {
     it('accepts every --target spelling', function() {
       expect(cli.parseArgs(['--target', 'sim']).options.target).toBe('sim');
       expect(cli.parseArgs(['--target=sim']).options.target).toBe('sim');
+      expect(cli.parseArgs(['-t', 'sim']).options.target).toBe('sim');
+      expect(cli.parseArgs(['-tsim']).options.target).toBe('sim');
+      expect(cli.parseArgs(['-t=sim']).options.target).toBe('sim');
+    });
+
+    it('accepts every -V spelling', function() {
+      expect(cli.parseArgs(['-V']).version).toBe(true);
+      expect(cli.parseArgs(['--version']).version).toBe(true);
+      expect(cli.parseArgs(['main.s']).version).toBe(false);
+    });
+
+    it('accepts every --asm-include-dir spelling', function() {
+      const paths = (...args: string[]) =>
+          cli.parseArgs(args).options.includePaths;
+      expect(paths('--asm-include-dir', 'inc')).toEqual(['inc']);
+      expect(paths('--asm-include-dir=inc')).toEqual(['inc']);
+      // It's the same list as -I, in the order given.
+      expect(paths('-I', 'a', '--asm-include-dir', 'b')).toEqual(['a', 'b']);
+    });
+
+    it('accepts and ignores every -u spelling', function() {
+      const s = strict();
+      for (const args of [['-u', 'SYM'], ['-uSYM'], ['--force-import', 'SYM'],
+                          ['--force-import=SYM']]) {
+        const parsed = s.parse([...args, 'main.s']);
+        // The symbol name is neither an error nor an input file.
+        expect(parsed.files).toEqual(['main.s']);
+      }
+      expect(s.exits).toEqual([]);
     });
 
     it('parses --ips', function() {
@@ -721,6 +751,66 @@ describe('CLI', function() {
         expect(args.op).toBeUndefined();
         expect(args.files).toEqual(['rehydrate']);
       });
+    });
+  });
+
+  describe('--version', function() {
+    /** Runs the cli with console.log captured, and reports the exit codes. */
+    async function run(args: string[]) {
+      const exits: number[] = [];
+      const lines: string[] = [];
+      const cli = new Cli({
+        fsReadString: async () => '',
+        fsReadBytes: async () => new Uint8Array(0),
+        fsWriteString: async () => {},
+        fsWriteBytes: async () => {},
+        fsWalk: async () => {},
+        exit: (code: number) => { exits.push(code); },
+      });
+      const log = console.log;
+      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      try {
+        await cli.run(args);
+      } finally {
+        console.log = log;
+      }
+      return {exits, output: lines.join('\n')};
+    }
+
+    it('prints the version and exits 0 without any input file', async function() {
+      for (const flag of ['-V', '--version']) {
+        const {exits, output} = await run([flag]);
+        expect(output).toContain(VERSION);
+        expect(exits).toEqual([0]);
+        // Specifically not the "No input files provided" usage error.
+        expect(output).not.toContain('Usage:');
+      }
+    });
+  });
+
+  // -t is ld65's spelling of --target, so it has to reach the linker and not
+  // merely parse. An unsupported name has to say so rather than linking into a
+  // layout with no segments in it.
+  describe('-t end to end', function() {
+    it('links the same as --target', async function() {
+      const short = await makeFiles(
+          ['-t', 'sim', '--stdin', '-o', 'out.bin'], 'lda #3');
+      const long = await makeFiles(
+          ['--target', 'sim', '--stdin', '-o', 'out.bin'], 'lda #3');
+      expect([...short.get('out.bin')!]).toEqual([...long.get('out.bin')!]);
+    });
+
+    it('rejects a ca65 target name', async function() {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      try {
+        await expect(makeFiles(['-t', 'nes', '--stdin', '-o', 'out.bin'], 'lda #3'))
+            .rejects.toThrow();
+      } finally {
+        console.log = log;
+      }
+      expect(lines.join('\n')).toContain('Unknown target: nes');
     });
   });
 

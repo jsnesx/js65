@@ -8,6 +8,7 @@ import { Base64 } from './base64.ts';
 import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
 import { dirOf, joinDir } from './util.ts';
+import { VERSION } from './version.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -30,6 +31,7 @@ export interface Callbacks {
 
 class Arguments {
   help = false;
+  version = false;
   outfile = "";
   op: ((src: string, cpu: Cpu, prg: Uint8Array) => string) | undefined = undefined;
   rom = "";
@@ -78,6 +80,8 @@ function once(get: (out: Arguments) => string,
 const OPTIONS: Option[] = [
   {names: ['-h', '--help'], arity: 0,
    apply(out) { out.help = true; }},
+  {names: ['-V', '--version'], arity: 0,
+   apply(out) { out.version = true; }},
   {names: ['-o', '--outfile', '--output'], arity: 1,
    apply: once(out => out.outfile, (out, v) => { out.outfile = v; })},
   {names: ['--dbgfile'], arity: 1,
@@ -114,15 +118,19 @@ const OPTIONS: Option[] = [
    apply(out, value) { out.rom = value; }},
   {names: ['--bin-include-dir'], arity: 1,
    apply(out, value) { out.options.binIncludePaths!.push(value); }},
-  {names: ['-I', '--include-dir'], arity: 1, attached: true,
+  // `--asm-include-dir` is slightly different from -I but i don't see why it matters
+  {names: ['-I', '--include-dir', '--asm-include-dir'], arity: 1, attached: true,
    apply(out, value) { out.options.includePaths!.push(value); }},
   {names: ['--ips'], arity: 0,
    apply(out) {
      out.patch = 'ips';
      out.options.outputFormat = 'ips';
    }},
-  {names: ['--target'], arity: 1,
+  {names: ['-t', '--target'], arity: 1, attached: true,
    apply(out, value) { out.options.target = value; }},
+  // We don't lazy load modules right now so forceimport is a no-op
+  {names: ['-u', '--force-import'], arity: 1, attached: true,
+   apply() {}},
   {names: ['-D', '--define'], arity: 1, attached: true,
    apply(out, value) {
      const eq = value.indexOf('=');
@@ -269,6 +277,10 @@ export class Cli {
 
   public async run(argv: string[]) {
     const args = this.parseArgs(argv);
+    if (args.version) {
+      console.log(`js65 ${VERSION}`);
+      return this.callbacks.exit(0);
+    }
 
     if (args.help) {
       return this.usage(0);
@@ -530,9 +542,7 @@ Usage: js65 [options] FILE[...]
 Usage: js65 rehydrate|dehydrate -r|--rom=<rom> FILE
   Remove/Re-add data in an assembly file from the original ROM.
 
-===
-
-Assembler Options:
+## Assembler Options:
 
 positional arguments:
   FILE[...] a list of one or more files or --stdin to read input from stdin
@@ -558,6 +568,7 @@ optional arguments:
                           Add DIR to the \`.include\` search path. Directories are
                           searched in the order given, after the directory of the file doing the
                           including and the directories of the input files. Repeatable.
+                          \`--asm-include-dir\` is accepted as an alias for cc65 compat.
   --bin-include-dir=DIR   Add DIR to the \`.incbin\` search path. If none are given,
                           \`.incbin\` falls back to the -I directories. Repeatable.
   -D NAME[=VALUE]/--define=NAME[=VALUE]
@@ -573,12 +584,17 @@ optional arguments:
                           file started with \`.feature NAME\`. Takes a comma separated
                           list. Repeatable.
                           EX: --feature c_comments --feature pc_assignment,force_range
+  -t NAME/--target=NAME   Link with a built-in segment layout instead of a linker config.
+                          js65 has two: \`sim\` and \`nes-nrom\`.
+                          Ignored when a config is given with -C.
+  -u SYM/--force-import=SYM
+                          Accepted and ignored, for ld65 compat. js65 links every module it
+                          is given in full, so no import needs forcing.
   -h/--help               Print this help text and exit.
+  -V/--version            Print the js65 version and exit.
   --                      Ends the option list. Everything after this will be parsed as an input file.
 
-===
-
-Hydrate Options:
+## Hydrate Options:
   The smudged asm file can be rebuilt into a regular file by providing the same rom image.
   This can be used to share a disassembled game's code without sharing the data.
 
