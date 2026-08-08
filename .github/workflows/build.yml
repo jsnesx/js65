@@ -29,6 +29,13 @@ jobs:
     steps:
       - name: Checkout js65
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Stamp the version from the git tag
+        run: bun run gen-version
       - name: Build Static Hermes toolchain
         uses: ./.github/actions/hermes_compiler
         with:
@@ -59,9 +66,6 @@ jobs:
             ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
       - name: Install WASM workload
         run: dotnet workload restore
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: ".bun-version"
       - name: Install deps
         run: bun install
       - name: Build js65 (hermes)
@@ -126,6 +130,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Stamp the version from the git tag
+        # Writes integrations/dotnet/Directory.Build.props, which is what every
+        # dotnet pack below takes its <Version> from.
+        run: bun run gen-version
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
@@ -146,9 +159,6 @@ jobs:
             ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
       - name: Install WASM workload
         run: dotnet workload restore
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: ".bun-version"
       - name: Setup repo and install deps
         run: bun install
       - name: Build integration library
@@ -175,14 +185,10 @@ jobs:
       - name: Pack NuGet packages
         shell: bash
         run: |
-          VERSION_ARGS=()
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            VERSION_ARGS=(-p:Version="${GITHUB_REF_NAME#v}")
-          fi
-          dotnet pack -c Release integrations/dotnet/js65.interop/js65.interop.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
-          dotnet pack -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
-          dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
-          dotnet pack -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj --output build/nuget/ "${VERSION_ARGS[@]}"
+          dotnet pack -c Release integrations/dotnet/js65.interop/js65.interop.csproj --output build/nuget/
+          dotnet pack -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj --output build/nuget/
+          dotnet pack -c Release integrations/dotnet/js65.browser/js65.browser.csproj --output build/nuget/
+          dotnet pack -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj --output build/nuget/
       - name: Upload NuGet artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -219,18 +225,19 @@ jobs:
     steps:
       - name: Checkout js65
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
+      - name: Stamp the version from the git tag
+        run: bun run gen-version
       - name: Install deps
         run: bun install
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      - name: Set version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
       - name: Build npm package
         run: npm run build:npm
       - name: Pack tarball
@@ -240,6 +247,8 @@ jobs:
           set -e
           npm install -g ./js65-*.tgz
           js65 --help
+          # The stamped version has to survive into the shipped CLI.
+          test "$(js65 --version)" = "js65 $(node -p "require('./package.json').version")"
           printf '.segment "code"\nlda #1\nrts\n' > smoke.s
           js65 --target=nes-nrom -o smoke.nes smoke.s
           test -s smoke.nes
