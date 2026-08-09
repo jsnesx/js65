@@ -525,6 +525,23 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/no address of its own/);
   });
 
+  it('should throw when a .org chunk runs off the end of its segment',
+     function() {
+    const m = {
+      chunks: [{
+        segments: ['PRG'],
+        org: 0x8002,
+        data: Uint8Array.of(1, 1, 1, 1),
+      }],
+      segments: [
+        {name: 'PRG', size: 4, offset: 0x10, memory: 0x8000, out: '%O'},
+      ],
+    };
+    // The org itself is in range, so only an end check catches this.
+    expect(() => link(m))
+        .toThrow(/Chunk \(\$4 bytes at \$8002\) does not fit in segment PRG/);
+  });
+
   it('should size an unmapped segment around a .org chunk', function() {
     const m = {
       chunks: [{
@@ -1610,6 +1627,27 @@ describe('anonymous segments', function() {
     };
     expect(() => link(m)).toThrow(
         /\.org \$9000 is outside the anonymous segment @bank\.s:1 \$8000/);
+  });
+
+  it('should reject a chunk that runs off the end of its segment', function() {
+    // Every chunk in an anonymous segment carries the segment's address as an
+    // implicit .org, so the free space allocator never sees these.
+    const m = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000,
+                data: Uint8Array.of(1, 2, 3, 4)}],
+      segments: [anon('aaa', 0x8000, 2)],
+    };
+    expect(() => link(m)).toThrow(
+        /Chunk \(\$4 bytes at \$8000\) does not fit in anonymous segment @bank\.s:1 \$8000 \(size \$2\)/);
+  });
+
+  it('should accept a chunk that exactly fills its segment', function() {
+    const m = {
+      chunks: [{segments: [nameOf('aaa')], org: 0x8000,
+                data: Uint8Array.of(1, 2, 3, 4)}],
+      segments: [anon('aaa', 0x8000, 4)],
+    };
+    expect(chunks(link(m))).toEqual([[0, [1, 2, 3, 4]]]);
   });
 
   it('should label anonymous segments by declaration site in the map',
