@@ -181,13 +181,18 @@ export class Tokenizer implements Tokens.Source {
     if (this.buffer.eof()) return Tokens.EOF;
 
     // remember position of non-whitespace
-    const source = {
+    const source: Tokens.SourceInfo = {
       file: this.file,
       line: this.buffer.line,
       column: this.buffer.column,
     };
     try {
       const tok = this.tokenInternal();
+      if (this.opts.generateDebugInfo) {
+        // Record the end position for the last token which is useful for the LSP
+        source.endLine = this.buffer.line;
+        source.endColumn = this.buffer.column;
+      }
       tok.source = source;
       return tok;
     } catch (err:any) {
