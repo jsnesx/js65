@@ -1113,6 +1113,75 @@ ValidLabel:
       expect(errors.some(e => e.message === 'Bad mnemonic: bogusinstr')).toBe(true);
       expect(errors.some(e => e.message.includes('Undefined'))).toBe(true);
     });
+
+    it('should treat a broken .if condition as false and keep the block intact',
+       async function() {
+      // ca65 reports the error and yields 0 in this case, so the block
+      // still nests. Evaluating the condition before consuming the block turned
+      // one typo into four errors: the bad condition, a dangling `.else` and
+      // `.endif`, and whatever the leaked-through body referenced.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.if UndefinedCondition
+  lda NeverAssembled
+.else
+  lda #1
+.endif
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => `${e.message} @ ${e.source?.line}`)).toEqual([
+        'Expected a constant: symbol UndefinedCondition @ 4',
+      ]);
+    });
+
+    it('should keep assembling after a broken conditional block',
+       async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.if BadOne
+  nop
+.endif
+.if BadTwo
+  nop
+.endif
+  bogusinstr
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => `${e.message} @ ${e.source?.line}`)).toEqual([
+        'Expected a constant: symbol BadOne @ 4',
+        'Expected a constant: symbol BadTwo @ 7',
+        'Bad mnemonic: bogusinstr @ 10',
+      ]);
+    });
+
+    it('should locate an unterminated conditional at its opening directive',
+       async function() {
+      // Unlocated messages get dropped by hosts that bucket diagnostics per
+      // file, so this has to point at the `.if` that was never closed.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .if 1
+  nop
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      const eof = errors.find(e => /EOF looking for \.endif/.test(e.message));
+      expect(eof?.source).toMatchObject({file: 'test.s', line: 4});
+    });
   });
 
   describe('Data & storage directives', function() {
