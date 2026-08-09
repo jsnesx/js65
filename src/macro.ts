@@ -14,7 +14,9 @@ interface Source<T> {
 
 export class Macro {
   private constructor(readonly params: string[],
-                      readonly production: Token[][]) {}
+                      readonly production: Token[][],
+                      /** Token of the `.macro` name used for the go-to-definition target. */
+                      readonly definition?: Token) {}
 
   static async from(line: Token[], source: Tokens.Source) {
     // First line must start with .macro <name> [args]
@@ -26,7 +28,9 @@ export class Macro {
     const lines = [];
     let next: Token[]|undefined;
     while ((next = await source.next())) {
-      if (Tokens.eq(next[0], Tokens.ENDMACRO)) return new Macro(params, lines);
+      if (Tokens.eq(next[0], Tokens.ENDMACRO)) {
+        return new Macro(params, lines, line[1]);
+      }
       lines.push(next);
     }
     Tokens.fail(`EOF looking for .endmacro: ${Tokens.nameOf(line[1])}`, line[1]);
