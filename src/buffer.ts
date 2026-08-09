@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-type Match = RegExpExecArray & {line: number, column: number};
+/** A regex match, tagged with where in the buffer it started. */
+export type Match = RegExpExecArray & {line: number, column: number};
 
 class State {
   constructor(readonly line: number,
