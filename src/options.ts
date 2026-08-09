@@ -5,6 +5,7 @@ import { RecoverableError, type AssemblerMessage, type ErrorCollector } from './
 import type { OverwriteMode } from './module.ts';
 import type { RefExtractor } from './assembler.ts';
 import type { MacroIndex, SymbolIndex } from './lspindex.ts';
+import type { LintPragmas } from './lint.ts';
 
 
 /**
@@ -38,6 +39,17 @@ export interface TokenizerOptions {
   numberSeparators?: boolean;
   /** ca65 name: `c_comments` `/* ... *\/` block comments. */
   cComments?: boolean;
+  /** Sink for `; js65-lint-disable...` comment pragmas, when linting. */
+  lintPragmas?: LintPragmas;
+}
+
+/** Severity a lint rule reports at, or `off` to not report it at all. */
+export type LintLevel = 'off' | 'info' | 'warning';
+
+/** Lint configuration, from the CLI or an editor's project file. */
+export interface LintOptions {
+  enabled?: boolean;
+  rules?: Record<string, LintLevel>;
 }
 
 /** Options the assembler reads. */
@@ -59,6 +71,9 @@ export interface AssemblerOptions {
    * to truncate the width of this value to the correct size.
    */
   forceRange?: boolean;
+
+  /** Lint rule configuration. Lints run by default. */
+  lint?: LintOptions;
 
   // LSP options. You probably don't need these
   /** Flag to set if the assembler should enable tracking all refs */

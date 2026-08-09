@@ -145,12 +145,16 @@ export class Tokenizer implements Tokens.Source {
    * what gets ignored is different between the two.
    */
   protected skipIgnored(): void {
-    while (this.buffer.space() ||
-           this.buffer.token(RE_COMMENT) ||
-           (this.opts.lineContinuations && this.buffer.token(RE_LINE_CONT)) ||
-           (this.opts.cComments && this.blockComment())) {
-            // intentionally empty
-           }
+    for (;;) {
+      if (this.buffer.space()) continue;
+      if (this.buffer.token(RE_COMMENT)) {
+        this.opts.lintPragmas?.record(this.file, this.buffer.match()!);
+        continue;
+      }
+      if (this.opts.lineContinuations && this.buffer.token(RE_LINE_CONT)) continue;
+      if (this.opts.cComments && this.blockComment()) continue;
+      return;
+    }
   }
 
   private blockComment(): boolean {
