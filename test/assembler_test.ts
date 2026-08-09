@@ -1954,6 +1954,94 @@ BLANK_TILE = $12
 `);
          expect(codeOf(m)).toEqual([0xa5, 0xaf, 0xa5, 0x12]);
        });
+
+    // ca65's `z:` / `a:` / `f:` prefixes override the address size the operand
+    // would otherwise be given. They are the escape hatch for the cases above
+    // where js65 has to guess, most importantly a forward reference.
+    describe('address size overrides', function() {
+      it('should force zeropage on a forward reference with `z:`', async function() {
+        const m = await assembleModule(`
+.segment "CODE"
+  sta z:Foo
+.segment "ZEROPAGE"
+Foo: .res 1
+`);
+        expect(codeOf(m)).toEqual([0x85, 0xff]);
+      });
+
+      it('should force absolute on a zeropage label with `a:`', async function() {
+        const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+  sta a:Foo
+`);
+        expect(codeOf(m)).toEqual([0x8d, 0xff, 0xff]);
+      });
+
+      it('should force the address size of a known value', async function() {
+        const m = await assembleModule(`
+.segment "CODE"
+  lda a:$12
+  lda z:$12
+`);
+        expect(codeOf(m)).toEqual([0xad, 0x12, 0x00, 0xa5, 0x12]);
+      });
+
+      it('should carry the override through an offset', async function() {
+        const m = await assembleModule(`
+.segment "CODE"
+  lda a:$12+1
+  lda z:$12+1
+`);
+        expect(codeOf(m)).toEqual([0xad, 0x13, 0x00, 0xa5, 0x13]);
+      });
+
+      it('should force the address size of an indexed operand', async function() {
+        const m = await assembleModule(`
+.segment "ZEROPAGE"
+Foo: .res 1
+.segment "CODE"
+  lda a:Foo,x
+  ldx a:Foo,y
+  ldx z:$12,y
+`);
+        expect(codeOf(m)).toEqual([0xbd, 0xff, 0xff, 0xbe, 0xff, 0xff, 0xb6, 0x12]);
+      });
+
+      it('should accept an override inside an indirect operand', async function() {
+        // Every 6502 indirect mode has a fixed operand size, so the override
+        // can only agree with it, but ca65 sources still spell it out.
+        const m = await assembleModule(`
+.segment "ZEROPAGE"
+Ptr: .res 2
+.segment "CODE"
+  lda (z:Ptr),y
+  lda (z:Ptr,x)
+`);
+        expect(codeOf(m)).toEqual([0xb1, 0xff, 0xa1, 0xff]);
+      });
+
+      it('should reject an override that the mnemonic has no mode for',
+         async function() {
+           expect(await assembleErrors('  lda z:$12,y'))
+               .toEqual(['Bad address mode zpy for lda']);
+         });
+
+      it('should reject an override on an immediate', async function() {
+        expect(await assembleErrors('  lda #a:$12'))
+            .toEqual(['Cannot force absolute addressing on imm arguments']);
+      });
+
+      it('should reject a value too big for a forced zeropage', async function() {
+        expect(await assembleErrors('  lda z:$1234')).toEqual(['Not a byte: $1234']);
+      });
+
+      it('should reject `f:`, which needs a 65816', async function() {
+        expect(await assembleErrors('  lda f:$12'))
+            .toEqual(['Far addressing (`f:`) is 65816-only']);
+      });
+    });
   });
 
   // `.align` in relocatable mode defers to the linker by starting a new chunk
