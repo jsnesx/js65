@@ -90,8 +90,15 @@ export class Symbol {
   export?: string;
   /** Whether this symbol denotes a location rather than a plain constant */
   isLabel?: boolean;
-  /** Token where this symbol was ref'd. */
-  ref?: {source?: Tokens.SourceInfo}; // TODO - plumb this through
+  /**
+   * List of places this symbol was referenced. We only keep the first 
+   * reference, unless we are running the LSP where we need all references. 
+   */
+  refs?: Tokens.SourceInfo[];
+}
+
+function firstRef(sym?: Symbol): Tokens.SourceInfo|undefined {
+  return sym?.refs?.[0];
 }
 
 interface ResolveOpts {
@@ -130,6 +137,8 @@ abstract class BaseScope {
 //console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
     if (sym) {
       if (tail !== name) sym.scoped = true;
+      // Keep the first reference site so error messages can point at it.
+      if (ref?.source && !sym.refs) sym.refs = [ref.source];
       return sym;
     }
     if (!allowForwardRef) return undefined;
@@ -138,7 +147,7 @@ abstract class BaseScope {
     //const symbol = {id: this.symbolArray.length};
 //console.log('created:',symbol);
     //this.symbolArray.push(symbol);
-    const symbol: Symbol = {ref};
+    const symbol: Symbol = ref?.source ? {refs: [ref.source]} : {};
     scope.symbols.set(tail, symbol);
     if (tail !== name) symbol.scoped = true;
     return symbol;
@@ -146,7 +155,7 @@ abstract class BaseScope {
 
   /** Insert a brand new symbol into the table, scoped if there is one open */
   declare(name: string, symbol: Symbol, at?: {source?: Tokens.SourceInfo}): Symbol {
-    const [tail, scope] = this.pickScope(name, at ?? symbol.ref);
+    const [tail, scope] = this.pickScope(name, at ?? {source: firstRef(symbol)});
     scope.symbols.set(tail, symbol);
     if (tail !== name) symbol.scoped = true;
     return symbol;
@@ -239,8 +248,8 @@ class CheapScope extends BaseScope {
       if (!sym.expr) {
         // The location rides on `.source` rather than being baked into the text.
         const msg = `Cheap local label never defined: ${name}`;
-        if (!collector) Tokens.fail(msg, sym.ref);
-        collector.add('error', msg, sym.ref?.source);
+        if (!collector) Tokens.fail(msg, {source: firstRef(sym)});
+        collector.add('error', msg, firstRef(sym));
       }
     }
   }
@@ -764,7 +773,7 @@ export class Assembler {
         if (scope.parent) {
           // TODO - record where it was referenced?
           if (sym.scoped) {
-            collector.add('error', `Symbol '${name}' undefined`, sym.ref?.source);
+            collector.add('error', `Symbol '${name}' undefined`, firstRef(sym));
             continue;
           }
           const parentSym = scope.parent.symbols.get(name);
@@ -779,7 +788,7 @@ export class Assembler {
             sym.expr = parentSym.expr;
           } else {
             // must have either id or expr...?
-            collector.add('error', `Internal error: symbol '${name}' has neither id nor expr`, sym.ref?.source);
+            collector.add('error', `Internal error: symbol '${name}' has neither id nor expr`, firstRef(sym));
           }
         }
         // handle global scope separately...
@@ -810,7 +819,7 @@ export class Assembler {
       const kind = global === 'global' ? (sym?.expr ? 'export' : 'import') : global;
       if (kind === 'export') {
         if (!sym?.expr) {
-          collector.add('error', `Exported symbol '${name}' undefined`, sym?.ref?.source);
+          collector.add('error', `Exported symbol '${name}' undefined`, firstRef(sym));
           continue;
         }
         if (sym.id == null) {
@@ -829,14 +838,15 @@ export class Assembler {
         if (!sym) continue; // okay to import but not use.
         // TODO - record both positions?
         if (sym.expr) {
-          collector.add('error', `Symbol '${name}' already defined`, sym.ref?.source);
+          collector.add('error', `Symbol '${name}' already defined`, firstRef(sym));
           continue;
         }
         // Zeropage imports carry a one-byte size so references pick zp modes.
         const expr: Expr = {op: 'im', sym: name};
         // Carry the reference site so the linker can point at something if the
         // import turns out never to have been exported.
-        if (sym.ref?.source) expr.source = sym.ref.source;
+        const at = firstRef(sym);
+        if (at) expr.source = at;
         if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
         sym.expr = expr;
       } else {
@@ -846,7 +856,7 @@ export class Assembler {
 
     for (const [name, sym] of this.currentScope.symbols) {
       if (!sym.expr) {
-        collector.add('error', `Symbol '${name}' undefined`, sym.ref?.source);
+        collector.add('error', `Symbol '${name}' undefined`, firstRef(sym));
       }
     }
 
