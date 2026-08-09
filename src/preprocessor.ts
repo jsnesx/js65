@@ -9,7 +9,7 @@ import {Macro} from './macro.ts';
 import type { Token } from './token.ts';
 import * as Tokens from './token.ts';
 import {TokenStream} from './tokenstream.ts';
-import { ErrorCollector, RecoverableError } from './error.ts';
+import { ErrorCollector, FatalError, RecoverableError, SourceError } from './error.ts';
 
 // TODO - figure out how to actually keep track of stack depth?
 //  - might need to insert a special token at the end of an expansion
@@ -135,6 +135,16 @@ export class Preprocessor implements Tokens.Source {
         if (err instanceof RecoverableError) {
           // Error already recorded; abandon the rest of the current line but
           // keep any output it produced before the error, then continue.
+          continue;
+        }
+        // `.fatal`, cancellation and the error cap stop the whole run.
+        if (err instanceof FatalError) throw err;
+        // Try to recover if we have an error collector by skipping the rest of the line
+        if (err instanceof SourceError && this.errorCollector) {
+          if (!err.recorded) {
+            err.recorded = true;
+            this.errorCollector.addFromException(err);
+          }
           continue;
         }
         throw err;
@@ -736,7 +746,7 @@ export class Preprocessor implements Tokens.Source {
     if (prev instanceof Define) {
       prev.append(define);
     } else if (prev) {
-      throw new Error(`Already defined: ${name}`);
+      Tokens.fail(`Already defined: ${name}`, line[1]);
     } else {
       this.macros.set(name, define);
     }
@@ -780,7 +790,7 @@ export class Preprocessor implements Tokens.Source {
     const name = Tokens.expectIdentifier(line[1], line[0]);
     const macro = await Macro.from(line, this.stream);
     const prev = this.macros.get(name);
-    if (prev) throw new Error(`Already defined: ${name}`);
+    if (prev) Tokens.fail(`Already defined: ${name}`, line[1]);
     this.macros.set(name, macro);
   }
 
@@ -800,8 +810,10 @@ export class Preprocessor implements Tokens.Source {
     }
     const lines: Token[][] = [];
     let depth = 1;
+    const start = line[0];
     while (depth > 0) {
-      line = await this.stream.next() ?? fail(`.repeat with no .endrep`);
+      line = await this.stream.next() ??
+          Tokens.fail(`.repeat with no .endrep`, start);
       if (Tokens.eq(line[0], Tokens.REPEAT)) depth++;
       if (Tokens.eq(line[0], Tokens.ENDREPEAT)) depth--;
       lines.push(line);
@@ -1030,8 +1042,4 @@ function noGarbage(token: Token|undefined): void {
 
 function badClose(open: string, tok: Token): never {
   Tokens.fail(`${Tokens.name(tok)} with no ${open}`, tok);
-}
-
-function fail(msg: string): never {
-  throw new Error(msg);
 }
