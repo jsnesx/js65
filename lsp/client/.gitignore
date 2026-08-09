@@ -1,0 +1,16 @@
+node_modules
+out
+dist
+.vscode-test
+# The language server bundle is copied in by `npm run build:server`.
+server/
+# Staged from the repo root by `npm run package` so it ships in the VSIX.
+LICENSE.txt
+*.vsix
+
+# The root .gitignore excludes `.vscode/`, but the launch and build tasks are
+# how this extension is developed, so they are checked in.
+!.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json

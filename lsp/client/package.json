@@ -1,0 +1,181 @@
+{
+	"name": "js65-vscode",
+	"displayName": "js65 6502 assembly",
+	"description": "Language support for ca65/js65 6502 assembly, backed by the js65 language server",
+	"author": "James Rowe",
+	"license": "MPL-2.0",
+	"version": "0.1.0",
+	"publisher": "jsnesx",
+	"categories": [
+		"Programming Languages",
+		"Linters"
+	],
+	"keywords": [
+		"6502",
+		"ca65",
+		"assembly",
+		"nes",
+		"js65"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/jsnesx/js65"
+	},
+	"engines": {
+		"vscode": "^1.100.0"
+	},
+	"main": "./dist/extension.js",
+	"activationEvents": [
+		"workspaceContains:**/js65.json"
+	],
+	"contributes": {
+		"languages": [
+			{
+				"id": "js65",
+				"aliases": [
+					"js65 Assembly",
+					"6502 Assembly",
+					"js65"
+				],
+				"extensions": [
+					".s",
+					".asm",
+					".inc",
+					".mac"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "js65",
+				"scopeName": "source.js65",
+				"path": "./syntaxes/js65.tmLanguage.json"
+			}
+		],
+		"semanticTokenScopes": [
+			{
+				"language": "js65",
+				"scopes": {
+					"keyword": [
+						"keyword.control.js65"
+					],
+					"label": [
+						"entity.name.label.js65",
+						"entity.name.function"
+					],
+					"variable": [
+						"variable.other.js65"
+					],
+					"number": [
+						"constant.numeric.js65"
+					],
+					"string": [
+						"string.quoted.js65"
+					],
+					"operator": [
+						"keyword.operator.js65"
+					],
+					"comment": [
+						"comment.line.semicolon.js65"
+					]
+				}
+			}
+		],
+		"jsonValidation": [
+			{
+				"fileMatch": "js65.json",
+				"url": "./schemas/js65.schema.json"
+			}
+		],
+		"configuration": {
+			"type": "object",
+			"title": "js65",
+			"properties": {
+				"js65.server.path": {
+					"scope": "machine-overridable",
+					"type": [
+						"string",
+						"null"
+					],
+					"default": null,
+					"markdownDescription": "Absolute path to a `js65-lsp.cjs` bundle (built with `bun run lsp` in the js65 repo). Leave unset to use the copy bundled with this extension."
+				},
+				"js65.server.enable": {
+					"scope": "window",
+					"type": "boolean",
+					"default": true,
+					"description": "Run the js65 language server. Turn off to fall back to syntax highlighting only."
+				},
+				"js65.trace.server": {
+					"scope": "window",
+					"type": "string",
+					"enum": [
+						"off",
+						"messages",
+						"verbose"
+					],
+					"default": "off",
+					"description": "Log the JSON-RPC traffic between VS Code and the js65 language server."
+				}
+			}
+		},
+		"commands": [
+			{
+				"command": "js65.expandMacro",
+				"title": "Expand Macro at Cursor",
+				"category": "js65"
+			},
+			{
+				"command": "js65.restartServer",
+				"title": "Restart Language Server",
+				"category": "js65"
+			},
+			{
+				"command": "js65.showOutput",
+				"title": "Show Language Server Output",
+				"category": "js65"
+			}
+		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "js65.expandMacro",
+					"when": "editorLangId == js65"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "js65.expandMacro",
+					"when": "editorLangId == js65",
+					"group": "navigation@10"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run build:server && npm run bundle -- --minify",
+		"bundle": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20 --sourcemap",
+		"compile": "tsc -p ./",
+		"build": "npm run bundle && npm run compile",
+		"watch": "tsc -watch -p ./",
+		"build:server": "node scripts/build-server.mjs",
+		"package": "npm run build:server && node scripts/copy-license.mjs && vsce package --no-dependencies",
+		"pretest": "npm run build:server && npm run build",
+		"test": "node ./out/test/runTest.js"
+	},
+	"dependencies": {
+		"vscode-languageclient": "^10.1.0"
+	},
+	"devDependencies": {
+		"@types/mocha": "^10.0.10",
+		"@types/node": "^26.2.0",
+		"@types/vscode": "~1.100.0",
+		"@vscode/test-electron": "^3.1.0",
+		"@vscode/vsce": "^3.7.0",
+		"esbuild": "^0.25.12",
+		"glob": "^13.0.6",
+		"mocha": "^11.8.0",
+		"typescript": "^7.0.2"
+	}
+}
