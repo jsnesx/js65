@@ -103,6 +103,7 @@ export interface AssemblerOptions {
   labelsWithoutColons?: boolean;
   pcAssignment?: boolean;
   forceRange?: boolean;
+  errorLimit?: number;
 }
 
 /**
@@ -279,6 +280,7 @@ export async function assemble(
     labelsWithoutColons: options?.labelsWithoutColons,
     pcAssignment: options?.pcAssignment,
     forceRange: options?.forceRange,
+    errorLimit: options?.errorLimit,
   };
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
   allMessages.push(...featureMessages);

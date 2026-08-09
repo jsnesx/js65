@@ -386,7 +386,11 @@ export class Assembler {
   /** Returns an early error in assembling if you mix segment modes */
   private _segmentMode?: 'named'|'anon';
 
-  constructor(readonly cpu = Cpu.P02, readonly opts: AssemblerOptions = {}) {}
+  constructor(readonly cpu = Cpu.P02, readonly opts: AssemblerOptions = {}) {
+    if (opts.errorLimit != null) {
+      this.errorCollector.limit = opts.errorLimit;
+    }
+  }
 
   private generateAnonSegmentName(memory: number, size: number): string {
     // reuse _segmentOffset for a count of segments used in this file to help make the hash unique.

@@ -81,8 +81,12 @@ export class ErrorCollector {
   private messages: AssemblerMessage[] = [];
   private errorCount = 0;
 
+  limit: number;
+
   /** @param limit Maximum number of errors to report; 0 for unlimited. */
-  constructor(private readonly limit: number = DEFAULT_ERROR_LIMIT) {}
+  constructor(limit: number = DEFAULT_ERROR_LIMIT) {
+    this.limit = limit;
+  }
 
   add(level: ErrorLevel, message: string, source?: SourceInfo): void {
     this.messages.push({
