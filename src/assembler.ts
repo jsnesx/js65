@@ -1335,9 +1335,13 @@ export class Assembler {
   async instruction(...args: [Token[]]|[string, (Arg|string)?]): Promise<void> {
     let mnemonic: string;
     let arg: Arg;
+    // The token the mnemonic came from, so an unknown one can be reported
+    // against it instead of somewhere upstream.
+    let at: Token|undefined;
     if (args.length === 1 && Array.isArray(args[0])) {
       // handle the line...
       const tokens = args[0];
+      at = tokens[0];
       mnemonic = Tokens.expectIdentifier(tokens[0]).toLowerCase();
       arg = this.parseArg(tokens, 1);
     } else if (typeof args[1] === 'string') {
@@ -1360,7 +1364,8 @@ export class Assembler {
     }
     // may need to size the arg, depending.
     // cpu will take 'add', 'a,x', and 'a,y' and indicate which it actually is.
-    const ops = this.cpu.op(mnemonic); // will throw if mnemonic unknown
+    const ops = this.cpu.op(mnemonic);
+    if (!ops) this.fail(`Bad mnemonic: ${mnemonic}`, at);
     const m = arg[0];
     if (m === 'add' || m === 'a,x' || m === 'a,y') {
       // Special case for address mnemonics
