@@ -1,0 +1,18 @@
+# The VSIX is just the esbuild bundle plus the language server bundle; the
+# extension is packaged with `--no-dependencies`, so node_modules never ships.
+# `dist/extension.js` and `server/js65-lsp.cjs` are deliberately absent from
+# this list — they are the extension.
+
+.vscode/**
+.vscode-test/**
+out/**
+dist/**/*.map
+src/**
+test/**
+testFixture/**
+scripts/**
+node_modules/**
+tsconfig.json
+package-lock.json
+**/*.ts
+**/.gitignore

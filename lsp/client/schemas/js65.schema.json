@@ -1,0 +1,49 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "js65 project file",
+	"description": "Compilation units the js65 language server assembles. Paths resolve against this file's directory.",
+	"type": "object",
+	"required": ["units"],
+	"properties": {
+		"units": {
+			"type": "array",
+			"description": "One entry per independently-assembled program.",
+			"items": {
+				"type": "object",
+				"required": ["sources"],
+				"properties": {
+					"name": {
+						"type": "string",
+						"description": "Human-readable unit name. Defaults to the first source's basename."
+					},
+					"sources": {
+						"type": "array",
+						"description": "Entry source files assembled for this unit.",
+						"items": { "type": "string" }
+					},
+					"includePaths": {
+						"type": "array",
+						"description": "Search path for `.include`.",
+						"items": { "type": "string" }
+					},
+					"binIncludePaths": {
+						"type": "array",
+						"description": "Search path for `.incbin`.",
+						"items": { "type": "string" }
+					},
+					"linkerConfig": {
+						"type": "string",
+						"description": "Path to an ld65 config file. Linking runs on save to surface segment-overflow errors."
+					},
+					"target": {
+						"type": "string",
+						"description": "Built-in target layout, used when no linkerConfig is given.",
+						"examples": ["nes", "none"]
+					}
+				},
+				"additionalProperties": false
+			}
+		}
+	},
+	"additionalProperties": false
+}

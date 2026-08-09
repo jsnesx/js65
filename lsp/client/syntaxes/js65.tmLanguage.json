@@ -1,0 +1,95 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "js65 Assembly",
+	"scopeName": "source.js65",
+	"patterns": [
+		{ "include": "#comment" },
+		{ "include": "#string" },
+		{ "include": "#label" },
+		{ "include": "#directive" },
+		{ "include": "#mnemonic" },
+		{ "include": "#register" },
+		{ "include": "#number" },
+		{ "include": "#operator" }
+	],
+	"repository": {
+		"comment": {
+			"name": "comment.line.semicolon.js65",
+			"match": ";.*$"
+		},
+		"string": {
+			"patterns": [
+				{
+					"name": "string.quoted.double.js65",
+					"begin": "\"",
+					"end": "\"|$",
+					"patterns": [
+						{ "name": "constant.character.escape.js65", "match": "\\\\." }
+					]
+				},
+				{
+					"name": "string.quoted.single.js65",
+					"begin": "'",
+					"end": "'|$",
+					"patterns": [
+						{ "name": "constant.character.escape.js65", "match": "\\\\." }
+					]
+				}
+			]
+		},
+		"label": {
+			"patterns": [
+				{
+					"name": "entity.name.label.js65",
+					"match": "^\\s*(@?[A-Za-z_][A-Za-z0-9_]*)\\s*:"
+				},
+				{
+					"comment": "cheap local label — `:` used as an anonymous target",
+					"name": "entity.name.label.anonymous.js65",
+					"match": "^\\s*:(?=\\s|$)"
+				}
+			]
+		},
+		"directive": {
+			"patterns": [
+				{
+					"comment": "structural directives get keyword.control so folding regions read clearly",
+					"name": "keyword.control.js65",
+					"match": "(?i)\\.(proc|endproc|scope|endscope|macro|endmacro|mac|endmac|struct|endstruct|union|endunion|enum|endenum|repeat|endrep(eat)?|if|ifdef|ifndef|ifblank|ifnblank|ifconst|ifref|ifnref|ifp02|ifp816|else|elseif|endif|include|incbin|import|importzp|export|exportzp|global|globalzp|segment|org|reloc|pushseg|popseg)\\b"
+				},
+				{
+					"name": "keyword.other.directive.js65",
+					"match": "\\.[A-Za-z_][A-Za-z0-9_]*"
+				}
+			]
+		},
+		"mnemonic": {
+			"patterns": [
+				{
+					"name": "keyword.operator.mnemonic.js65",
+					"match": "(?i)(?<![A-Za-z0-9_.])(adc|and|asl|bcc|bcs|beq|bit|bmi|bne|bpl|brk|bvc|bvs|clc|cld|cli|clv|cmp|cpx|cpy|dec|dex|dey|eor|inc|inx|iny|jmp|jsr|lda|ldx|ldy|lsr|nop|ora|pha|php|pla|plp|rol|ror|rti|rts|sbc|sec|sed|sei|sta|stx|sty|tax|tay|tsx|txa|txs|tya)(?![A-Za-z0-9_:])"
+				},
+				{
+					"comment": "undocumented/illegal opcodes js65 also accepts",
+					"name": "keyword.operator.mnemonic.undocumented.js65",
+					"match": "(?i)(?<![A-Za-z0-9_.])(slo|rla|sre|rra|sax|lax|dcp|isc|alr|arr|axs|tas|shy|shx|ahx|anc|las)(?![A-Za-z0-9_:])"
+				}
+			]
+		},
+		"register": {
+			"name": "variable.language.register.js65",
+			"match": "(?i)(?<=,)\\s*(x|y)(?![A-Za-z0-9_])"
+		},
+		"number": {
+			"patterns": [
+				{ "name": "constant.numeric.hex.js65", "match": "\\$[0-9A-Fa-f]+" },
+				{ "name": "constant.numeric.binary.js65", "match": "%[01]+" },
+				{ "name": "constant.numeric.decimal.js65", "match": "(?<![A-Za-z0-9_$%])[0-9]+" }
+			]
+		},
+		"operator": {
+			"name": "keyword.operator.js65",
+			"match": "[-+*/&|^~<>=!#,]"
+		}
+	}
+}
