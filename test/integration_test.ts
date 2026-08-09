@@ -1092,6 +1092,27 @@ ValidLabel:
         'Bad mnemonic: bogusinstr @ 8',
       ]);
     });
+
+    it('should keep going after a preprocessor error', async function() {
+      // `.ifdef` with no argument fails in the preprocessor, which used to
+      // propagate out of the assemble and drop the rest of the file.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  .ifdef
+  .endif
+  bogusinstr
+  lda Undefined
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.some(e => /Expected expression/.test(e.message))).toBe(true);
+      expect(errors.some(e => e.message === 'Bad mnemonic: bogusinstr')).toBe(true);
+      expect(errors.some(e => e.message.includes('Undefined'))).toBe(true);
+    });
   });
 
   describe('Data & storage directives', function() {
