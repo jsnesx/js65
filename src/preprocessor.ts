@@ -709,32 +709,33 @@ export class Preprocessor implements Tokens.Source {
     '.exitmacro': async ([, a]) => { noGarbage(a); this.stream.exit(); 
       return await Promise.resolve(); },
     '.if': ([cs, ...args]) =>
-        this.parseIf(!!this.evaluateConst(parseOneExpr(args, cs, this.env.encodeChar), cs)),
+        this.parseIf(() => !!this.evaluateConst(
+            parseOneExpr(args, cs, this.env.encodeChar), cs), cs),
     '.ifdef': ([cs, ...args]) =>
-        this.parseIf(this.parseIfDef(args, cs)),
+        this.parseIf(() => this.parseIfDef(args, cs), cs),
     '.ifndef': ([cs, ...args]) =>
-        this.parseIf(!this.parseIfDef(args, cs)),
-    '.ifblank': ([, ...args]) => this.parseIf(!args.length),
-    '.ifnblank': ([, ...args]) => this.parseIf(!!args.length),
+        this.parseIf(() => !this.parseIfDef(args, cs), cs),
+    '.ifblank': ([cs, ...args]) => this.parseIf(() => !args.length, cs),
+    '.ifnblank': ([cs, ...args]) => this.parseIf(() => !!args.length, cs),
     '.ifref': ([cs, ...args]) =>
-        this.parseIf(this.env.referencedSymbol(parseOneIdent(args, cs))),
+        this.parseIf(() => this.env.referencedSymbol(parseOneIdent(args, cs)), cs),
     '.ifnref': ([cs, ...args]) =>
-        this.parseIf(!this.env.referencedSymbol(parseOneIdent(args, cs))),
+        this.parseIf(() => !this.env.referencedSymbol(parseOneIdent(args, cs)), cs),
     '.ifsym': ([cs, ...args]) =>
-        this.parseIf(this.env.definedSymbol(parseOneIdent(args, cs))),
+        this.parseIf(() => this.env.definedSymbol(parseOneIdent(args, cs)), cs),
     '.ifnsym': ([cs, ...args]) =>
-        this.parseIf(!this.env.definedSymbol(parseOneIdent(args, cs))),
+        this.parseIf(() => !this.env.definedSymbol(parseOneIdent(args, cs)), cs),
     '.ifconst': ([cs, ...args]) =>
-        this.parseIf(this.env.constantSymbol(parseOneIdent(args, cs))),
+        this.parseIf(() => this.env.constantSymbol(parseOneIdent(args, cs)), cs),
     '.ifnconst': ([cs, ...args]) =>
-        this.parseIf(!this.env.constantSymbol(parseOneIdent(args, cs))),
+        this.parseIf(() => !this.env.constantSymbol(parseOneIdent(args, cs)), cs),
     // NOTE: If support for any other CPUs is added, these will need to be un-stubbed.
-    '.ifp02': ([CSS, ...args]) => this.parseIf(true),
-    '.ifp4510': ([CSS, ...args]) => this.parseIf(false),
-    '.ifp816': ([CSS, ...args]) => this.parseIf(false),
-    '.ifpc02': ([CSS, ...args]) => this.parseIf(false),
-    '.ifpdtv': ([CSS, ...args]) => this.parseIf(false),
-    '.ifpsc02': ([CSS, ...args]) => this.parseIf(false),
+    '.ifp02': ([cs]) => this.parseIf(() => true, cs),
+    '.ifp4510': ([cs]) => this.parseIf(() => false, cs),
+    '.ifp816': ([cs]) => this.parseIf(() => false, cs),
+    '.ifpc02': ([cs]) => this.parseIf(() => false, cs),
+    '.ifpdtv': ([cs]) => this.parseIf(() => false, cs),
+    '.ifpsc02': ([cs]) => this.parseIf(() => false, cs),
     '.macro': (line) => this.parseMacro(line),
     '.repeat': (line) => this.parseRepeat(line),
   };
@@ -837,13 +838,37 @@ export class Preprocessor implements Tokens.Source {
     return await Promise.resolve();
   }
 
-  private async parseIf(cond: boolean) {
+  /**
+   * Evaluate a conditional's test, treating a failure as false, which
+   * lets us still properly parse the `.if` itself.
+   * Process the args in a callable so that we can catch any errors
+   * inside the `.if` block and recover.
+   */
+  private condition(test: () => boolean, at?: Token): boolean {
+    try {
+      return test();
+    } catch (err) {
+      if (err instanceof FatalError || !(err instanceof SourceError) ||
+          !this.errorCollector) {
+        throw err;
+      }
+      if (!err.recorded) {
+        err.recorded = true;
+        this.errorCollector.addFromException(err, err.source ?? at?.source);
+      }
+      return false;
+    }
+  }
+
+  private async parseIf(test: () => boolean, at?: Token) {
+    let cond = this.condition(test, at);
     let depth = 1;
     let done = false;
     const result: Token[][] = [];
     while (depth > 0) {
       const line = await this.stream.next();
-      if (!line) throw new Error(`EOF looking for .endif`); // TODO: start?
+      // Report missing endif at the site of the starting .if
+      if (!line) Tokens.fail(`EOF looking for .endif`, at);
       const front = line[0];
       if (Tokens.eq(front, Tokens.ENDIF)) {
         depth--;
@@ -859,8 +884,9 @@ export class Preprocessor implements Tokens.Source {
           continue;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
-          cond = !!this.evaluateConst(
-              parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar), front);
+          cond = this.condition(() => !!this.evaluateConst(
+              parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
+              front), front);
           continue;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
