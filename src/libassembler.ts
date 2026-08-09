@@ -21,10 +21,11 @@ import * as Exprs from './expr.ts';
 import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
+import type { SymbolIndex } from './options.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
-export type { Expr, Module, Segment, SymbolDefine };
+export type { Expr, Module, Segment, SymbolDefine, SymbolIndex };
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
 export { AsmEngine, AsmModule, sym } from './builder.ts';
@@ -103,6 +104,10 @@ export interface AssemblerOptions {
   labelsWithoutColons?: boolean;
   pcAssignment?: boolean;
   forceRange?: boolean;
+  /** If true, then gather all the sym refs and defines for the LSP */
+  collectReferences?: boolean;
+  /** Cache of all symbols for the LSP. not used unless collectReferences is on */
+  symbolIndex?: SymbolIndex;
   errorLimit?: number;
 }
 
@@ -280,6 +285,8 @@ export async function assemble(
     labelsWithoutColons: options?.labelsWithoutColons,
     pcAssignment: options?.pcAssignment,
     forceRange: options?.forceRange,
+    collectReferences: options?.collectReferences,
+    symbolIndex: options?.symbolIndex,
     errorLimit: options?.errorLimit,
   };
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);

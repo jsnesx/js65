@@ -90,6 +90,11 @@ export class Symbol {
   export?: string;
   /** Whether this symbol denotes a location rather than a plain constant */
   isLabel?: boolean;
+  /** 
+   * Where the symbol was defined (label/assignment).
+   * Populated only when `AssemblerOptions.collectReferences` is set.
+   */
+  def?: Tokens.SourceInfo;
   /**
    * List of places this symbol was referenced. We only keep the first 
    * reference, unless we are running the LSP where we need all references. 
@@ -115,6 +120,8 @@ interface FwdRefResolveOpts extends ResolveOpts {
 abstract class BaseScope {
   //closed = false;
   readonly symbols = new Map<string, Symbol>();
+  /** Whether to record reference+defintion sites on the symbols in this scope. */
+  collectRefs?: boolean;
 
   protected pickScope(name: string,
                       _at?: {source?: Tokens.SourceInfo}): [string, BaseScope] {
@@ -137,8 +144,12 @@ abstract class BaseScope {
 //console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
     if (sym) {
       if (tail !== name) sym.scoped = true;
-      // Keep the first reference site so error messages can point at it.
-      if (ref?.source && !sym.refs) sym.refs = [ref.source];
+      // Keep the first reference site so error messages can point at it. Only
+      // keep the rest when this scope tree opted in, so plain builds stay at one
+      // array element per symbol to save RAM.
+      if (ref?.source && (scope.collectRefs || !sym.refs)) {
+        (sym.refs ??= []).push(ref.source);
+      }
       return sym;
     }
     if (!allowForwardRef) return undefined;
@@ -175,6 +186,7 @@ class Scope extends BaseScope {
   constructor(readonly parent?: Scope, readonly kind?: 'scope'|'proc') {
     super();
     this.global = parent ? parent.global : this;
+    this.collectRefs = parent?.collectRefs;
   }
 
   /**
@@ -396,6 +408,10 @@ export class Assembler {
   private _segmentMode?: 'named'|'anon';
 
   constructor(readonly cpu = Cpu.P02, readonly opts: AssemblerOptions = {}) {
+    if (opts.collectReferences) {
+      this.currentScope.collectRefs = true;
+      this.cheapLocals.collectRefs = true;
+    }
     if (opts.errorLimit != null) {
       this.errorCollector.limit = opts.errorLimit;
     }
@@ -567,10 +583,19 @@ export class Assembler {
    * When parsing symbols, we will need to be able to both resolve a symbol in the
    * scope, and also size a symbol. Instead of sticking zeropage in as a second
    * param everywhere, we can just roll it together with the symbol lookup.
+   * `ref` is an optional callback so the LSP can track every identifier token
+   * to its `Symbol` even when the parser inlines an already-defined expr
    */
   private readonly symbolLookup: Exprs.SymbolLookup = {
     get: (name: string) => this.lookupSymbol(name),
     zeropage: (name: string) => this.isZeropageRef(name),
+    ref: (name: string, source?: Tokens.SourceInfo): void => {
+      if (!source || !this.currentScope.collectRefs) return;
+      // Resolve through the same scope walk the assembler would use at eval
+      // time, then append the ref on the underlying Symbol.
+      const sym = this.lookupSymbol(name);
+      if (sym) (sym.refs ??= []).push(source);
+    },
   };
 
   // Returns an expr resolving to a symbol name (e.g. a label)
@@ -1338,6 +1363,11 @@ export class Assembler {
     sym.expr = expr;
     if (isLabel) sym.isLabel = true;
 
+    if (scope.collectRefs && token?.source) {
+      sym.def = token.source;
+    }
+    this.opts.symbolIndex?.recordSymbol(sym, ident);
+
     // Add cheap locals to debugLabels for MLB output
     if (isCheapLocal && !mut && this.opts.generateDebugInfo) {
       this.debugLabels.push({name: ident, expr});
@@ -2101,6 +2131,7 @@ export class Assembler {
     if (existing) {
       if (this.opts.reentrantScopes) {
         this.currentScope = existing;
+        this.opts.symbolIndex?.enterScope(name, kind, at);
         return;
       }
       this.fail(`Cannot re-enter scope ${name}`);
@@ -2113,6 +2144,7 @@ export class Assembler {
       this.currentScope.anonymousChildren.push(child);
     }
     this.currentScope = child;
+    this.opts.symbolIndex?.enterScope(name, kind, at);
   }
 
   endScope(at?: Tokens.SourceInfo) { this.exitScope('scope', at); }
@@ -2127,6 +2159,7 @@ export class Assembler {
       this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.pc()));
     }
     this.currentScope = scope.parent!;
+    this.opts.symbolIndex?.exitScope(at);
   }
 
   pushSeg(...segments: Array<string|mod.Segment>) {
