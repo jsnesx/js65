@@ -1,0 +1,3 @@
+[test]
+pathIgnorePatterns  = ["lsp/client/**"]
+
