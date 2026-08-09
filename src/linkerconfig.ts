@@ -127,6 +127,9 @@ export class CfgTokenizer extends Tokenizer {
     return super.tokenInternal();
   }
 
+  /** A config is tokenized in one pass, so there is no line to resync to. */
+  protected override get recoversFromTokenErrors(): boolean { return false; }
+
   /** Reads in the entire file */
   tokens(): Token[] {
     return this.nextSync() ?? [];
