@@ -58,6 +58,7 @@ export interface NumberToken {
   num: number;
   source?: SourceInfo;
   width?: number; // number of bytes in literal
+  radix?: number; // radix the literal was written in: 16, 10, or 2
 }
 export interface NullaryToken {
   token: NullTok;

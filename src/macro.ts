@@ -94,7 +94,7 @@ export class Macro {
           } else if (tok.token === 'cs' && tok.str === '.paramcount') {
             // .paramcount can only be used in macros, so we don't need to put
             // it in the main directive switch statement.
-            mapped.push({token: 'num', num: paramCount, source: tok.source});
+            mapped.push({token: 'num', num: paramCount, radix: 10, source: tok.source});
             continue;
           } else if (tok.token === 'grp') {
             mapped.push({token: 'grp', inner: map(tok.inner)});
