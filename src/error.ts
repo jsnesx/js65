@@ -15,6 +15,21 @@ export interface SourceInfo {
 
 export type ErrorLevel = 'info' | 'warning' | 'error';
 
+export interface MessageEdit {
+  file: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  newText: string;
+}
+
+/** A machine-applicable fix for a message, consumed by the LSP. */
+export interface MessageFix {
+  title: string;
+  edits: MessageEdit[];
+}
+
 export interface AssemblerMessage {
   /** Severity of the message */
   level: ErrorLevel;
@@ -24,6 +39,10 @@ export interface AssemblerMessage {
   source?: SourceInfo;
   /** JS stack trace when captured */
   stack?: string;
+  /** Lint rule id or undefined if its not a linter message */
+  code?: string;
+  /** Machine-applicable fix, used by the LSP */
+  fix?: MessageFix;
 }
 
 export function at(arg: {source?: SourceInfo}): string {
@@ -91,12 +110,14 @@ export class ErrorCollector {
     this.limit = limit;
   }
 
-  add(level: ErrorLevel, message: string, source?: SourceInfo): void {
+  add(level: ErrorLevel, message: string, source?: SourceInfo,
+      extra?: {code?: string, fix?: MessageFix}): void {
     this.messages.push({
       level,
       message,
       source,
       stack: new Error().stack,
+      ...extra,
     });
     this.checkLimit(level);
   }

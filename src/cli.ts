@@ -500,9 +500,11 @@ export class Cli {
    *         |            ^
    *     file.s:3:1: note: expanded from here
    */
-  private printDiagnostic(level: Tokens.ErrorLevel, message: string, source?: Tokens.SourceInfo) {
+  private printDiagnostic(level: Tokens.ErrorLevel, message: string,
+                          source?: Tokens.SourceInfo, code?: string) {
     const label = level === 'info' ? 'note' : level;
-    console.log(`${this.locationPrefix(source)}${label}: ${message}`);
+    const tag = code ? ` [${code}]` : '';
+    console.log(`${this.locationPrefix(source)}${label}: ${message}${tag}`);
     for (const line of this.snippet(source)) console.log(line);
     // Walk the include / macro-expansion stack outwards.
     for (let p = source?.parent; p; p = p.parent) {
@@ -521,7 +523,7 @@ export class Cli {
 
   printMessages(messages: Tokens.AssemblerMessage[]) {
     for (const msg of messages) {
-      this.printDiagnostic(msg.level, msg.message, msg.source);
+      this.printDiagnostic(msg.level, msg.message, msg.source, msg.code);
     }
     this.printSummary(messages.filter(m => m.level === 'error').length,
                       messages.filter(m => m.level === 'warning').length);
