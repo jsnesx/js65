@@ -44,7 +44,7 @@
 					"match": "^\\s*(@?[A-Za-z_][A-Za-z0-9_]*)\\s*:"
 				},
 				{
-					"comment": "cheap local label — `:` used as an anonymous target",
+					"comment": "cheap local label `:` used as an anonymous target",
 					"name": "entity.name.label.anonymous.js65",
 					"match": "^\\s*:(?=\\s|$)"
 				}

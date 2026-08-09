@@ -1,0 +1,9 @@
+{
+	"units": [
+		{
+			"name": "main",
+			"sources": ["main.s"],
+			"includePaths": ["inc"]
+		}
+	]
+}
