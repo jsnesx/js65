@@ -121,8 +121,11 @@ export class TokenStream implements Tokens.Source {
             // TODO - options?
             const {value: code, base} = await this.loadFile<string>(
                 path, this.includeSearch(), this.readFile, line[0]);
+            // Dont use the name of the file for the include, use the resolved
+            // path so that two "header.inc" files in different dirs have the correct path.
+            const resolved = joinDir(base, path);
             // Nested includes resolve relative to this file's own directory.
-            this.enter(new Tokenizer(code, path, this.opts, this.sourceContents,
+            this.enter(new Tokenizer(code, resolved, this.opts, this.sourceContents,
                                      this.errorCollector),
                        joinDir(base, dirOf(path)));
             continue;
