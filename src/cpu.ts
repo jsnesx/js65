@@ -11,7 +11,7 @@ type Mnemonic = string;
 
 export interface Cpu {
   readonly table: Table;
-  op(mnemonic: Mnemonic): {[mode in AddressingMode]?: number};
+  op(mnemonic: Mnemonic): {[mode in AddressingMode]?: number}|undefined;
   disasm(byte: number): [Mnemonic, AddressingMode]|undefined;
   argLen(mode: AddressingMode): number;
   format(mode: AddressingMode, arg: string|number): string;
@@ -35,9 +35,7 @@ class AbstractCpu {
   }
 
   op(mnemonic: string) {
-    const ops = this.table[mnemonic];
-    if (!ops) throw new Error(`Bad mnemonic: ${mnemonic}`);
-    return ops;
+    return this.table[mnemonic];
   }
 
   disasm(byte: number): [Mnemonic, AddressingMode]|undefined {

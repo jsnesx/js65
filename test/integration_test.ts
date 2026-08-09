@@ -1021,6 +1021,30 @@ ValidLabel:
       const errors = result.messages.filter(m => m.level === 'error');
       expect(errors.length).toBeGreaterThanOrEqual(2);
     });
+
+    it('should keep going after an unknown mnemonic', async function() {
+      // An unknown mnemonic used to surface as a plain Error, which the
+      // assembler treats as an internal fault and rethrows, so the first typo
+      // in a file hid every error after it.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  lda #$01
+  bogusinstr
+  otherbogus
+  lda Undefined
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => `${e.message} @ ${e.source?.line}`)).toEqual([
+        'Bad mnemonic: bogusinstr @ 5',
+        'Bad mnemonic: otherbogus @ 6',
+        `Symbol 'Undefined' undefined @ 7`,
+      ]);
+    });
   });
 
   describe('Data & storage directives', function() {
