@@ -1045,6 +1045,53 @@ ValidLabel:
         `Symbol 'Undefined' undefined @ 7`,
       ]);
     });
+
+    it('should keep going after a tokenizer error', async function() {
+      // A character the tokenizer can't read threw out of the preprocessor and
+      // abandoned the whole assemble. It should cost the offending line only.
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+  \` stray
+  lda #$01
+  bogusinstr
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile([input], { lineContinuations: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => `${e.message} @ ${e.source?.line}`)).toEqual([
+        `Syntax error: unexpected '\`' @ 4`,
+        'Bad mnemonic: bogusinstr @ 6',
+      ]);
+    });
+
+    it('should resync past constructs that span physical lines', async function() {
+      // A source line is not a physical line. Resyncing on the next newline
+      // would restart inside the block comment and inside the continuation,
+      // tokenizing prose as code; only the two real errors should survive.
+      const source = `
+.segment "CODE" :bank $00 :off $0000 :size $8000 :mem $8000
+.org $8000
+  \` /* not: code
+  still not code */
+  \` lda \\
+     #$01
+  bogusinstr
+`;
+      const input: AssemblyInput = { type: 'source', code: source, name: 'test.s' };
+      const result = await compile(
+          [input], { lineContinuations: true, cComments: true });
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => `${e.message} @ ${e.source?.line}`)).toEqual([
+        `Syntax error: unexpected '\`' @ 4`,
+        `Syntax error: unexpected '\`' @ 6`,
+        'Bad mnemonic: bogusinstr @ 8',
+      ]);
+    });
   });
 
   describe('Data & storage directives', function() {

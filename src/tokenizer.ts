@@ -57,6 +57,48 @@ export class Tokenizer implements Tokens.Source {
   }
 
   protected nextSync(): Token[]|undefined {
+    // We want to recover from any weird tokenizer errors if we have an error collector.
+    // note that the linker config expects to throw here annoyingly, we need to fix that later.
+    for (;;) {
+      try {
+        return this.nextLine();
+      } catch (err) {
+        if (!this.recoversFromTokenErrors || !this.errorCollector ||
+            !(err instanceof Tokens.SourceError)) {
+          throw err;
+        }
+        this.errorCollector.addFromException(err);
+        // exit when we reach EOF
+        if (!this.skipLine()) return undefined;
+      }
+    }
+  }
+
+  /** Hacky workaround to keep the linker config throwing on error */
+  protected get recoversFromTokenErrors(): boolean { return true; }
+
+  /**
+   * Discard what is left of the current source line after a token error.
+   * Returns false once the buffer is exhausted.
+   */
+  private skipLine(): boolean {
+    // We have to use the tokenizer here since we can't assume the end of the line
+    // is the end of the token line (for instance multiline comments/line continuations/etc)
+    while (!this.buffer.eof()) {
+      const pos = this.buffer.pos;
+      try {
+        if (Tokens.eq(this.token(), Tokens.EOL)) return !this.buffer.eof();
+      } catch (err) {
+        if (!(err instanceof Tokens.SourceError)) throw err;
+      }
+      // if the tokenizer didn't make progress, its probably something else bad on the line
+      // so we just consume the next line and keep rolling.
+      if (this.buffer.pos === pos) this.buffer.token(RE_ANY);
+    }
+    return false;
+  }
+
+  private nextLine(): Token[]|undefined {
     let tok = this.token();
     while (Tokens.eq(tok, Tokens.EOL)) {
       // Skip EOLs at beginning of line.
@@ -149,8 +191,12 @@ export class Tokenizer implements Tokens.Source {
       tok.source = source;
       return tok;
     } catch (err:any) {
-      // Add a `near` part to the message if we know what the last token was
-      const last = this.buffer.group();
+      // Add a `near` part to the message if we know what the last token was.
+      // But only if the line matches so we don't blame an innocent line if
+      // the error was so crazy that ruined the rest of the line.
+      const match = this.buffer.match();
+      const last = match && match.line === source.line &&
+          match.column === source.column ? match[0] : undefined;
       const located = new Tokens.SourceError(
           `${err.message}${last ? ` near '${last}'` : ''}`, source);
       located.stack = err.stack;
@@ -184,7 +230,9 @@ export class Tokenizer implements Tokens.Source {
     if (this.buffer.tokenStr(')')) return {token: 'rp'};
     if (this.buffer.token(RE_STRING_START)) return this.tokenizeStr();
     if (this.buffer.token(this.numberRegex())) return this.tokenizeNum();
-    throw new Error(`Syntax error`);
+    // Couldn't find any relevant type of token, so get the raw text as the error
+    const ch = this.buffer.content[this.buffer.pos];
+    throw new Error(`Syntax error${ch ? `: unexpected '${ch}'` : ''}`);
   }
 
   private tokenizeStr(): Token {
