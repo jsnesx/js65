@@ -354,6 +354,10 @@ export interface SymbolLookup {
   get(name: string): Symbol|undefined;
   /** Check the scopes to size the symbol and return if its zeropage. */
   zeropage?(name: string): boolean;
+  /**
+   * optional callback that exprs will use to send ALL ident refs seen, even if already defined.
+   */
+  ref?(name: string, source?: Tokens.SourceInfo): void;
 }
 
 /** Parse a single expression, must occupy the rest of the line. */
@@ -451,6 +455,9 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
           if (symbols?.zeropage?.(front.str)) ref.meta = {zeropage: true};
           exprs.push(ref);
         }
+        // This is the only place that sees EVERY symbol, so we can use this
+        // callback in the LSP to make sure we see every reference.
+        symbols?.ref?.(front.str, front.source);
         val = false;
       } else if (front.token === 'num') {
         // add number
