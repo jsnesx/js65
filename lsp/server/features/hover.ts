@@ -1,0 +1,231 @@
+// SPDX-License-Identifier: MPL-2.0
+
+/**
+ * Hover + custom `js65/expandMacro` request.
+ *
+ * Hover answers three cases:
+ *   1. Symbol: resolved value (hex + decimal) + scope path, from the index.
+ *   2. Mnemonic: addressing modes the CPU supports for it (cycle counts are
+ *      out of scope for v1 since the `Cpu` table doesn't carry them).
+ *   3. Directive / macro invocation: name + (for macros) its parameter list and
+ *      a note that `js65/expandMacro` will show the full expansion.
+ */
+
+import type {Connection} from 'vscode-languageserver/node';
+import type {Hover, HoverParams, MarkupContent} from 'vscode-languageserver-protocol';
+import {MarkupKind} from 'vscode-languageserver-protocol';
+
+import {Cpu} from '../../../src/cpu.ts';
+import {Macro} from '../../../src/macro.ts';
+import {Tokenizer} from '../../../src/tokenizer.ts';
+import type {Token} from '../../../src/token.ts';
+import {Analyzer, type UnitAnalysis} from '../analyzer.ts';
+import {findSymbolAt, unitForDoc} from './navigation.ts';
+
+export function registerHoverFeatures(connection: Connection, analyzer: Analyzer): void {
+  connection.onHover(async (p): Promise<Hover | undefined> => {
+    // Wait for any in-flight analysis: a hover answered from a half-built
+    // index reports "no value" for a symbol that resolves perfectly well.
+    await analyzer.settled();
+    return computeHover(analyzer, p) ?? undefined;
+  });
+
+  // Custom request: full recursive macro expansion as text. The LSP
+  // `connection.onRequest` strap accepts a string method name for non-standard
+  // requests, hence the cast through `any`.
+  (connection as any).onRequest('js65/expandMacro',
+      async (p: ExpandMacroParams): Promise<ExpandMacroResult> => {
+        await analyzer.settled();
+        return expandMacroAt(analyzer, p);
+      });
+}
+
+/** Compute the hover for a position, or null if there's nothing to show. */
+function computeHover(analyzer: Analyzer, p: HoverParams): Hover | null {
+  // Pick the unit that actually owns this document.
+  // the first unit in the map answers wrongly in any multi-unit project.
+  const unit = unitForDoc(analyzer, p.textDocument.uri);
+
+  // 1) Symbol so load value + scope path.
+  if (unit) {
+    const sym = findSymbolAt(unit, p.textDocument.uri, p.position.line, p.position.character);
+    if (sym?.expr) {
+      const num = numericValue(sym.expr);
+      const lines: string[] = [];
+      if (num != null) {
+        lines.push(`**value:** \`$${num.toString(16)}\` (${num})`);
+      }
+      if (sym.expr.meta?.zeropage) lines.push('**segment:** zeropage');
+      if (sym.export) lines.push(`**exported as:** \`${sym.export}\``);
+      const hover: MarkupContent = {
+        kind: MarkupKind.Markdown,
+        value: lines.length ? lines.join('\n\n') : '(symbol with no resolved value)',
+      };
+      return {contents: hover};
+    }
+  }
+
+  const word = wordAtPosition(analyzer, p);
+  if (!word) return null;
+
+  // 2) Mnemonic so load addressing modes from the CPU table.
+  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so hovering the
+  // word `constructor` or `toString` would match.
+  const lower = word.toLowerCase();
+  if (Object.hasOwn(Cpu.P02.table, lower)) {
+    const modes = Object.keys(Cpu.P02.table[lower as keyof typeof Cpu.P02.table]);
+    const hover: MarkupContent = {
+      kind: MarkupKind.Markdown,
+      value: `**${lower}** 6502 mnemonic\n\n_addressing modes:_ ${modes.join(', ')}`,
+    };
+    return {contents: hover};
+  }
+
+  // 3) Macro / define invocation so load signature + pointer at `js65/expandMacro`.
+  const entry = unit?.macros.get(word);
+  if (entry) {
+    const lines: string[] = [];
+    if (entry.kind === 'macro' && entry.macro instanceof Macro) {
+      const params = entry.macro.params;
+      lines.push(`**${word}** \`.macro\`${params.length ? ` (${params.join(', ')})` : ''}`);
+    } else {
+      lines.push(`**${word}** \`.define\``);
+    }
+    if (entry.definition) {
+      lines.push(`_defined at_ \`${entry.definition.file}:${entry.definition.line}\``);
+    }
+    lines.push('_Run `js65/expandMacro` here to see the full expansion._');
+    return {contents: {kind: MarkupKind.Markdown, value: lines.join('\n\n')}};
+  }
+
+  return null;
+}
+
+/**
+ * Pull a single word out of the open document at the hover position, reading
+ * the live buffer. Returns undefined if the document isn't open or there's
+ * nothing word-like under the cursor.
+ */
+function wordAtPosition(analyzer: Analyzer, p: HoverParams): string | undefined {
+  const text = analyzer.peekDoc(p.textDocument.uri);
+  if (text == null) return undefined;
+  const line = text.split(/\r?\n/)[p.position.line];
+  if (!line) return undefined;
+  // Find the identifier-ish run of chars around the cursor.
+  const c = p.position.character;
+  let start = c;
+  while (start > 0 && /[A-Za-z0-9_.]/.test(line[start - 1])) start--;
+  let end = c;
+  while (end < line.length && /[A-Za-z0-9_.]/.test(line[end])) end++;
+  const word = line.slice(start, end);
+  return word || undefined;
+}
+
+/** Best-effort numeric extraction from a resolved Expr. */
+function numericValue(expr: {op: string; num?: number}): number | undefined {
+  if (expr.op === 'num' && typeof expr.num === 'number') return expr.num;
+  return undefined;
+}
+
+/** Params shape for the custom `js65/expandMacro` request. */
+export interface ExpandMacroParams {
+  uri: string;
+  position: {line: number, character: number};
+}
+
+/** Result of `js65/expandMacro`. */
+export interface ExpandMacroResult {
+  /** The expanded text, or empty if no macro was found at the position. */
+  text: string;
+  /** Whether a macro/define was identified at the cursor. */
+  found: boolean;
+}
+
+/**
+ * Expand the macro invocation under the cursor and render the result as text.
+ */
+function expandMacroAt(analyzer: Analyzer, p: ExpandMacroParams): ExpandMacroResult {
+  const unit = unitForDoc(analyzer, p.uri);
+  if (!unit) return {text: '', found: false};
+  const text = analyzer.peekDoc(p.uri);
+  if (text == null) return {text: '', found: false};
+  const line = text.split(/\r?\n/)[p.position.line];
+  if (line == null) return {text: '', found: false};
+
+  const word = wordAt(line, p.position.character);
+  if (!word) return {text: '', found: false};
+  const entry = unit.macros.get(word);
+  if (!entry) return {text: '', found: false};
+
+  const tokens = lexLine(line);
+  if (!tokens) return {text: '', found: false};
+  const start = tokens.findIndex(t => t.token === 'ident' && t.str === word);
+  if (start < 0) return {text: '', found: false};
+
+  try {
+    const expanded = expandOnce(entry, tokens, start);
+    if (!expanded) return {text: '', found: false};
+    return {text: expanded.map(renderLine).join('\n'), found: true};
+  } catch (err) {
+    // A macro that fails to expand (wrong arity, unresolved param) isn't a
+    // server error so report it as the result so the client can show it.
+    return {text: `; expansion failed: ${err instanceof Error ? err.message : String(err)}`,
+            found: true};
+  }
+}
+
+/** Expand a single invocation, dispatching on macro vs define. */
+function expandOnce(entry: NonNullable<ReturnType<UnitAnalysis['macros']['get']>>,
+                    tokens: Token[], start: number): Token[][] | undefined {
+  if (entry.macro instanceof Macro) {
+    // `Macro.expand` wants the invocation starting at the macro's own ident.
+    let next = 0;
+    return entry.macro.expand(tokens.slice(start), {next: () => next++});
+  }
+  // Define expands in place, mutating a copy of the line.
+  const copy = [...tokens];
+  return entry.macro.expand(copy, start) != null ? [copy] : undefined;
+}
+
+/** Lex one line of text into tokens, or undefined if it doesn't lex. */
+function lexLine(line: string): Token[] | undefined {
+  try {
+    const tok = new Tokenizer(line, '<lsp>', {generateDebugInfo: true});
+    return (tok as unknown as {nextSync(): Token[] | undefined}).nextSync();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Render one expanded line of tokens back to source-ish text. */
+function renderLine(tokens: Token[]): string {
+  const parts: string[] = [];
+  for (const t of tokens) {
+    switch (t.token) {
+      case 'ident': case 'cs': case 'op': parts.push(t.str); break;
+      case 'str': parts.push(JSON.stringify(t.str)); break;
+      case 'num': parts.push(`$${t.num.toString(16)}`); break;
+      case 'grp': parts.push(`{${renderLine(t.inner)}}`); break;
+      case 'lb': parts.push('['); break;
+      case 'rb': parts.push(']'); break;
+      case 'lp': parts.push('('); break;
+      case 'rp': parts.push(')'); break;
+      case 'lc': parts.push('{'); break;
+      case 'rc': parts.push('}'); break;
+      default: break;
+    }
+  }
+  return parts.join(' ');
+}
+
+/** Identifier-ish run of characters around a column. */
+function wordAt(line: string, c: number): string | undefined {
+  let start = c;
+  while (start > 0 && /[A-Za-z0-9_.]/.test(line[start - 1])) start--;
+  let end = c;
+  while (end < line.length && /[A-Za-z0-9_.]/.test(line[end])) end++;
+  return line.slice(start, end) || undefined;
+}
+
+// Re-export for tests.
+export {computeHover, expandMacroAt};
