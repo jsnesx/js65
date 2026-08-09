@@ -19,6 +19,8 @@
         "moduleDetection": "force",
         "moduleResolution": "bundler",
         "verbatimModuleSyntax": true,
+        // ignore node_modules .d.ts error spam noise
+        "skipLibCheck": true,
     },
     "exclude": [
         "unused/*.ts",
