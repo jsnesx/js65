@@ -84,16 +84,16 @@ describe('Tokenizer.line', function() {
     expect(toks).toEqual([
       [{token: 'ident', str: 'label'}, Tokens.COLON],
       [{token: 'ident', str: 'lda'},
-       {token: 'op', str: '#'}, {token: 'num', num: 0x1f, width: 1}],
-      [{token: 'cs', str: '.org', rawStr: '.org'}, {token: 'num', num: 0x1c, width: 1},
-       {token: 'op', str: ':'}, {token: 'num', num: 0x1234, width: 2}],
+       {token: 'op', str: '#'}, {token: 'num', num: 0x1f, width: 1, radix: 16}],
+      [{token: 'cs', str: '.org', rawStr: '.org'}, {token: 'num', num: 0x1c, width: 1, radix: 16},
+       {token: 'op', str: ':'}, {token: 'num', num: 0x1234, width: 2, radix: 16}],
       [{token: 'cs', str: '.ifdef', rawStr: '.ifdef'}, {token: 'ident', str: 'XX'}],
       [{token: 'cs', str: '.define', rawStr: '.define'}, {token: 'ident', str: 'YY'}],
       [{token: 'cs', str: '.define', rawStr: '.define'}, {token: 'ident', str: 'YYZ'},
-       {token: 'num', num: 0b10101100, width: 1}],
+       {token: 'num', num: 0b10101100, width: 1, radix: 2}],
       [{token: 'ident', str: 'pla'}],
       [{token: 'ident', str: 'sta'},
-       {token: 'lp'}, {token: 'num', num: 0x11, width: 1}, {token: 'rp'},
+       {token: 'lp'}, {token: 'num', num: 0x11, width: 1, radix: 16}, {token: 'rp'},
        {token: 'op', str: ','}, {token: 'ident', str: 'y'}],
       [{token: 'cs', str: '.elseif', rawStr: '.elseif'}, {token: 'ident', str: 'YY'}],
       [{token: 'ident', str: 'pha'}],
@@ -110,11 +110,11 @@ describe('Tokenizer.line', function() {
       lda #5
     `,)).toEqual([
       [{token: 'ident', str: 'lda'},
-        {token: 'op', str: '#'}, {token: 'num', num: 0x03}],
+        {token: 'op', str: '#'}, {token: 'num', num: 0x03, radix: 10}],
       [{token: 'ident', str: 'lda'},
-        {token: 'op', str: '#'}, {token: 'num', num: 0x05}],
+        {token: 'op', str: '#'}, {token: 'num', num: 0x05, radix: 10}],
       [{token: 'ident', str: 'sta'},
-        {token: 'num', num: 0x04, width: 1}],
+        {token: 'num', num: 0x04, width: 1, radix: 16}],
     ])
   });
 
@@ -154,8 +154,8 @@ describe('Tokenizer.line', function() {
   it('should tokenize an .assert', async function() {
     expect(await tokenize('.assert * = $0c:$8000')).toEqual([
       [{token: 'cs', str: '.assert', rawStr: '.assert'}, {token: 'op', str: '*'},
-       {token: 'op', str: '='}, {token: 'num', num: 0x0c, width: 1},
-       {token: 'op', str: ':'}, {token: 'num', num: 0x8000, width: 2}],
+       {token: 'op', str: '='}, {token: 'num', num: 0x0c, width: 1, radix: 16},
+       {token: 'op', str: ':'}, {token: 'num', num: 0x8000, width: 2, radix: 16}],
     ]);
   });
 
@@ -190,10 +190,10 @@ describe('Tokenizer.line', function() {
 
   it('should tokenize all kinds of numbers', async function() {
     expect(await tokenize('123 0123 %10110 $123d')).toEqual([
-      [{token: 'num', num: 123},
-       {token: 'num', num: 123},
-       {token: 'num', num: 0b10110, width: 1},
-       {token: 'num', num: 0x123d, width: 2}],
+      [{token: 'num', num: 123, radix: 10},
+       {token: 'num', num: 123, radix: 10},
+       {token: 'num', num: 0b10110, width: 1, radix: 2},
+       {token: 'num', num: 0x123d, width: 2, radix: 16}],
     ]);
   });
 
@@ -294,7 +294,7 @@ describe('Tokenizer.line', function() {
     expect(toks).toEqual([
       [{token: 'cs', str: '.byte', rawStr: '.byte'}, {token: 'str', str: 'abc'}],
       [{token: 'ident', str: 'lda'}, {token: 'op', str: '#'},
-       {token: 'num', num: 0x12, width: 1}],
+       {token: 'num', num: 0x12, width: 1, radix: 16}],
     ]);
     expect(collector.getMessages()).toMatchObject([{
       level: 'error',
@@ -312,16 +312,16 @@ describe('Tokenizer.line', function() {
     it('should lex % as a binary literal prefix', async function() {
       expect(await tokenize('  .byte %0101, %11111111\n')).toEqual([[
         {token: 'cs', str: '.byte', rawStr: '.byte'},
-        {token: 'num', num: 0b0101, width: 1},
+        {token: 'num', num: 0b0101, width: 1, radix: 2},
         {token: 'op', str: ','},
-        {token: 'num', num: 0b11111111, width: 1},
+        {token: 'num', num: 0b11111111, width: 1, radix: 2},
       ]]);
     });
 
     it('should treat ; as a comment to end of line', async function() {
       expect(await tokenize('  lda #1 ; sta $2\n  nop\n')).toEqual([
         [{token: 'ident', str: 'lda'}, {token: 'op', str: '#'},
-         {token: 'num', num: 1}],
+         {token: 'num', num: 1, radix: 10}],
         [{token: 'ident', str: 'nop'}],
       ]);
     });
@@ -336,14 +336,14 @@ describe('Tokenizer.line', function() {
     it('should read a leading-zero number as decimal', async function() {
       expect(await tokenize('  .byte 010\n')).toEqual([[
         {token: 'cs', str: '.byte', rawStr: '.byte'},
-        {token: 'num', num: 10},
+        {token: 'num', num: 10, radix: 10},
       ]]);
     });
 
     it('should lex # as an operator', async function() {
       expect(await tokenize('  lda #$12\n')).toEqual([[
         {token: 'ident', str: 'lda'}, {token: 'op', str: '#'},
-        {token: 'num', num: 0x12, width: 1},
+        {token: 'num', num: 0x12, width: 1, radix: 16},
       ]]);
     });
   });
