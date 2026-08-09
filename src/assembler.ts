@@ -1460,6 +1460,13 @@ export class Assembler {
     if (tokens.length === start + 1) {
       if (Tokens.isRegister(front, 'a')) return ['acc'];
     } else if (Tokens.eq(front, Tokens.IMMEDIATE)) {
+      // An immediate has no address to size, so catch `lda #a:foo` here rather
+      // than letting the expression parser trip over the prefix.
+      const size = addrSize(tokens, start + 1);
+      if (size) {
+        this.fail(`Cannot force ${ADDR_SIZE_NAMES[size.size]} addressing on ` +
+                  `imm arguments`, tokens[start + 1]);
+      }
       return ['imm', this.parseExpr(tokens, start + 1)];
     }
     // Look for relative or anonymous labels, which are not valid on their own
@@ -1472,16 +1479,25 @@ export class Assembler {
       // relative label
       return ['add', {op: 'sym', sym: front.str}];
     }
-    // check to see if there is a zp,abs,far operator forcing a new addressing mode type
-    if (front.token == 'ident' && (front.str == 'a' || front.str == 'z') && Tokens.eq(next, Tokens.COLON)) {
-      // Get the rest of the expression and force the addressing mode to the required one
-      const [mode, out] = this.parseArg(tokens, start + 2);
-      if (mode == 'acc' || mode == 'imm') {
-        this.fail(`Cannot force direct or absolute addressing on acc or imm arguments`, front);
+    // A `z:`/`a:` prefix forces the address size of the rest of the operand:
+    // `lda z:foo` is zero page even for a symbol we cannot size yet, and
+    // `lda a:foo` is absolute even for one we know is in the zero page.
+    const forced = addrSize(tokens, start);
+    if (forced) {
+      if (forced.size === 'f') {
+        this.fail(`Far addressing (\`f:\`) is 65816-only`, front);
       }
-      const lookup = (front.str == 'z') ? ForceDirectAddressingMap : ForceAbsoluteAddressingMap;
+      // Get the rest of the expression and force the addressing mode to the required one
+      const [mode, out] = this.parseArg(tokens, forced.next);
+      const kind = ADDR_SIZE_NAMES[forced.size];
+      if (mode === 'acc' || mode === 'imm' || mode === 'imp') {
+        this.fail(`Cannot force ${kind} addressing on ${mode} arguments`, front);
+      }
+      const lookup = forced.size === 'z' ?
+          ForceDirectAddressingMap : ForceAbsoluteAddressingMap;
       const adr = lookup.get(mode);
-      return [adr ? adr! : mode as ArgMode, out!];
+      if (!adr) this.fail(`Cannot force ${kind} addressing on ${mode} arguments`, front);
+      return [adr, out!];
     }
     // it must be an address of some sort - is it indirect?
     if (Tokens.eq(front, Tokens.LP) ||
@@ -1490,7 +1506,15 @@ export class Assembler {
       if (close < 0) this.fail(`Unbalanced ${Tokens.name(front)}`, front);
       const args = Tokens.parseArgList(tokens, start + 1, close);
       if (!args.length) this.fail(`Bad argument`, front);
-      const expr = this.parseExpr(args[0], 0);
+      // Every 6502 indirect mode has a fixed operand size, so an address size
+      // inside the parens can only ever agree with it: accept and ignore it,
+      // rather than failing on ca65 sources that spell out `(z:ptr),y`.
+      const inner = args[0];
+      const innerSize = addrSize(inner, 0);
+      if (innerSize?.size === 'f') {
+        this.fail(`Far addressing (\`f:\`) is 65816-only`, inner[0]);
+      }
+      const expr = this.parseExpr(inner, innerSize?.next ?? 0);
       if (args.length === 1) {
         // either IND or INY
         if (Tokens.eq(tokens[close + 1], Tokens.COMMA) &&
@@ -2663,6 +2687,30 @@ function parseSymbol(name: string): ParsedSymbol {
   if (/^\++$/.test(name)) return {type: 'rel', num: name.length};
   if (/^-+$/.test(name)) return {type: 'rel', num: -name.length};
   return {type: 'none'};
+}
+
+/**
+ * The address size a `z:` / `a:` / `f:` operand prefix forces, and the index
+ * just past it, if `tokens[start]` begins one.
+ *
+ * The tokenizer lexes the prefix as a single operator token, so `a:+2` and a
+ * `.define`d `a` cannot be mistaken for one, but a hand-built token list from
+ * the programmatic API may spell it as an identifier followed by a colon.
+ */
+const ADDR_SIZE_NAMES = {z: 'direct', a: 'absolute', f: 'far'} as const;
+
+function addrSize(tokens: Token[], start: number): {size: 'z'|'a'|'f', next: number}|undefined {
+  const front = tokens[start];
+  if (!front) return undefined;
+  if (front.token === 'op') {
+    const match = /^([azf]):$/.exec(front.str);
+    if (match) return {size: match[1] as 'z'|'a'|'f', next: start + 1};
+  }
+  if (front.token === 'ident' && /^[azf]$/i.test(front.str) &&
+      Tokens.eq(tokens[start + 1], Tokens.COLON)) {
+    return {size: front.str.toLowerCase() as 'z'|'a'|'f', next: start + 2};
+  }
+  return undefined;
 }
 
 const ForceDirectAddressingMap : Map<string, ArgMode> = new Map(
