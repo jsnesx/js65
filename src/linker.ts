@@ -550,6 +550,13 @@ function anonSegmentLabel(name: string, memory: number): string {
   return `@${at} $${memory.toString(16)}`;
 }
 
+/** How a segment is named in an error in an error message. */
+function segmentLabel(s: {name: string, memory: number}): string {
+  return Segment.isAnon(s.name) ?
+      `anonymous segment ${anonSegmentLabel(s.name, s.memory)}` :
+      `segment ${s.name}`;
+}
+
 /** Rounds up to the next multiple of `align`, which must be positive. */
 function alignUp(value: number, align: number): number {
   // NOTE: arithmetic rather than bit twiddling, since offsets in RAM segments
@@ -817,8 +824,13 @@ class LinkChunk {
           }Eligible: [${eligibleSegments}]`, this.at());
     }
     const segment = eligibleSegments[0];
-    if (this._org >= segment.memory + segment.size) {
-      this.linker.fail(`Chunk does not fit in segment ${segment.name}`, this.at());
+    // The org is inside the segment, but check that the data it carries
+    // still ends inside it.
+    if (this._org + this.size > segment.memory + segment.size) {
+      this.linker.fail(`Chunk ($${this.size.toString(16)} bytes at $${
+          this._org.toString(16)}) does not fit in ${''
+          }${segmentLabel(segment)} (size $${segment.size.toString(16)})`,
+                       this.at());
     }
     this.place(this._org, segment, this._overwrite);
   }
