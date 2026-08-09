@@ -1,0 +1,12 @@
+{
+	// `.s` is claimed by more than one installed extension (e.g. ca65 ones), and
+	// VS Code picks a winner by load order. The Extension Development Host loads
+	// those alongside this extension, so pin the association to keep the dev loop
+	// deterministic. The e2e suite runs with `--disable-extensions` and does not
+	// depend on this.
+	"files.associations": {
+		"*.s": "js65",
+		"*.inc": "js65",
+		"*.mac": "js65"
+	}
+}

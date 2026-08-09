@@ -1,0 +1,54 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			// Opens `testFixture/` so the extension activates on a real js65.json
+			// project rather than an empty window.
+			"type": "extensionHost",
+			"request": "launch",
+			"name": "Launch Client",
+			"runtimeExecutable": "${execPath}",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceRoot}",
+				"${workspaceRoot}/testFixture"
+			],
+			"outFiles": ["${workspaceRoot}/dist/**/*.js"],
+			// The language server runs as a child process; without this you can
+			// only debug the client half.
+			"autoAttachChildProcesses": true,
+			"preLaunchTask": {
+				"type": "npm",
+				"script": "build"
+			}
+		},
+		{
+			"type": "extensionHost",
+			"request": "launch",
+			"name": "Run Extension Tests",
+			"runtimeExecutable": "${execPath}",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceRoot}",
+				"--extensionTestsPath=${workspaceRoot}/out/test/index",
+				"${workspaceRoot}/testFixture"
+			],
+			"outFiles": [
+				"${workspaceRoot}/dist/**/*.js",
+				"${workspaceRoot}/out/**/*.js"
+			],
+			"preLaunchTask": {
+				"type": "npm",
+				"script": "build"
+			}
+		},
+		{
+			// Attach to the server started by `serverOptionsFor`'s debug profile,
+			// which passes `--inspect=6011`.
+			"name": "Attach to Language Server",
+			"type": "node",
+			"request": "attach",
+			"port": 6011,
+			"restart": true,
+			"outFiles": ["${workspaceRoot}/server/*.cjs"]
+		}
+	]
+}
