@@ -1,0 +1,656 @@
+// SPDX-License-Identifier: MPL-2.0
+
+/**
+ * The analyzer is the bridge between open editor buffers and the real
+ * assembler pipeline. This class also manages the LSP connection and
+ * cancellation details and so on.
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {promises as fsp} from 'node:fs';
+
+import {assemble, link, type AssemblyInput, type AssemblerOptions, type CancelSignal} from '../../src/libassembler.ts';
+import type {AssemblerMessage, SourceInfo} from '../../src/error.ts';
+import {MacroIndex, SymbolIndex} from '../../src/lspindex.ts';
+import type {Module} from '../../src/module.ts';
+import {joinDir} from '../../src/util.ts';
+import type {Diagnostic} from 'vscode-languageserver-protocol';
+
+import {
+  type CompilationUnit,
+  type Project,
+  findProjectFile,
+  loadProject,
+  standaloneUnit,
+  toPosix,
+  unitsOwningFile,
+} from './project.ts';
+import {messageToDiagnostic, uriToPath, pathToUri} from './convert.ts';
+
+/** One cached assemble run for a single compilation unit. */
+export interface UnitAnalysis {
+  readonly unit: CompilationUnit;
+  /** Symbol index the LSP navigates against, populated by the assembler. */
+  readonly index: SymbolIndex;
+  /** Macro/define table the run built for hover. */
+  readonly macros: MacroIndex;
+  /** Every source/.include/.incbin path the run touched used for invalidation. */
+  readonly touchedFiles: ReadonlySet<string>;
+  /** True if the unit was assembled in standalone (no `js65.json`) mode. */
+  readonly standalone: boolean;
+  /**
+   * Modules the assemble produced, retained so `link()` can run on save
+   * without reassembling. Empty when the assemble failed outright.
+   */
+  readonly modules: readonly Module[];
+}
+
+/**
+ * Per-document diagnostics produced by a single analysis pass. The LSP server
+ * compares this to its last-published set to know which URIs need an explicit
+ * empty publish (cleared errors).
+ */
+export interface AnalysisResult {
+  /** URI -> diagnostics for that file. */
+  readonly diagnostics: ReadonlyMap<string, Diagnostic[]>;
+  /** Per-unit results, keyed by unit name. */
+  readonly units: ReadonlyMap<string, UnitAnalysis>;
+  /** Source URIs that contributed diagnostics this run, for empty-publish logic. */
+  readonly touchedUris: ReadonlySet<string>;
+}
+
+/** Options for the analyzer. */
+export interface AnalyzerOptions {
+  /** Debounce window in ms. Default 200 */
+  debounceMs?: number;
+  /** Project root fallback when no `js65.json` is found. */
+  workspaceRoot: string;
+  fsImpl?: typeof fs;
+  fsImplPromises?: typeof fsp;
+  /** Sink for analyzer log output. */
+  onLog?: (msg: string) => void;
+  /** Cap on messages a single unit's assemble may report. */
+  errorLimit?: number;
+}
+
+interface PendingRun {
+  paths: ReadonlySet<string>;
+  signal: CancelToken;
+}
+
+/** A mutable cancel signal. */
+class CancelToken {
+  aborted = false;
+  get signal(): CancelSignal { return this; }
+}
+
+/**
+ * The analyzer. Construct one per LSP connection. Call `setProject` (or let
+ * `schedule` lazily discover one), then `open` / `change` / `close` as
+ * documents come and go, and consume `onDiagnostics` callbacks.
+ */
+export class Analyzer {
+  /** Open documents keyed by their POSIX-normalized path. */
+  private readonly openDocs = new Map<string, {version?: number, text: string}>();
+  /** Most recent project, discovered lazily and cached per workspace root. */
+  private project: Project | undefined;
+  /** Last analysis result, used by feature modules for navigation. */
+  private lastResult: AnalysisResult | undefined;
+  /** Pending debounce + cancellation state. */
+  private pending: PendingRun | undefined;
+  /** CancelToken of the run that has actually started. */
+  private inFlight: CancelToken | undefined;
+  private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Callbacks waiting for the analyzer to go idle. see `settled()`. */
+  private waiters: Array<() => void> = [];
+
+  /** Diagnostics callback which the server wires to `sendNotification`. */
+  onDiagnostics?: (result: AnalysisResult) => void;
+
+  constructor(private opts: AnalyzerOptions) {}
+
+  /** Replace the workspace root fallback such as when LSP `initialize` lands. */
+  setWorkspaceRoot(root: string): void { this.opts.workspaceRoot = root; }
+
+  /** Replace the current project such as when `js65.json` changes. */
+  setProject(project: Project | undefined): void {
+    this.project = project;
+    this.scheduleAll();
+  }
+
+  discoverProject(absFile: string): Project | undefined {
+    const projectFile = findProjectFile(absFile, this.opts.fsImpl ?? fs);
+    if (!projectFile) return undefined;
+    try {
+      return loadProject(projectFile, this.opts.fsImpl ?? fs);
+    } catch (err) {
+      this.log(`failed to load ${projectFile}: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  }
+
+  /** Track an open document. Triggers an analysis pass. */
+  open(uri: string, text: string, version?: number): void {
+    const p = uriToPath(uri);
+    this.openDocs.set(toPosix(p), {version, text});
+    this.ensureProjectFor(p);
+    this.schedule([p]);
+  }
+
+  /** Track a document change. Triggers a debounced analysis pass. */
+  change(uri: string, text: string, version?: number): void {
+    const p = uriToPath(uri);
+    this.openDocs.set(toPosix(p), {version, text});
+    this.schedule([p]);
+  }
+
+  /** Forget a closed document. Triggers a re-analysis (other files may have
+   *  been reading this one through `.include`). */
+  close(uri: string): void {
+    const p = uriToPath(uri);
+    this.openDocs.delete(toPosix(p));
+    this.schedule([p]);
+  }
+
+  /**
+   * Return the most recent analysis result, or `undefined` if no pass has
+   * finished yet. Feature modules use this to answer navigation queries from
+   * real assembler state.
+   */
+  getResult(): AnalysisResult | undefined { return this.lastResult; }
+
+  /**
+   * Hold feature tasks until no analysis is scheduled, running, or debouncing.
+   * We need the anaylsis to finish as soon as possible, so prevent other requests
+   * from holding it up by deferring these.
+   */
+  settled(timeoutMs = 10000): Promise<void> {
+    if (!this.isBusy()) return Promise.resolve();
+    return new Promise<void>(resolve => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      this.waiters.push(finish);
+      const timer = setTimeout(finish, timeoutMs);
+      // Don't hold the process open on a timer nobody is waiting for.
+      (timer as unknown as {unref?: () => void}).unref?.();
+    });
+  }
+
+  /** True while a pass is debouncing, queued, or awaiting the assembler. */
+  private isBusy(): boolean {
+    return this.debounceTimer !== undefined || this.pending !== undefined ||
+        this.inFlight !== undefined;
+  }
+
+  /** Release `settled()` waiters, but only once the analyzer is truly idle. */
+  private notifySettled(): void {
+    if (this.isBusy()) return;
+    const waiting = this.waiters;
+    this.waiters = [];
+    for (const w of waiting) w();
+  }
+
+  /**
+   * Look up the analysis for a unit by name. Convenience for navigation
+   * features that know which unit owns the cursor's file.
+   */
+  getUnit(name: string): UnitAnalysis | undefined {
+    return this.lastResult?.units.get(name);
+  }
+
+  /**
+   * Return the latest live text of an open document, by URI. Used by feature
+   * modules that re-lex the buffer directly (folding, semantic tokens, hover)
+   * so they see half-typed text the analyzer's debounce hasn't rebuilt from
+   * yet. Returns undefined for closed files.
+   */
+  peekDoc(uri: string): string | undefined {
+    const p = uriToPath(uri);
+    return this.openDocs.get(toPosix(p))?.text;
+  }
+
+  /** All known units from the current project, in declaration order. */
+  get units(): readonly CompilationUnit[] {
+    return this.project?.units ?? [];
+  }
+
+  /**
+   * Build a virtual filesystem reader for a unit. Open documents win over
+   * disk; both are normalized to the POSIX paths the assembler expects. Every
+   * successful read is tracked into `touched` for include-graph invalidation.
+   */
+  private makeCallbacks(touched: Set<string>): {
+    readText: (base: string, rel: string) => Promise<string>,
+    readBinary: (base: string, rel: string) => Promise<Uint8Array>,
+  } {
+    const fspImpl = this.opts.fsImplPromises ?? fsp;
+    const openDocs = this.openDocs;
+    // Only *successful* reads are recorded. The include path search involves
+    // lots of unsuccessful reads trying to find the right path so skip those.
+    return {
+      readText: async (base, rel) => {
+        const posix = joinDir(toPosix(base), toPosix(rel));
+        const open = openDocs.get(posix);
+        if (open) {
+          touched.add(posix);
+          return open.text;
+        }
+        const osPath = pathFromPosix(posix);
+        const text = await fspImpl.readFile(osPath, 'utf8');
+        touched.add(posix);
+        return text;
+      },
+      readBinary: async (base, rel) => {
+        const posix = joinDir(toPosix(base), toPosix(rel));
+        const osPath = pathFromPosix(posix);
+        const buf = await fspImpl.readFile(osPath);
+        touched.add(posix);
+        return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      },
+    };
+  }
+
+  /** Ensure a project is loaded for the given file, lazy-loading if needed. */
+  private ensureProjectFor(absFile: string): void {
+    if (this.project !== undefined) return; // explicit set or already-missing
+    const found = this.discoverProject(absFile);
+    if (found) this.project = found;
+  }
+
+  /** Schedule an analysis pass for the files owning the changed paths. */
+  private schedule(changedPaths: string[]): void {
+    // A close with no docs left still has to run: the pass is what produces the
+    // empty publish that clears the closed file's squiggles.
+    if (!this.openDocs.size && !this.lastResult) return;
+    if (this.pending) this.pending.signal.aborted = true;
+    if (this.inFlight) this.inFlight.aborted = true;
+    // Union rather than replace: editing file A then file B inside one debounce
+    // window must rebuild both units, not just B's.
+    const paths = new Set<string>([
+      ...(this.pending?.paths ?? []),
+      ...changedPaths.map(toPosix),
+    ]);
+    const token = new CancelToken();
+    this.pending = {paths, signal: token};
+    const debounceMs = this.opts.debounceMs ?? 200;
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = undefined;
+      const p = this.pending!;
+      this.pending = undefined;
+      this.inFlight = p.signal;
+      // Never leave `run()` unguarded: an escaped rejection here is an
+      // unhandled rejection, which under Node's default takes the process down.
+      void this.run(p.paths, p.signal).catch(err => {
+        // Clear the token this pass owned, or `settled()` waiters would block
+        // until their timeout on a run that is already over.
+        if (this.inFlight === p.signal) this.inFlight = undefined;
+        this.reportInternalError(err);
+        this.notifySettled();
+      });
+    }, debounceMs);
+  }
+
+  /** Report an error that escaped an analysis pass. Never throws. */
+  private reportInternalError(err: unknown): void {
+    this.log(`internal error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  }
+
+  /** Route a log line to the injected sink, defaulting to stderr. */
+  private log(msg: string): void {
+    const sink = this.opts.onLog;
+    if (sink) {
+      sink(`js65-lsp: ${msg}`);
+    } else {
+      // stderr only. stdout belongs to the JSON-RPC stream.
+      console.error(`js65-lsp: ${msg}`);
+    }
+  }
+
+  /** Schedule a full rebuild (e.g. after a project-file change). */
+  private scheduleAll(): void {
+    if (!this.openDocs.size && !this.lastResult) return;
+    this.schedule([...this.openDocs.keys()]);
+  }
+
+  /**
+   * Assemble every unit that owns (or might include) one of the changed
+   * paths. Aggregates diagnostics + per-unit results into a single
+   * `AnalysisResult`, and triggers `onDiagnostics`.
+   */
+  private async run(changedPaths: ReadonlySet<string>, token: CancelToken): Promise<void> {
+    if (token.aborted) return;
+    const project = this.project;
+    const unitsToRun = this.pickUnitsToRun(project, changedPaths);
+    const diagnostics = new Map<string, Diagnostic[]>();
+    const unitResults = new Map<string, UnitAnalysis>();
+    const touchedUris = new Set<string>();
+
+    const uriOf = (p: string) => pathToUri(p);
+
+    for (const {unit, standalone} of unitsToRun) {
+      if (token.aborted) return;
+      const analysis = await this.analyzeUnit(unit, standalone, token, diagnostics,
+                                              touchedUris, uriOf);
+      unitResults.set(unit.name, analysis);
+    }
+
+    // Check any opened files outside of the current project. If they are open and not
+    // in the project, then compile them as standalone, in order to get *some* analysis
+    // and also check to see if this includes something we have seen before
+    if (project) {
+      for (const p of changedPaths) {
+        if (token.aborted) return;
+        if (!this.openDocs.has(p)) continue; // closed files have no editor to publish to
+        if (isCoveredBy(unitResults, p)) continue;
+        const unit = standaloneUnit(p, this.opts.workspaceRoot);
+        if (unitResults.has(unit.name)) continue;
+        const analysis = await this.analyzeUnit(unit, true, token, diagnostics,
+                                                touchedUris, uriOf);
+        unitResults.set(unit.name, analysis);
+      }
+    }
+
+    // A newer pass superseded this one while it was awaiting the assembler.
+    if (token.aborted) return;
+
+    const result: AnalysisResult = {diagnostics, units: unitResults, touchedUris};
+    this.lastResult = result;
+    if (this.inFlight === token) this.inFlight = undefined;
+    this.onDiagnostics?.(result);
+    this.notifySettled();
+  }
+
+  /** Assemble one unit and bucket its messages. */
+  private async analyzeUnit(
+      unit: CompilationUnit,
+      standalone: boolean,
+      token: CancelToken,
+      diagnostics: Map<string, Diagnostic[]>,
+      touchedUris: Set<string>,
+      uriOf: (p: string) => string): Promise<UnitAnalysis> {
+    const touched = new Set<string>();
+    // Seed with the entry sources so the include graph has roots even if
+    // the assembler bails before reading anything.
+    for (const s of unit.sources) touched.add(toPosix(s));
+
+    const index = new SymbolIndex();
+    const macros = new MacroIndex();
+    const asmOpts: AssemblerOptions = {
+      includePaths: unit.includePaths,
+      binIncludePaths: unit.binIncludePaths,
+      lineContinuations: true,
+      generateDebugInfo: true,
+      collectReferences: true,
+      symbolIndex: index,
+      macroIndex: macros,
+      errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
+    };
+    const callbacks = this.makeCallbacks(touched);
+
+    // Any file in the unit may be missing (a typo'd path in js65.json, or a
+    // source deleted while the editor is open). Reading them inside the try
+    // turns that into a diagnostic on a real document rather than a rejection
+    // that escapes the pass.
+    let messages: AssemblerMessage[];
+    let modules: readonly Module[] = [];
+    try {
+      const inputs: AssemblyInput[] = [];
+      for (const s of unit.sources) {
+        const posix = toPosix(s);
+        inputs.push({
+          type: 'source',
+          // Hand the assembler a POSIX path so the index/diagnostics line up
+          // with what `touched` and `openDocs` already keyed on.
+          name: posix,
+          code: await callbacks.readText('', posix),
+        });
+      }
+      const result = await assemble(inputs, asmOpts, callbacks, undefined, token.signal);
+      messages = [...result.messages];
+      modules = result.modules;
+    } catch (err) {
+      messages = [internalErrorMessage(err, unit)];
+    }
+
+    if (standalone) {
+      // A file with no owning unit gets noise from undefined symbols that
+      // a real link would have resolved. Downgrade per the plan.
+      messages = downgradeUndefinedForStandalone(messages);
+    }
+
+    // Anything the assembler couldn't pin to a line still has to reach the
+    // editor: `bucketMessages` drops unlocated messages, so without this an
+    // error like a failed `.include` search publishes nothing at all and the
+    // file reads as clean.
+    bucketMessages(messages.map(m => anchorToUnit(m, unit)),
+                   diagnostics, touchedUris, uriOf);
+
+    return {unit, index, macros, touchedFiles: touched, standalone, modules};
+  }
+
+  /**
+   * Re-link the units owning a saved file and merge the linker's diagnostics
+   * (segment overflow, free-space problems) into the published set. Assembling
+   * already happened so this reuses the modules that pass produced.
+   *
+   * Skipped for units with no memory layout to place chunks into
+   */
+  async linkSaved(uri: string): Promise<AnalysisResult | undefined> {
+    const result = this.lastResult;
+    if (!result) return undefined;
+    const file = toPosix(uriToPath(uri));
+    const diagnostics = new Map<string, Diagnostic[]>(
+        [...result.diagnostics].map(([k, v]) => [k, [...v]]));
+    const touchedUris = new Set(result.touchedUris);
+    let linked = false;
+
+    for (const unit of result.units.values()) {
+      if (!unit.touchedFiles.has(file)) continue;
+      if (!unit.modules.length) continue;
+      if (!hasMemoryLayout(unit)) continue;
+      let messages: AssemblerMessage[];
+      try {
+        const out = link([...unit.modules], {
+          target: unit.unit.target,
+          linkerConfig: unit.unit.linkerConfig,
+          linkerConfigName: unit.unit.linkerConfigName,
+        });
+        messages = out.messages;
+      } catch (err) {
+        messages = [internalErrorMessage(err, unit.unit)];
+      }
+      // anchorToUnit is used here in case the error message doesn't have a source location
+      // which can happen right now with things like ld65 linker cfg files.
+      bucketMessages(messages.map(m => anchorToUnit(m, unit.unit)),
+                     diagnostics, touchedUris, p => pathToUri(p));
+      linked = true;
+    }
+    if (!linked) return undefined;
+
+    const merged: AnalysisResult = {diagnostics, units: result.units, touchedUris};
+    this.lastResult = merged;
+    this.onDiagnostics?.(merged);
+    return merged;
+  }
+
+  /**
+   * Decide which units need to reassemble given a set of changed paths.
+   *
+   * - If we have a project, run every unit that directly owns the path, plus
+   *   every unit whose previous run touched it (include-graph invalidation).
+   * - If a path is unknown to any unit (orphan `.inc`), conservatively rerun
+   *   all units until per-unit include graphs land.
+   * - Without a project, every changed file is its own standalone unit.
+   */
+  private pickUnitsToRun(project: Project | undefined, changed: ReadonlySet<string>):
+      Array<{unit: CompilationUnit, standalone: boolean}> {
+    const out: Array<{unit: CompilationUnit, standalone: boolean}> = [];
+    if (!project) {
+      for (const p of changed) {
+        out.push({unit: standaloneUnit(p, this.opts.workspaceRoot), standalone: true});
+      }
+      return out;
+    }
+    const seen = new Set<string>();
+    const anyOrphan = new Set<string>();
+    for (const p of changed) {
+      const posix = toPosix(p);
+      const owners = unitsOwningFile(project, posix);
+      if (owners.length) {
+        for (const u of owners) {
+          if (seen.has(u.name)) continue;
+          seen.add(u.name);
+          out.push({unit: u, standalone: false});
+        }
+      } else {
+        anyOrphan.add(posix);
+      }
+    }
+    // If we've already run at least once, consult the include graph for which
+    // units actually include each orphan path.
+    if (anyOrphan.size && this.lastResult) {
+      for (const unit of this.lastResult.units.values()) {
+        if (seen.has(unit.unit.name)) continue;
+        if ([...anyOrphan].some(p => unit.touchedFiles.has(p))) {
+          seen.add(unit.unit.name);
+          out.push({unit: unit.unit, standalone: unit.standalone});
+        }
+      }
+    }
+    // No prior result + orphans + project present: rebuild everything, since
+    // we don't yet know which units include what.
+    if (anyOrphan.size && !this.lastResult) {
+      for (const u of project.units) {
+        if (seen.has(u.name)) continue;
+        seen.add(u.name);
+        out.push({unit: u, standalone: false});
+      }
+    }
+    // If we got nothing (e.g. changed paths are all closed), still rebuild any
+    // units we previously knew about so cleared diagnostics propagate.
+    if (!out.length && this.lastResult) {
+      for (const unit of this.lastResult.units.values()) {
+        out.push({unit: unit.unit, standalone: unit.standalone});
+      }
+    }
+    return out;
+  }
+}
+
+/**
+ * Per-unit message cap. Far above the CLI's 30 so a real file's diagnostics are
+ * never truncated, but bounded so that a pathological buffer can't build an
+ * unbounded message list on every keystroke.
+ */
+const DEFAULT_LSP_ERROR_LIMIT = 1000;
+
+/** True if any completed unit analysis actually read this file. */
+function isCoveredBy(units: ReadonlyMap<string, UnitAnalysis>, file: string): boolean {
+  for (const unit of units.values()) {
+    if (unit.touchedFiles.has(file)) return true;
+  }
+  return false;
+}
+
+/**
+ * Build the fallback diagnostic for an error that escaped the assemble. It gets
+ * a `source` pointing at the unit's first entry file: a message with no source
+ * is dropped by the bucketing loop, which would clear every existing squiggle
+ * and report nothing at all.
+ */
+function internalErrorMessage(err: unknown, unit: CompilationUnit): AssemblerMessage {
+  const file = unit.sources[0] ? toPosix(unit.sources[0]) : undefined;
+  const source: SourceInfo | undefined =
+      file ? {file, line: 1, column: 0} : undefined;
+  const msg: AssemblerMessage = {
+    level: 'error',
+    message: `js65-lsp internal error: ${err instanceof Error ? err.message : String(err)}`,
+  };
+  if (source) msg.source = source;
+  return msg;
+}
+
+/**
+ * Give a message with no location one pointing at the unit's entry file, so it
+ * reaches a document the user can actually see. Messages that already have a
+ * source are returned untouched.
+ */
+function anchorToUnit(msg: AssemblerMessage, unit: CompilationUnit): AssemblerMessage {
+  if (msg.source) return msg;
+  const file = unit.sources[0] ? toPosix(unit.sources[0]) : undefined;
+  if (!file) return msg;
+  return {...msg, source: {file, line: 1, column: 0}};
+}
+
+/**
+ * Bucket messages by URI, deduping on (file, line, column, message). A header
+ * included by two sources in the same unit otherwise reports every diagnostic
+ * in it twice.
+ */
+function bucketMessages(
+    messages: readonly AssemblerMessage[],
+    diagnostics: Map<string, Diagnostic[]>,
+    touchedUris: Set<string>,
+    uriOf: (p: string) => string): void {
+  const seen = new Set<string>();
+  for (const msg of messages) {
+    const file = msg.source?.file;
+    if (!file) continue; // unlocated errors stay unattributed
+    const key = `${file}\0${msg.source!.line}\0${msg.source!.column}\0${msg.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const uri = uriOf(file);
+    touchedUris.add(uri);
+    const diags = diagnostics.get(uri) ?? [];
+    diagnostics.set(uri, diags);
+    diags.push(messageToDiagnostic(msg, uriOf));
+  }
+}
+
+/**
+ * Whether a unit has enough of a memory layout for `link()` to place its
+ * chunks. Three ways to get one:
+ *
+ *  - an ld65 linker config, or
+ *  - a built-in `target` layout, or
+ *  - js65's extended `.segment` syntax, which declares the layout in the source
+ *    itself (`.segment "CODE" :size $4000 :mem $8000 :out "%O"`, or an
+ *    anonymous `.segment $8000 :size $4000`). Those land in the assembled
+ *    module's `segments`.
+ *
+ * Without one of those, linking is not just pointless but actively harmful: a
+ * ca65-style source that says `.segment "CODE"` and expects the layout to
+ * arrive from a config we weren't told about links to `Could not find space for
+ * chunk Code in CODE`, which is an artifact of our own missing configuration,
+ * not a bug in the user's code.
+ *
+ * A bare `.segment "NAME"` contributes nothing to `segments`, so the only thing
+ * to rule out is ca65's predeclared `ZEROPAGE`, which `.zeropage` registers as
+ * `{name, addressing: 1}` with no placement of any kind.
+ */
+function hasMemoryLayout(unit: UnitAnalysis): boolean {
+  if (unit.unit.linkerConfig || unit.unit.target) return true;
+  return unit.modules.some(m => m.segments?.some(
+      s => s.size !== undefined || s.memory !== undefined ||
+           s.offset !== undefined || s.out !== undefined ||
+           s.free?.length));
+}
+
+/**
+ * In standalone mode (no `js65.json`), the file isn't being linked and any
+ * import/export references will be unresolved. Downgrade those
+ * to warnings so they don't drown out the real diagnostics.
+ */
+function downgradeUndefinedForStandalone(messages: AssemblerMessage[]): AssemblerMessage[] {
+  const UNDEFINED = /undefined/i;
+  return messages.map(m => m.level === 'error' && UNDEFINED.test(m.message)
+      ? {...m, level: 'warning', message: `[standalone] ${m.message}`} : m);
+}
+
+/** Convert a POSIX-normalized path back into an OS path (for disk reads). */
+function pathFromPosix(posix: string): string {
+  return path.normalize(posix.split('/').join(path.sep));
+}
