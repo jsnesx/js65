@@ -77,7 +77,9 @@ jobs:
           HERMES_CONFIG: ''
         run: bun run hermes-exe
       - name: Run Test Cases
-        run: bun test ${{ github.workspace }}/test
+        # `bun run test` rather than `bun test test`: it also builds the language
+        # server bundle and runs the lsp/server suite against it.
+        run: bun run test
       - name: Build Bun release (js65-bun)
         run: bun run exe
       - name: Build integration library

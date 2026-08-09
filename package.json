@@ -38,6 +38,9 @@
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
     "lib": "bun build --entrypoints ./src/libassembler.ts --sourcemap=linked --outdir ./build",
+    "lsp": "bun build lsp/server/bin.ts --target=node --format=cjs --outfile build/js65-lsp.cjs",
+    "test": "bun test --only-failures test && bun run test:lsp",
+    "test:lsp": "bun run lsp && bun test --only-failures lsp/server/test",
     "quickjs-bundle": "bun build ./integrations/quickjs.ts --outfile ./build/quickjs.bundle.js --format esm --target node --external qjs:std --external qjs:os",
     "quickjs-exe": "bun run quickjs-bundle && qjs -c ./build/quickjs.bundle.js -o ./build/js65-qjs",
     "hermes-exe": "bun run integrations/hermes/hermes-build.ts",
@@ -45,8 +48,7 @@
     "bench": "bun run build && bun run bench/bench.ts",
     "build:npm": "tsc -p tsconfig.build.json",
     "prepack": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "bun test test"
+    "typecheck": "tsc -p tsconfig.json"
   },
   "repository": {
     "type": "git",

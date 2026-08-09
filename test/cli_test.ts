@@ -1,12 +1,14 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {describe, it, expect} from 'bun:test';
+import {describe, it, expect, spyOn} from 'bun:test';
 import {Cli} from '../src/cli.ts'
 import { fromHexString, fromByteString, joinDir } from "../src/util.ts";
 import { VERSION } from '../src/version.ts';
 
 describe('CLI', function() {
+  // disable the usage message to keep the test output clean
+  spyOn(console, "log").mockImplementation(() => {});
   describe('STDIN', function() {
     it('should handle `lda #$03`', async function() {
       const [_out, data] = await make(["--target", "sim", "--stdin"], `lda #3`);
