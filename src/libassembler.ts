@@ -21,7 +21,7 @@ import * as Exprs from './expr.ts';
 import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
-import type { SymbolIndex } from './options.ts';
+import type { MacroIndex, SymbolIndex } from './lspindex.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
@@ -108,6 +108,8 @@ export interface AssemblerOptions {
   collectReferences?: boolean;
   /** Cache of all symbols for the LSP. not used unless collectReferences is on */
   symbolIndex?: SymbolIndex;
+  /** Cache of all the macros/defines for the LSP */
+  macroIndex?: MacroIndex;
   errorLimit?: number;
 }
 
@@ -347,7 +349,8 @@ export async function assemble(
               }
               const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
               toks.enter(tokenizer);
-              const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
+              const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
+                                           options?.macroIndex);
               await applyDefines(asm, pre, options?.defines, opts);
               await asm.tokens(pre, signal);
               break;
@@ -484,7 +487,8 @@ export async function assemble(
       // Tokenize and assemble source code
       const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
       toks.enter(tokenizer);
-      const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector);
+      const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
+                                   options?.macroIndex);
       await applyDefines(asm, pre, options?.defines, opts);
       await asm.tokens(pre, signal);
 

@@ -20,6 +20,14 @@ export class Define {
     return this.overloads[this.overloads.length - 1].canOverload();
   }
 
+  /**
+   * Token of the `.define`'s name used as the go-to-definition target.
+   * Reports the first overload, which is where the name was introduced.
+   */
+  get definition(): Token|undefined {
+    return this.overloads[0]?.definition;
+  }
+
   append(define: Define) {
     if (!this.canOverload()) {
       const prevDef = this.overloads[this.overloads.length - 1].definition;

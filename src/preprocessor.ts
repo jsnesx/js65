@@ -10,6 +10,7 @@ import type { Token } from './token.ts';
 import * as Tokens from './token.ts';
 import {TokenStream} from './tokenstream.ts';
 import { ErrorCollector, FatalError, RecoverableError, SourceError } from './error.ts';
+import type {MacroIndex} from './lspindex.ts';
 
 // TODO - figure out how to actually keep track of stack depth?
 //  - might need to insert a special token at the end of an expansion
@@ -105,13 +106,20 @@ export class Preprocessor implements Tokens.Source {
   //  - only symbols have scope
   // TODO - evaluate constants...
 
+  /** Sink for the macros/defines found by the preprocessor. Only set by the LSP. */
+  readonly macroIndex?: MacroIndex;
+
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor,
-              readonly errorCollector?: ErrorCollector) {
+              readonly errorCollector?: ErrorCollector,
+              macroIndex?: MacroIndex) {
     this.macros = parent ? parent.macros : new Map();
     if (!errorCollector && parent?.errorCollector) {
       this.errorCollector = parent.errorCollector;
     }
+    // Nested preprocessors share the parent's index, the same way they share
+    // the macro map itself.
+    this.macroIndex = macroIndex ?? parent?.macroIndex;
   }
 
 
@@ -751,6 +759,11 @@ export class Preprocessor implements Tokens.Source {
     } else {
       this.macros.set(name, define);
     }
+    // Record the merged entry, so an appended overload keeps the original site.
+    const recorded = this.macros.get(name);
+    if (recorded instanceof Define) {
+      this.macroIndex?.record(name, 'define', recorded, recorded.definition?.source);
+    }
     return await Promise.resolve();
   }
 
@@ -768,6 +781,7 @@ export class Preprocessor implements Tokens.Source {
       Tokens.fail(`Not a .define macro: ${Tokens.nameOf(ident)}`, ident);
     }
     this.macros.delete(name);
+    this.macroIndex?.remove(name);
     return await Promise.resolve();
   }
 
@@ -784,6 +798,7 @@ export class Preprocessor implements Tokens.Source {
       Tokens.fail(`Not a .macro: ${Tokens.nameOf(ident)}`, ident);
     }
     this.macros.delete(name);
+    this.macroIndex?.remove(name);
     return await Promise.resolve();
   }
 
@@ -793,6 +808,7 @@ export class Preprocessor implements Tokens.Source {
     const prev = this.macros.get(name);
     if (prev) Tokens.fail(`Already defined: ${name}`, line[1]);
     this.macros.set(name, macro);
+    this.macroIndex?.record(name, 'macro', macro, macro.definition?.source);
   }
 
   private async parseRepeat(line: Token[]) {
