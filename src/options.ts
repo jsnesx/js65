@@ -59,6 +59,7 @@ export interface AssemblerOptions {
    * to truncate the width of this value to the correct size.
    */
   forceRange?: boolean;
+  errorLimit?: number;
 }
 
 /** Options the linker reads. */
