@@ -1101,13 +1101,13 @@ export class Assembler {
         case '.struct': return this.beginStruct(tokens, 'struct');
         case '.union': return this.beginStruct(tokens, 'struct'); // union sized like struct here
         case '.enum': return this.beginStruct(tokens, 'enum');
-        case '.endstruct': return this.parseNoArgs(tokens, 1), this.endStruct('struct');
-        case '.endunion': return this.parseNoArgs(tokens, 1), this.endStruct('struct');
-        case '.endenum': return this.parseNoArgs(tokens, 1), this.endStruct('enum');
-        case '.scope': return this.scope(this.parseOptionalIdentifier(tokens));
-        case '.endscope': return this.parseNoArgs(tokens, 1), this.endScope();
-        case '.proc': return this.proc(this.parseRequiredIdentifier(tokens));
-        case '.endproc': return this.parseNoArgs(tokens, 1), this.endProc();
+        case '.endstruct': return this.parseNoArgs(tokens, 1), this.endStruct('struct', tokens[0].source);
+        case '.endunion': return this.parseNoArgs(tokens, 1), this.endStruct('struct', tokens[0].source);
+        case '.endenum': return this.parseNoArgs(tokens, 1), this.endStruct('enum', tokens[0].source);
+        case '.scope': return this.scope(this.parseOptionalIdentifier(tokens), tokens[0].source);
+        case '.endscope': return this.parseNoArgs(tokens, 1), this.endScope(tokens[0].source);
+        case '.proc': return this.proc(this.parseRequiredIdentifier(tokens), tokens[0].source);
+        case '.endproc': return this.parseNoArgs(tokens, 1), this.endProc(tokens[0].source);
         case '.pushseg': return this.pushSeg(...this.parseSegmentList(tokens, 1, true));
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
         case '.move': return this.move(...this.parseMoveArgs(tokens));
@@ -1248,7 +1248,7 @@ export class Assembler {
     const isLabel = Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL);
     const ctx = this.structContext[this.structContext.length - 1];
     if (ctx?.kind !== 'enum') {
-      this.assign(name, expr, isLabel);
+      this.assign(name, expr, isLabel, tokens[0]);
       return;
     }
     // enum value with assignment, so parse the value passed to the enum.
@@ -1258,7 +1258,7 @@ export class Assembler {
     if (val == null) {
       this.fail(`enum member '${name}' needs a constant value`, tokens[0]);
     }
-    this.enumMember(name, val);
+    this.enumMember(name, val, tokens[0]);
   }
 
   setSym(tokens: Token[]) {
@@ -1267,29 +1267,29 @@ export class Assembler {
     if (tokens[0].source) {
       this._source = tokens[0].source;
     }
-    this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2));
+    this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2), tokens[0]);
   }
 
-  assign(ident: string, expr: Expr|number, isLabel = false) {
+  assign(ident: string, expr: Expr|number, isLabel = false, token?: Token) {
     if (ident.startsWith('@')) {
       this.fail(`Cheap locals may only be labels: ${ident}`);
     }
     // Now make the assignment.
     if (typeof expr !== 'number') expr = this.resolve(expr);
-    this.assignSymbol(ident, false, expr, undefined, isLabel);
+    this.assignSymbol(ident, false, expr, token, isLabel);
     // TODO - no longer needed?
     if (this.opts.refExtractor?.assign && typeof expr === 'number') {
       this.opts.refExtractor.assign(ident, expr);
     }
   }
 
-  set(ident: string, expr: Expr|number) {
+  set(ident: string, expr: Expr|number, token?: Token) {
     if (ident.startsWith('@')) {
       this.fail(`Cheap locals may only be labels: ${ident}`);
     }
     // Now make the assignment.
     if (typeof expr !== 'number') expr = this.resolve(expr);
-    this.assignSymbol(ident, true, expr);
+    this.assignSymbol(ident, true, expr, token);
   }
 
   /** 
@@ -1661,11 +1661,11 @@ export class Assembler {
 
   beginStruct(tokens: Token[], kind: 'struct'|'enum') {
     const name = this.parseOptionalIdentifier(tokens);
-    if (name != null) this.enterScope(name, 'scope');
+    if (name != null) this.enterScope(name, 'scope', tokens[0].source);
     this.structContext.push({kind, offset: 0, name: name ?? undefined, count: 0});
   }
 
-  endStruct(kind: 'struct'|'enum') {
+  endStruct(kind: 'struct'|'enum', at?: Tokens.SourceInfo) {
     const ctx = this.structContext.pop();
     if (!ctx || ctx.kind !== kind) this.fail(`.end${kind} without a matching .${kind}`);
     if (ctx!.name != null) {
@@ -1675,7 +1675,7 @@ export class Assembler {
       const num = ctx!.kind === 'enum' ? ctx!.count : ctx!.offset;
       const size: Expr = {op: 'num', num, meta: Exprs.size(num)};
       this.defineSizeOfScope(this.currentScope, ctx!.name, size);
-      this.exitScope('scope');
+      this.exitScope('scope', at);
     }
   }
 
@@ -1685,19 +1685,19 @@ export class Assembler {
     if (ctx.kind === 'enum') {
       // No explicit value, so the member takes the running counter in offset.
       Tokens.expectEol(tokens[1]);
-      this.enumMember(name, ctx.offset);
+      this.enumMember(name, ctx.offset, tokens[0]);
       return;
     }
-    this.assign(name, ctx.offset);
+    this.assign(name, ctx.offset, false, tokens[0]);
     const size = this.structMemberSize(tokens);
     // The member's own symbol holds its offset, so its width goes in a size symbol.
     this.defineSizeOfSymbol(this.currentScope, name, size);
     ctx.offset += size;
   }
 
-  private enumMember(name: string, value: number) {
+  private enumMember(name: string, value: number, token?: Token) {
     const ctx = this.structContext[this.structContext.length - 1];
-    this.assign(name, value);
+    this.assign(name, value, false, token);
     this.defineSizeOfSymbol(this.currentScope, name, 1);
     ctx.offset = value + 1;
     ctx.count++;
@@ -2084,19 +2084,19 @@ export class Assembler {
     }
   }
 
-  scope(name?: string) {
-    this.enterScope(name, 'scope');
+  scope(name?: string, at?: Tokens.SourceInfo) {
+    this.enterScope(name, 'scope', at);
   }
 
-  proc(name: string) {
+  proc(name: string, at?: Tokens.SourceInfo) {
     this.label(name);
-    this.enterScope(name, 'proc');
+    this.enterScope(name, 'proc', at);
     // the size for the proc should match the scope, so give the scope the name of the label
     // we just made so that it works properly
     this.currentScope.label = name;
   }
 
-  enterScope(name: string|undefined, kind: 'scope'|'proc') {
+  enterScope(name: string|undefined, kind: 'scope'|'proc', at?: Tokens.SourceInfo) {
     const existing = name ? this.currentScope.children.get(name) : undefined;
     if (existing) {
       if (this.opts.reentrantScopes) {
@@ -2115,10 +2115,10 @@ export class Assembler {
     this.currentScope = child;
   }
 
-  endScope() { this.exitScope('scope'); }
-  endProc() { this.exitScope('proc'); }
+  endScope(at?: Tokens.SourceInfo) { this.exitScope('scope', at); }
+  endProc(at?: Tokens.SourceInfo) { this.exitScope('proc', at); }
 
-  exitScope(kind: 'scope'|'proc') {
+  exitScope(kind: 'scope'|'proc', at?: Tokens.SourceInfo) {
     if (this.currentScope.kind !== kind || !this.currentScope.parent) {
       this.fail(`.end${kind} without .${kind}`);
     }
