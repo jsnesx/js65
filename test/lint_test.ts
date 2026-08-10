@@ -651,7 +651,7 @@ describe('jmp-fallthrough', function() {
     expect(msg.code).toBe('jmp-fallthrough');
     expect(msg.source).toMatchObject({file: 'test.s', line: 3, column: 2});
     expect(msg.message)
-        .toContain('`jmp next` jumps to the very next instruction');
+        .toContain('`jmp next` jumps to the next instruction');
     expect(msg.message).toContain('`FALLTHROUGH next`');
   });
 

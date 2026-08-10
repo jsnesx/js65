@@ -16,7 +16,10 @@ import type {
   WorkspaceFolder,
   ClientCapabilities,
 } from 'vscode-languageserver-protocol';
-import {DidChangeWatchedFilesNotification} from 'vscode-languageserver-protocol';
+import {
+  CodeActionKind,
+  DidChangeWatchedFilesNotification,
+} from 'vscode-languageserver-protocol';
 import {URI} from 'vscode-uri';
 
 import {Analyzer, type AnalysisResult} from './analyzer.ts';
@@ -26,6 +29,7 @@ import {registerNavigationFeatures} from './features/navigation.ts';
 import {registerHoverFeatures} from './features/hover.ts';
 import {registerCompletionFeatures} from './features/completion.ts';
 import {registerStructureFeatures, SEMANTIC_TOKEN_LEGEND} from './features/structure.ts';
+import {registerCodeActionFeatures} from './features/codeactions.ts';
 
 export interface ServerOptions {
   /** Debounce window passed to the analyzer. */
@@ -109,6 +113,7 @@ export async function main(opts: ServerOptions = {}): Promise<void> {
       workspaceSymbolProvider: true,
       hoverProvider: true,
       completionProvider: {triggerCharacters: ['.', ':']},
+      codeActionProvider: {codeActionKinds: [CodeActionKind.QuickFix]},
       foldingRangeProvider: true,
       semanticTokensProvider: {
         legend: SEMANTIC_TOKEN_LEGEND,
@@ -187,6 +192,7 @@ export async function main(opts: ServerOptions = {}): Promise<void> {
   registerHoverFeatures(connection, analyzer);
   registerCompletionFeatures(connection, analyzer);
   registerStructureFeatures(connection, analyzer);
+  registerCodeActionFeatures(connection);
 
   connection.listen();
   // Process runs until the editor disconnects and the process is killed.
