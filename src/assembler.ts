@@ -10,7 +10,7 @@ import type { AssemblerMessage, ErrorLevel } from './error.ts';
 import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { Linter } from './lint.ts';
+import { Linter, type RtsAnchor } from './lint.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from './options.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
@@ -761,6 +761,8 @@ export class Assembler {
       // rts back ref
       const i = this.rtsRefsReverse.length + parsed.num;
       if (i < 0) this.fail(`Bad rts backref: ${name}`);
+      // That `rts` is a branch target now, so it can't be linted away.
+      this.linter?.rtsBackref(i);
       return this.rtsRefsReverse[i];
     } else if (parsed.type === 'rel' && parsed.num < 0) {
       // relative back ref
@@ -946,6 +948,8 @@ export class Assembler {
     // A `.align` at the very end of the source still pads its segment in ca65.
     this.flushPendingAlign();
     this.closeScopes();
+    // Check for any deferred lints.
+    this.linter?.closeModule();
 
     // TODO - handle imports and exports out of the scope
     // TODO - add .scope and .endscope and forward scope vars at end to parent
@@ -1105,6 +1109,9 @@ export class Assembler {
   directive(tokens: Token[]) {
     // TODO - record line information, rewrap error messages?
     this.errorToken = tokens[0];
+    // Conservatively end the sequence since many directives can emit bytes or change org/seg, so
+    // the instructions on either side of it are no longer adjacent.
+    this.linter?.endInstructionSequence();
     try {
       switch (Tokens.str(tokens[0])) {
         case '.org': return this.org(this.parseConst(tokens, 1));
@@ -1209,6 +1216,9 @@ export class Assembler {
   }
 
   label(label: string|Token) {
+    // Something may branch here, so the instruction above no longer simply
+    // falls into the one below.
+    this.linter?.endInstructionSequence();
     let ident: string;
     let token: Token|undefined;
     const expr = this.pc();
@@ -1416,19 +1426,22 @@ export class Assembler {
       if (!arg) arg = ['imp'];
       mnemonic = mnemonic.toLowerCase();
     }
+    // Set for an `rts`, so the linter can tell whether anything points at it.
+    let rtsAnchor: RtsAnchor|undefined;
     if (mnemonic === 'rts') {
       // NOTE: we special-case this in both the tokenizer and here so that
       // `rts:+` and `rts:-` work for pointing to an rts instruction.
       const expr = this.pc();
-      this.rtsRefsReverse.push(expr);
+      const index = this.rtsRefsReverse.push(expr) - 1;
       const sym = this.rtsRefsForward.shift();
       if (sym != null) this.symbols[sym].expr = expr;
+      rtsAnchor = {index, claimed: sym != null};
     }
     // may need to size the arg, depending.
     // cpu will take 'add', 'a,x', and 'a,y' and indicate which it actually is.
     const ops = this.cpu.op(mnemonic);
     if (!ops) this.fail(`Bad mnemonic: ${mnemonic}`, at);
-    this.linter?.instruction(mnemonic, arg, ops, tokens);
+    this.linter?.instruction(mnemonic, arg, ops, tokens, rtsAnchor);
     const m = arg[0];
     if (m === 'add' || m === 'a,x' || m === 'a,y') {
       // Special case for address mnemonics

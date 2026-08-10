@@ -489,6 +489,124 @@ describe('endproc-no-terminator', function() {
   });
 });
 
+describe('jsr-rts-tail-call', function() {
+  // Somewhere for the `jsr` to go, past everything the tests care about.
+  const FOO = '\nfoo:\n  lda #1\n  rts';
+
+  it('should fire on a jsr immediately followed by an rts', async function() {
+    expect(await lintCodes(`  jsr foo\n  rts${FOO}`))
+        .toEqual(['jsr-rts-tail-call']);
+  });
+
+  it('should fire once per pair', async function() {
+    expect(await lintCodes(`  jsr foo\n  rts\n  jsr foo\n  rts${FOO}`))
+        .toEqual(['jsr-rts-tail-call', 'jsr-rts-tail-call']);
+  });
+
+  it('should stay quiet when the previous instruction is not a jsr',
+     async function() {
+    expect(await lintCodes(`  jmp foo\n  rts${FOO}`)).toEqual([]);
+    expect(await lintCodes(`  lda #1\n  rts${FOO}`)).toEqual([]);
+    // Nothing precedes the very first instruction.
+    expect(await lintCodes(`  rts${FOO}`)).toEqual([]);
+  });
+
+  it('should stay quiet when a label separates the pair', async function() {
+    // Something may branch to `ret`, in which case the `rts` has to stay.
+    expect(await lintCodes(`  jsr foo\nret:\n  rts${FOO}`)).toEqual([]);
+    expect(await lintCodes(`  jsr foo\n@ret:\n  rts${FOO}`)).toEqual([]);
+    expect(await lintCodes(`  jsr foo\n:\n  rts${FOO}`)).toEqual([]);
+  });
+
+  it('should stay quiet when a directive separates the pair', async function() {
+    // Conservative: a directive can emit bytes or move the pc between the two.
+    expect(await lintCodes(`  jsr foo\n  .byte 0\n  rts${FOO}`)).toEqual([]);
+    expect(await lintCodes(`  jsr foo\n  .align 2\n  rts${FOO}`)).toEqual([]);
+    expect(await lintCodes(`.proc bar\n  jsr foo\n.endproc\n  rts${FOO}`))
+        .toEqual([]);
+  });
+
+  it('should stay quiet when something references the rts', async function() {
+    // `:<rts` reaches back to it, `:>rts` reaches forward to it.
+    expect(await lintCodes(`  jsr foo\n  rts\n  bne :<rts${FOO}`)).toEqual([]);
+    expect(await lintCodes(`  bne :>rts\n  jsr foo\n  rts${FOO}`)).toEqual([]);
+  });
+
+  it('should still fire when a different rts is referenced', async function() {
+    // The back reference claims the second `rts`, not the pair's own.
+    expect(await lintCodes(`  jsr foo\n  rts\nbar:\n  rts\n  bne :<rts${FOO}`))
+        .toEqual(['jsr-rts-tail-call']);
+  });
+
+  it('should report at info level against the jsr', async function() {
+    const [msg] = await lints(`  jsr foo\n  rts${FOO}`);
+    expect(msg.level).toBe('info');
+    expect(msg.code).toBe('jsr-rts-tail-call');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 3, column: 2});
+    expect(msg.message).toContain('`jsr foo` followed by `rts` is a tail call');
+    expect(msg.message).toContain('`jmp foo`');
+  });
+
+  it('should offer a fix rewriting the jsr and dropping the rts line',
+     async function() {
+    const [msg] = await lints(`  jsr foo\n  rts${FOO}`);
+    expect(msg.fix!.title).toBe('Replace `jsr foo` and `rts` with `jmp foo`');
+    expect(msg.fix!.edits).toEqual([
+      // Just the mnemonic, leaving the operand as written.
+      {file: 'test.s', startLine: 3, startColumn: 2, endLine: 3, endColumn: 5,
+       newText: 'jmp'},
+      // The whole `rts` line, including its line break.
+      {file: 'test.s', startLine: 4, startColumn: 0, endLine: 5, endColumn: 0,
+       newText: ''},
+    ]);
+  });
+
+  it('should keep the case of the mnemonic it replaces', async function() {
+    const [msg] = await lints(`  JSR foo\n  RTS${FOO}`);
+    expect(msg.fix!.edits[0].newText).toBe('JMP');
+  });
+
+  it('should report a macro-body pair without a fix', async function() {
+    // The edits would land in the macro definition, where the `rts` is not
+    // adjacent for any other call site.
+    const [msg] = await lints(
+        `.macro tail\n  jsr foo\n  rts\n.endmacro\n  tail${FOO}`);
+    expect(msg.code).toBe('jsr-rts-tail-call');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 4});
+    expect(msg.fix).toBeUndefined();
+  });
+
+  it('should be reported after the rules that fire as they are read',
+     async function() {
+    // This one can only be decided at the end of the module, so it lands last
+    // no matter where in the source it sits.
+    expect(await lintCodes(`  jsr foo\n  rts\n  lda 5${FOO}`))
+        .toEqual(['bare-number-operand', 'jsr-rts-tail-call']);
+  });
+
+  it('should be silenced by a pragma on the jsr', async function() {
+    expect(await lintCodes(
+        `; js65-lint-disable-next-line jsr-rts-tail-call\n  jsr foo\n  rts${FOO}`))
+        .toEqual([]);
+    expect(await lintCodes(
+        `  jsr foo ; js65-lint-disable-line jsr-rts-tail-call\n  rts${FOO}`))
+        .toEqual([]);
+  });
+
+  it('should be silenced by configuration', async function() {
+    const body = `  jsr foo\n  rts${FOO}`;
+    expect(await lintCodes(body, {rules: {'jsr-rts-tail-call': 'off'}}))
+        .toEqual([]);
+    expect(await lintCodes(body, {enabled: false})).toEqual([]);
+  });
+
+  it('should honor a configured level', async function() {
+    const [msg] = await lints(`  jsr foo\n  rts${FOO}`,
+                              {rules: {'jsr-rts-tail-call': 'warning'}});
+    expect(msg.level).toBe('warning');
+  });
+});
+
 describe('LINT_RULES', function() {
   it('should describe every rule at a reportable level', function() {
     expect(LINT_RULES.size).toBe(5);
