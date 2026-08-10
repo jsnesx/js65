@@ -388,6 +388,107 @@ describe('preprocessor substitution', function() {
      });
 });
 
+describe('endproc-no-terminator', function() {
+  it('should fire when the last instruction falls through', async function() {
+    expect(await lintCodes('.proc foo\n  lda #1\n.endproc'))
+        .toEqual(['endproc-no-terminator']);
+  });
+
+  it('should stay quiet when control is transferred away', async function() {
+    expect(await lintCodes('.proc foo\n  rts\n.endproc')).toEqual([]);
+    expect(await lintCodes('.proc foo\n  rti\n.endproc')).toEqual([]);
+    expect(await lintCodes('.proc foo\n  brk\n.endproc')).toEqual([]);
+    expect(await lintCodes('.proc foo\n  jmp foo\n.endproc')).toEqual([]);
+    expect(await lintCodes('.proc foo\n  jsr foo\n.endproc')).toEqual([]);
+    // Every branch counts, picked up by its `rel` addressing mode.
+    expect(await lintCodes('.proc foo\nloop:\n  bne loop\n.endproc')).toEqual([]);
+    expect(await lintCodes('.proc foo\nloop:\n  bvc loop\n.endproc')).toEqual([]);
+  });
+
+  it('should judge the last instruction, not the last byte', async function() {
+    expect(await lintCodes('.proc foo\n  rts\n  .byte 1,2,3\n.endproc'))
+        .toEqual([]);
+  });
+
+  it('should stay quiet for a proc with no instructions', async function() {
+    expect(await lintCodes('.proc foo\n  .byte 1,2,3\n.endproc')).toEqual([]);
+    expect(await lintCodes('.proc foo\n.endproc')).toEqual([]);
+  });
+
+  it('should judge nested procs on their own instructions', async function() {
+    // The inner proc terminates; the outer one still falls through.
+    expect(await lintCodes(
+        '.proc outer\n  lda #1\n  .proc inner\n    rts\n  .endproc\n.endproc'))
+        .toEqual(['endproc-no-terminator']);
+    // ...and an inner fall-through does not silence the outer `rts`.
+    expect(await lintCodes(
+        '.proc outer\n  .proc inner\n    lda #1\n  .endproc\n  rts\n.endproc'))
+        .toEqual(['endproc-no-terminator']);
+    expect(await lintCodes(
+        '.proc outer\n  .proc inner\n    rts\n  .endproc\n  rts\n.endproc'))
+        .toEqual([]);
+  });
+
+  it('should ignore .scope, which has no fall-through of its own',
+     async function() {
+    expect(await lintCodes('.scope foo\n  lda #1\n.endscope')).toEqual([]);
+    expect(await lintCodes('.proc foo\n  .scope bar\n    rts\n  .endscope\n.endproc'))
+        .toEqual([]);
+  });
+
+  it('should stay quiet when an assert vouches for the fall-through',
+     async function() {
+    // An `.assert` after the last instruction says the author knows where the
+    // proc ends up and asked the assembler to check it.
+    expect(await lintCodes(
+        '.proc foo\n  lda #1\n  .assert * = next\n.endproc\nnext:\n  rts'))
+        .toEqual([]);
+    // ...but only when it comes after. An assert earlier in the proc says
+    // nothing about the end.
+    expect(await lintCodes(
+        '.proc foo\n  .assert * = $8000\n  lda #1\n.endproc'))
+        .toEqual(['endproc-no-terminator']);
+    // The assert belongs to the innermost open proc.
+    expect(await lintCodes(
+        '.proc outer\n  lda #1\n  .proc inner\n    lda #2\n' +
+        '    .assert * = $8004\n  .endproc\n.endproc'))
+        .toEqual(['endproc-no-terminator']);
+  });
+
+  it('should stay quiet behind the FALLTHROUGH macro', async function() {
+    expect(await lintCodes(
+        '.macpack common\n.proc foo\n  lda #1\n  FALLTHROUGH next\n.endproc\n' +
+        'next:\n  rts'))
+        .toEqual([]);
+  });
+
+  it('should report at warning level against the .endproc', async function() {
+    const [msg] = await lints('.proc foo\n  lda #1\n.endproc');
+    expect(msg.level).toBe('warning');
+    expect(msg.code).toBe('endproc-no-terminator');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 5});
+    expect(msg.message).toContain('`.endproc` for `foo` follows `lda #1`');
+  });
+
+  it('should be silenced by a pragma', async function() {
+    expect(await lintCodes(
+        '.proc foo\n  lda #1\n' +
+        '; js65-lint-disable-next-line endproc-no-terminator\n.endproc'))
+        .toEqual([]);
+    expect(await lintCodes(
+        '.proc foo\n  lda #1\n' +
+        '.endproc ; js65-lint-disable-line endproc-no-terminator'))
+        .toEqual([]);
+  });
+
+  it('should be silenced by configuration', async function() {
+    const body = '.proc foo\n  lda #1\n.endproc';
+    expect(await lintCodes(body, {rules: {'endproc-no-terminator': 'off'}}))
+        .toEqual([]);
+    expect(await lintCodes(body, {enabled: false})).toEqual([]);
+  });
+});
+
 describe('LINT_RULES', function() {
   it('should describe every rule at a reportable level', function() {
     expect(LINT_RULES.size).toBe(5);

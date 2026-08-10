@@ -1698,6 +1698,7 @@ export class Assembler {
   }
 
   assert(expr: Expr, _level?: string, message?: string) {
+    this.linter?.assert();
     expr = this.resolve(expr);
     const val = this.evaluate(expr);
     if (val != null) {
@@ -2157,6 +2158,7 @@ export class Assembler {
   proc(name: string, at?: Tokens.SourceInfo) {
     this.label(name);
     this.enterScope(name, 'proc', at);
+    this.linter?.enterProc(name);
     // the size for the proc should match the scope, so give the scope the name of the label
     // we just made so that it works properly
     this.currentScope.label = name;
@@ -2190,6 +2192,8 @@ export class Assembler {
     if (this.currentScope.kind !== kind || !this.currentScope.parent) {
       this.fail(`.end${kind} without .${kind}`);
     }
+    // Reported against the `.endproc`, which is what the fix goes in front of.
+    if (kind === 'proc') this.linter?.exitProc(at);
     const scope = this.currentScope;
     if (scope.startPc && !scope.symbols.has(SIZE_NAME)) {
       this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.pc()));
