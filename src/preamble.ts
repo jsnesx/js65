@@ -52,6 +52,7 @@ export const NesNrom: Target = {
     size: 0x10,
     offset: 0x00,
     memory: 0x00,
+    fill: 0x00,
   }, {
     name: 'CODE',
     default: true,
@@ -65,16 +66,19 @@ export const NesNrom: Target = {
     size: 0x8000,
     offset: 0x00010,
     memory: 0x8000,
+    fill: 0x00,
   }, {
     name: 'DATA',
     size: 0x8000,
     offset: 0x00010,
     memory: 0x8000,
+    fill: 0x00,
   }, {
     name: 'CHR',
     size: 0x2000,
     offset: 0x08010,
     memory: 0x00,
+    fill: 0x00,
   }]
 }
 
