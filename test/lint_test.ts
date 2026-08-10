@@ -467,7 +467,7 @@ describe('endproc-no-terminator', function() {
     expect(msg.level).toBe('warning');
     expect(msg.code).toBe('endproc-no-terminator');
     expect(msg.source).toMatchObject({file: 'test.s', line: 5});
-    expect(msg.message).toContain('`.endproc` for `foo` follows `lda #1`');
+    expect(msg.message).toContain('`.endproc` for `foo` ends with `lda #1`');
   });
 
   it('should be silenced by a pragma', async function() {

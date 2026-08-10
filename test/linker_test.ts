@@ -971,6 +971,36 @@ describe('Linker', function() {
     expect(() => linker.read(m).link())
         .toThrow(/Unknown target: nes.*sim, nes-nrom/);
   });
+
+  it('should place the ca65 predeclared segments in a built-in target', function() {
+    // `.code` and friends are shorthand for the uppercase ca65 names, so a
+    // target spelling them any other way leaves those chunks with nowhere to go.
+    const m = {
+      chunks: [
+        {segments: ['CODE'], data: Uint8Array.of(0x60)},
+        {segments: ['RODATA'], data: Uint8Array.of(1, 2, 3)},
+        {segments: ['DATA'], data: Uint8Array.of(0xaa)},
+        {segments: ['ZEROPAGE'], data: Uint8Array.of()},
+      ],
+      segments: [],
+    };
+    const linker = new Linker({target: 'nes-nrom'});
+    // Header at $00, then PRG: the three ROM segments share one window, so
+    // they hand out consecutive space rather than colliding.
+    expect([...linker.read(m).link().slice(0x10, 0x15)])
+        .toEqual([0x60, 1, 2, 3, 0xaa]);
+  });
+
+  it('should report a chunk whose segment nobody declared', function() {
+    // Nothing downstream can place this, and before it was reported the chunk
+    // fell out of both placement passes and only turned up as an `Absent:`
+    // failure from the output writer, well after the cause was forgettable.
+    const m = {
+      chunks: [{segments: ['NOWHERE'], data: Uint8Array.of(1, 2)}],
+      segments: [{name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}],
+    };
+    expect(() => link(m)).toThrow(/Unknown segment: NOWHERE/);
+  });
 });
 
 describe('Linker with an ld65 config', function() {

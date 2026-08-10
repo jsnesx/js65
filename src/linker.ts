@@ -1227,6 +1227,15 @@ class Link {
       this.segmentIndex.set(name, this.segmentIndex.size);
     }
     this.segmentOrder = [...this.segmentIndex.keys()];
+    // Bail out early if we find any segment references that weren't defined.
+    const unknownSegments = new Set<string>();
+    this.collect(this.chunks, chunk => {
+      const name = chunk.segments.find(
+          s => !this.rawSegments.has(s) && !unknownSegments.has(s));
+      if (name == null) return;
+      unknownSegments.add(name);
+      this.fail(`Unknown segment: ${name}`, chunk.at());
+    });
     // Merge all segments (mapped and unmapped) into a single Segment each.
     // Note that we intentionally copy the segments into `s` so we don't overwrite
     // the original data.
@@ -1376,6 +1385,11 @@ class Link {
     for (const c of this.chunks) {
       if (c.overlaps) continue;
       if (c.segment?.isRam) continue;  // RAM chunks not in output
+      // At this point, all segments should have been validated, and if the offset
+      // isn't known now this is a compiler bug that should be reported.
+      if (c.offset == null) {
+        impossible(`Chunk ${c.name ?? c.index} was never placed`);
+      }
       const base = this.fileBase(c.segment?.out || '%O');
       this.output(c.segment?.out).set(
           c.offset! - base,
@@ -1790,9 +1804,13 @@ class Link {
    * A chunk that named no segment at all falls back to the default segment.
    */
   eligibleSegments(chunk: LinkChunk): readonly string[] {
-    let segments = chunk.segments;
+    // Disallow placing a chunk in a segment that isn't defined anywhere
+    // This keeps the error collecting running even if the user referenced an undefined segment.
+    let segments = chunk.segments.length ?
+        chunk.segments.filter(name => this.rawSegments.has(name)) :
+        chunk.segments;
     // Don't allow default segment bytes to get placed when anon segments are used.
-    if (!segments.length && !this.anonDeclarationOrder.length) {
+    if (!chunk.segments.length && !this.anonDeclarationOrder.length) {
       // if this chunk doesn't have a predefined segment, and there is a default segment defined, then use that one
       for (const [name, raw] of this.rawSegments) {
         if (raw.some(s => s.default)) {
