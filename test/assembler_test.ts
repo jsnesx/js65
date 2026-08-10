@@ -1332,6 +1332,92 @@ describe('Assembler', function() {
           .rejects.toThrow(/Unknown segment attr: overlay/);
     });
 
+    it('should not carry .org into a segment that never had one',
+       async function() {
+      const m = await assembleModule(`
+.segment "ZP" :mem $20 :size $10 :zp
+.segment "RAM" :mem $200 :size $600 :bss
+.org $400
+foo: .byte 1
+.segment "ZP"
+bar: .byte 2
+`);
+      expect(m.chunks!.map(c => c.org)).toEqual([0x400, undefined]);
+    });
+
+    it('should size operands from the new segment after a segment change',
+       async function() {
+      // `.org $400` in RAM must not make `bar` an absolute address in ZP.
+      const m = await assembleModule(`
+.segment "ZP" :mem $20 :size $10 :zp
+.segment "RAM" :mem $200 :size $600 :bss
+.org $400
+foo: .byte 1
+.segment "ZP"
+bar: .byte 2
+.segment "RAM"
+lda bar
+`);
+      // lda zp is 2 bytes (a5 xx), lda abs would be 3.
+      expect(m.chunks![2].data.length).toEqual(2);
+    });
+
+    it('should resume a segment\'s own .org on coming back to it',
+       async function() {
+      const m = await assembleModule(`
+.segment "A" :mem $8000 :size $1000
+.org $8000
+.byte 1, 2, 3
+.segment "B" :mem $9000 :size $1000
+.byte 4
+.segment "A"
+.byte 5
+`);
+      // "A" picks up at $8003, and "B" stays relocatable.
+      expect(m.chunks!.map(c => [c.segments, c.org, [...c.data]])).toEqual([
+        [['A'], 0x8000, [1, 2, 3]],
+        [['B'], undefined, [4]],
+        [['A'], 0x8003, [5]],
+      ]);
+    });
+
+    it('should resume an .org that opened no chunk', async function() {
+      const m = await assembleModule(`
+.segment "A" :mem $8000 :size $1000
+.org $8000
+.segment "B" :mem $9000 :size $1000
+.byte 4
+.segment "A"
+.byte 5
+`);
+      expect(m.chunks!.map(c => c.org)).toEqual([undefined, 0x8000]);
+    });
+
+    it('should not resume an .org that was ended with .reloc',
+       async function() {
+      const m = await assembleModule(`
+.segment "A" :mem $8000 :size $1000
+.org $8000
+.byte 1
+.reloc
+.segment "B" :mem $9000 :size $1000
+.byte 4
+.segment "A"
+.byte 5
+`);
+      expect(m.chunks!.map(c => c.org)).toEqual([0x8000, undefined, undefined]);
+    });
+
+    it('should reject .free in a segment that never had an .org',
+       async function() {
+      await expect(assembleModule(`
+.segment "A" :mem $8000 :size $1000
+.org $8000
+.segment "B" :mem $9000 :size $1000
+.free $100
+`)).rejects.toThrow(/\.free in \.reloc mode/);
+    });
+
     it('should allow setting a prefix', async function() {
       const a = new Assembler(Cpu.P02);
       a.segmentPrefix('cr:');
@@ -2166,6 +2252,75 @@ Ptr: .res 2
           overwrite: 'allow',
           segments: ['a', 'c'],
           data: Uint8Array.of(5),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should keep the current segment when pushed with no arguments',
+       function() {
+      const a = new Assembler(Cpu.P02);
+      a.segment('a', 'b');
+      a.byte(4);
+      a.pushSeg();
+      a.byte(5);
+      a.popSeg();
+      a.byte(6);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: ['a', 'b'],
+          data: Uint8Array.of(4, 5, 6),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should restore a pending .org with no chunk open yet', function() {
+      const a = new Assembler(Cpu.P02);
+      a.segment('a');
+      a.org(0x8000);
+      a.pushSeg('b');
+      a.byte(5);
+      a.popSeg();
+      a.byte(6);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: ['b'],
+          data: Uint8Array.of(5),
+        }, {
+          overwrite: 'allow',
+          segments: ['a'],
+          org: 0x8000,
+          data: Uint8Array.of(6),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should leave the popped segment\'s .org for it to resume', function() {
+      const a = new Assembler(Cpu.P02);
+      a.segment('a');
+      a.pushSeg('b');
+      a.org(0x9000);
+      a.byte(1);
+      a.popSeg();
+      a.byte(2);
+      a.segment('b');
+      a.byte(3);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: ['b'],
+          org: 0x9000,
+          data: Uint8Array.of(1),
+        }, {
+          overwrite: 'allow',
+          segments: ['a'],
+          data: Uint8Array.of(2),
+        }, {
+          overwrite: 'allow',
+          segments: ['b'],
+          org: 0x9001,
+          data: Uint8Array.of(3),
         }],
         symbols: [], segments: []});
     });
