@@ -85,6 +85,31 @@ export class LintPragmas {
 /** The opcode table for a single mnemonic, as `Cpu.op()` returns it. */
 type Ops = {[mode in AddressingMode]?: number};
 
+/**
+ * What the assembler knows about an `rts` when it reaches one: where it sits in
+ * the back-referable list, and whether a `:>rts` forward ref already claimed it.
+ */
+export interface RtsAnchor {
+  index: number;
+  claimed: boolean;
+}
+
+/** The previous instruction, for rules that read a pair of adjacent ones. */
+interface PrevInstruction {
+  readonly mnemonic: string;
+  readonly mode: Arg[0];
+  /** The whole source line, so a fix can edit the mnemonic where it stands. */
+  readonly tokens: Token[];
+}
+
+/** A `jsr`/`rts` pair, held until the end in case something references the `rts`. */
+interface TailCall {
+  readonly jsr: PrevInstruction;
+  readonly rts: Token;
+  /** This `rts`'s index in the assembler's back-referable list. */
+  readonly index: number;
+}
+
 /** One open `.proc`, tracking what would run after it falls off the end. */
 interface ProcFrame {
   readonly name: string;
@@ -106,6 +131,12 @@ interface ProcFrame {
 export class Linter {
   // We only track procs and not scopes
   private readonly procStack: ProcFrame[] = [];
+  /** The instruction directly above the next one, cleared by `endInstructionSequence()`. */
+  private prev?: PrevInstruction;
+  /** Tail calls seen so far, reported by `closeModule()` once nothing can claim them. */
+  private readonly tailCalls: TailCall[] = [];
+  /** `rts` indices that a `:<rts` back reference pointed at. */
+  private readonly referencedRts = new Set<number>();
 
   constructor(private readonly errorCollector: ErrorCollector,
               private readonly opts: LintOptions = {},
@@ -129,13 +160,19 @@ export class Linter {
    * known to be valid. `tokens` is the whole source line, absent when the
    * instruction came from the programmatic API rather than from source.
    */
-  instruction(mnemonic: string, arg: Arg, ops: Ops, tokens?: Token[]): void {
+  instruction(mnemonic: string, arg: Arg, ops: Ops, tokens?: Token[],
+              rts?: RtsAnchor): void {
     const frame = this.procStack[this.procStack.length - 1];
     if (frame) {
       frame.count++;
       frame.lastText = renderInstruction(mnemonic, tokens);
       frame.terminates = transfersControl(mnemonic, ops);
       frame.asserted = false;
+    }
+    const prev = this.prev;
+    this.prev = tokens ? {mnemonic, mode: arg[0], tokens} : undefined;
+    if (rts && tokens && arg[0] === 'imp') {
+      this.jsrRtsTailCall(prev, tokens[0], rts);
     }
     if (!tokens) return;
     const mode = arg[0];
@@ -207,6 +244,48 @@ export class Linter {
                 first.source);
   }
 
+  /**
+   * Breaks the run of adjacent instructions. We are looking for pairs of instructions
+   * to lint against, and if there is a directive or branch target to this, then
+   * we need to break the sequence.
+   */
+  endInstructionSequence(): void {
+    this.prev = undefined;
+  }
+
+  /** Called for a `:<rts` back reference, which claims the `rts` at `index`. */
+  rtsBackref(index: number): void {
+    this.referencedRts.add(index);
+  }
+
+  /**
+   * search for `jsr sub \n rts` , which is just  `jmp sub`
+   * its possible there is a deferred jump here such as a `:<rts` further down,
+   * so we have to check for that at the module finalization.
+   */
+  private jsrRtsTailCall(prev: PrevInstruction|undefined, rts: Token,
+                         anchor: RtsAnchor): void {
+    // A `:>rts` from above already jumps here, so the `rts` has to stay.
+    if (anchor.claimed) return;
+    if (prev?.mnemonic !== 'jsr' || prev.mode !== 'add') return;
+    this.tailCalls.push({jsr: prev, rts, index: anchor.index});
+  }
+
+  /** Reports the deferred rules. Called once, after the whole module is read. */
+  closeModule(): void {
+    for (const {jsr, rts, index} of this.tailCalls) {
+      if (this.referencedRts.has(index)) continue;
+      const target = render(...jsr.tokens.slice(1));
+      this.report('jsr-rts-tail-call',
+                  `\`jsr ${target}\` followed by \`rts\` is a tail call. ` +
+                  `\`jmp ${target}\` is one byte shorter and one stack level ` +
+                  `cheaper. Label the \`rts\` if something branches to it.`,
+                  jsr.tokens[0].source,
+                  tailCallFix(jsr.tokens[0], target, rts));
+    }
+    this.tailCalls.length = 0;
+  }
+
   /** Called for `.proc`, after the scope has been entered. */
   enterProc(name: string): void {
     this.procStack.push(
@@ -246,6 +325,40 @@ const TRANSFERS_CONTROL = new Set(['jmp', 'jsr', 'rts', 'rti', 'brk']);
 /** Whether `mnemonic` transfers control away from the following instruction. */
 function transfersControl(mnemonic: string, ops: Ops): boolean {
   return TRANSFERS_CONTROL.has(mnemonic) || 'rel' in ops;
+}
+
+/**
+ * The edits that turn `jsr foo` plus `rts` into `jmp foo`: rewrite the mnemonic
+ * in place and drop the whole `rts` line. Don't offer this for macro expansions
+ */
+function tailCallFix(jsr: Token, target: string,
+                     rts: Token): MessageFix|undefined {
+  const from = jsr.source;
+  const to = rts.source;
+  if (!from || !to || from.parent || to.parent) return undefined;
+  if (from.file !== to.file || to.line <= from.line) return undefined;
+  const written = Tokens.str(jsr);
+  // `JSR` and `jsr` are both common; keep whichever the file uses.
+  const jmp = written === written.toUpperCase() ? 'JMP' : 'jmp';
+  return {
+    title: `Replace \`${written} ${target}\` and \`rts\` with \`${jmp} ${target}\``,
+    edits: [{
+      file: from.file,
+      startLine: from.line,
+      startColumn: from.column,
+      endLine: from.line,
+      endColumn: from.column + written.length,
+      newText: jmp,
+    }, {
+      // The `rts` is the only thing on its line, so take the line and its break.
+      file: to.file,
+      startLine: to.line,
+      startColumn: 0,
+      endLine: to.line + 1,
+      endColumn: 0,
+      newText: '',
+    }],
+  };
 }
 
 /** The instruction as written, or just the mnemonic if it had no source. */
