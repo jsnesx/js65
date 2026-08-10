@@ -4,7 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {type AssemblerMessage} from '../src/error.ts';
 import {compile, type AssemblyInput} from '../src/libassembler.ts';
-import {LINT_RULES, LintPragmas} from '../src/lint.ts';
+import {LINT_RULES, LintPragmas, LintRule} from '../src/lint.ts';
 import {type LintOptions} from '../src/options.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 
@@ -703,8 +703,31 @@ describe('LINT_RULES', function() {
     expect(LINT_RULES.size).toBe(5);
     for (const [id, rule] of LINT_RULES) {
       expect(id, `${id} id`).toMatch(/^[a-z][a-z-]*[a-z]$/);
+      // The registry is keyed off the class, so a copy/pasted id would
+      // silently shadow the rule it was pasted from.
+      expect(rule.id, `${id} id`).toBe(id);
       expect(['info', 'warning'], `${id} level`).toContain(rule.level);
       expect(rule.description.length, `${id} description`).toBeGreaterThan(0);
+    }
+  });
+
+  it('should construct a rule that reports through the callback it is given',
+     function() {
+    // Every rule is a LintRule, so the Linter can dispatch to it without
+    // knowing which one it has.
+    for (const [id, rule] of LINT_RULES) {
+      const reported: string[] = [];
+      const instance = new rule(message => reported.push(message));
+      expect(instance, `${id} instance`).toBeInstanceOf(LintRule);
+      // The hooks it does not implement have to be safe to call anyway.
+      instance.label('foo');
+      instance.endInstructionSequence();
+      instance.rtsBackref(0);
+      instance.enterProc('foo');
+      instance.assert();
+      instance.exitProc();
+      instance.closeModule();
+      expect(reported, `${id} reports`).toEqual([]);
     }
   });
 });
