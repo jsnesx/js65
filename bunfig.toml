@@ -1,3 +1,5 @@
 [test]
+# these tests are for the vscode extension, which needs vscode to work
+# so skip them in the default bun test
 pathIgnorePatterns  = ["lsp/client/**"]
 

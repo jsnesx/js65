@@ -126,6 +126,29 @@ jobs:
           path: |
             build/js65-bun*
 
+  vscode-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout js65
+        uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install deps
+        run: bun install
+      - name: Install xvfb
+        # VS Code is an Electron app and will not start headless.
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Run VS Code extension tests
+        # `npm test` runs `pretest` first (bundles the language server and
+        # compiles the extension), then downloads a real VS Code build and runs
+        # the suite inside it.
+        working-directory: lsp/client
+        run: xvfb-run -a npm test
+
   package:
     runs-on: ubuntu-latest
     needs: build
