@@ -281,3 +281,6 @@ $RECYCLE.BIN/
 
 # Mac desktop service store files
 .DS_Store
+
+# Workspace-local .NET SDK root used by CI
+/.dotnet/

@@ -48,8 +48,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libicu-dev
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
+        env:
+          # Fix dotnet caching issues on windows where it cannot properly
+          # load the installed cache from an admin directory. Just put it
+          # in the root of the workspace instead (its gitignored anyway)
+          DOTNET_INSTALL_DIR: ${{ github.workspace }}/.dotnet
         with:
-          dotnet-version: '8.0.x'
+          # 10.0 builds the net10.0 target frameworks; 8.0 brings the runtime the
+          # example is executed against below.
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - name: Get .NET SDK version
         id: dotnet-version
         shell: bash
@@ -58,9 +67,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            ${{ env.DOTNET_ROOT }}/packs
-            ${{ env.DOTNET_ROOT }}/sdk-manifests
-            ${{ env.DOTNET_ROOT }}/metadata
+            ${{ github.workspace }}/.dotnet/packs
+            ${{ github.workspace }}/.dotnet/sdk-manifests
+            ${{ github.workspace }}/.dotnet/metadata
           key: ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-${{ hashFiles('integrations/dotnet/**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
@@ -166,8 +175,12 @@ jobs:
         run: bun run gen-version
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ github.workspace }}/.dotnet
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - name: Get .NET SDK version
         id: dotnet-version
         shell: bash
@@ -176,9 +189,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            ${{ env.DOTNET_ROOT }}/packs
-            ${{ env.DOTNET_ROOT }}/sdk-manifests
-            ${{ env.DOTNET_ROOT }}/metadata
+            ${{ github.workspace }}/.dotnet/packs
+            ${{ github.workspace }}/.dotnet/sdk-manifests
+            ${{ github.workspace }}/.dotnet/metadata
           key: ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-${{ hashFiles('integrations/dotnet/**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
