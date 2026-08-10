@@ -1,5 +1,7 @@
 [test]
 # these tests are for the vscode extension, which needs vscode to work
-# so skip them in the default bun test
-pathIgnorePatterns  = ["lsp/client/**"]
+# so skip them in the default bun test.
+# hermes/ is the Static Hermes checkout the github actions clones into the workspace
+# its own suite has files bun's scanner treats as tests (*_test.js).
+pathIgnorePatterns  = ["lsp/client/**", "hermes/**"]
 
