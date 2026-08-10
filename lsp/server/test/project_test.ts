@@ -66,6 +66,40 @@ describe('project', () => {
       const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({units: [{name: 'x'}]})}});
       expect(() => loadProject('/proj/js65.json', fs.sync as any)).toThrow(/sources/);
     });
+
+    it('has no lint block when the project file omits it', () => {
+      const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
+        units: [{name: 'x', sources: ['x.s']}],
+      })}});
+      expect(loadProject('/proj/js65.json', fs.sync as any).lint).toBeUndefined();
+    });
+
+    it('parses the top-level lint block', () => {
+      const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
+        units: [{name: 'x', sources: ['x.s']}],
+        lint: {enabled: true, rules: {'jmp-fallthrough': 'off', 'jsr-rts-tail-call': 'warning'}},
+      })}});
+      const proj = loadProject('/proj/js65.json', fs.sync as any);
+      expect(proj.lint).toEqual({
+        enabled: true,
+        rules: {'jmp-fallthrough': 'off', 'jsr-rts-tail-call': 'warning'},
+      });
+    });
+
+    it('rejects a malformed lint block', () => {
+      const bad = (lint: unknown) => {
+        const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
+          units: [{name: 'x', sources: ['x.s']}], lint,
+        })}});
+        return () => loadProject('/proj/js65.json', fs.sync as any);
+      };
+      expect(bad('off')).toThrow(/"lint" must be an object/);
+      expect(bad({enabled: 'no'})).toThrow(/lint\.enabled/);
+      expect(bad({rules: []})).toThrow(/lint\.rules" must be an object/);
+      // A typo'd rule would otherwise silently do nothing.
+      expect(bad({rules: {'jmp-falthrough': 'off'}})).toThrow(/unknown lint rule/);
+      expect(bad({rules: {'jmp-fallthrough': 'error'}})).toThrow(/off, info, warning/);
+    });
   });
 
   describe('unitsOwningFile', () => {

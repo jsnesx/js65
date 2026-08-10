@@ -7,6 +7,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {dirOf, joinDir} from '../../src/util.ts';
+import {LINT_RULES} from '../../src/lint.ts';
+import type {LintLevel, LintOptions} from '../../src/options.ts';
 
 /** One compilation unit, as declared in `js65.json`. */
 export interface CompilationUnit {
@@ -34,6 +36,7 @@ interface ProjectFile {
     linkerConfig?: string,
     target?: string,
   }>;
+  lint?: unknown;
 }
 
 export interface Project {
@@ -42,6 +45,8 @@ export interface Project {
   /** Directory paths in `js65.json` resolve against. */
   readonly rootDir: string;
   readonly units: readonly CompilationUnit[];
+  /** Workspace-wide lint configuration. Applies to every unit. */
+  readonly lint?: LintOptions;
 }
 
 export function findProjectFile(startFile: string, fsImpl = fs): string | undefined {
@@ -103,7 +108,43 @@ export function loadProject(projectFile: string, fsImpl = fs): Project {
       target: u.target,
     });
   }
-  return {projectFile, rootDir, units};
+  return {projectFile, rootDir, units, lint: parseLint(projectFile, parsed.lint)};
+}
+
+const LINT_LEVELS: readonly LintLevel[] = ['off', 'info', 'warning'];
+
+/** Validate the optional top-level `"lint"` block, which mirrors `LintOptions`. */
+function parseLint(projectFile: string, raw: unknown): LintOptions | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${projectFile}: "lint" must be an object`);
+  }
+  const lint = raw as {enabled?: unknown, rules?: unknown};
+  const out: LintOptions = {};
+  if (lint.enabled != null) {
+    if (typeof lint.enabled !== 'boolean') {
+      throw new Error(`${projectFile}: "lint.enabled" must be a boolean`);
+    }
+    out.enabled = lint.enabled;
+  }
+  if (lint.rules != null) {
+    if (typeof lint.rules !== 'object' || Array.isArray(lint.rules)) {
+      throw new Error(`${projectFile}: "lint.rules" must be an object`);
+    }
+    const rules: Record<string, LintLevel> = {};
+    for (const [id, level] of Object.entries(lint.rules as Record<string, unknown>)) {
+      if (!LINT_RULES.has(id)) {
+        const known = [...LINT_RULES.keys()].join(', ');
+        throw new Error(`${projectFile}: unknown lint rule "${id}" (known rules: ${known})`);
+      }
+      if (typeof level !== 'string' || !LINT_LEVELS.includes(level as LintLevel)) {
+        throw new Error(`${projectFile}: "lint.rules.${id}" must be one of ${LINT_LEVELS.join(', ')}`);
+      }
+      rules[id] = level as LintLevel;
+    }
+    out.rules = rules;
+  }
+  return out;
 }
 
 function resolveProjectPath(rootDir: string, p: string): string {

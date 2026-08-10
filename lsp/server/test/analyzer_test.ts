@@ -549,6 +549,48 @@ describe('analyzer', () => {
     });
   });
 
+  describe('project lint configuration', () => {
+    // `jmp next` onto the label defined on the next line, the jmp-fallthrough rule.
+    const code = 'main:\n  jmp next\nnext:\n  rts\n';
+    const projectWith = (lint?: unknown) => ({
+      rootDir: '/proj',
+      json: JSON.stringify({units: [{name: 'main', sources: ['main.s']}], ...(lint ? {lint} : {})}),
+    });
+    const codesIn = (result: AnalysisResult) =>
+        [...result.diagnostics.values()].flat().map(d => d.code);
+
+    it('lints by default when the project file has no lint block', async () => {
+      const result = await runAnalyzer(
+          new MemFs(), [{path: '/proj/main.s', text: code}], projectWith());
+      expect(codesIn(result)).toContain('jmp-fallthrough');
+    });
+
+    it('honors a rule configured off', async () => {
+      const result = await runAnalyzer(
+          new MemFs(), [{path: '/proj/main.s', text: code}],
+          projectWith({rules: {'jmp-fallthrough': 'off'}}));
+      expect(codesIn(result)).not.toContain('jmp-fallthrough');
+    });
+
+    it('honors lint.enabled = false', async () => {
+      const result = await runAnalyzer(
+          new MemFs(), [{path: '/proj/main.s', text: code}],
+          projectWith({enabled: false}));
+      expect(codesIn(result)).not.toContain('jmp-fallthrough');
+    });
+
+    it('applies the project config to a standalone file too', async () => {
+      // scratch.s is in the workspace but owned by no unit.
+      const result = await runAnalyzer(
+          new MemFs(),
+          [{path: '/proj/main.s', text: 'main:\n  rts\n'},
+           {path: '/proj/scratch.s', text: code}],
+          projectWith({rules: {'jmp-fallthrough': 'off'}}));
+      const scratch = result.diagnostics.get(pathToUri('/proj/scratch.s')) ?? [];
+      expect(scratch.map(d => d.code)).not.toContain('jmp-fallthrough');
+    });
+  });
+
   it('records scope ranges for a .proc block', async () => {
     const fs = new MemFs();
     const code = [
