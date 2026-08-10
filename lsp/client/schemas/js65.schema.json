@@ -43,6 +43,50 @@
 				},
 				"additionalProperties": false
 			}
+		},
+		"lint": {
+			"type": "object",
+			"description": "Lint configuration for every unit in this project. Lints run by default; a single line can also be silenced with a `; js65-lint-disable-next-line RULE` comment.",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Set false to turn off every lint rule in this project.",
+					"default": true
+				},
+				"rules": {
+					"type": "object",
+					"description": "Level per rule. A rule not listed here keeps its default level.",
+					"properties": {
+						"bare-number-operand": {
+							"type": "string",
+							"enum": ["off", "info", "warning"],
+							"description": "A lone decimal/binary literal used as an address, e.g. `lda 5`. Default: warning."
+						},
+						"suspicious-address-expr": {
+							"type": "string",
+							"enum": ["off", "info", "warning"],
+							"description": "A lo/hi byte expression used as an address, e.g. `lda <label`. Default: warning."
+						},
+						"endproc-no-terminator": {
+							"type": "string",
+							"enum": ["off", "info", "warning"],
+							"description": "`.endproc` whose last instruction falls through. Default: warning."
+						},
+						"jsr-rts-tail-call": {
+							"type": "string",
+							"enum": ["off", "info", "warning"],
+							"description": "`jsr` immediately followed by `rts`, which could be a `jmp`. Default: info."
+						},
+						"jmp-fallthrough": {
+							"type": "string",
+							"enum": ["off", "info", "warning"],
+							"description": "`jmp` to the label defined on the next line. Default: info."
+						}
+					},
+					"additionalProperties": false
+				}
+			},
+			"additionalProperties": false
 		}
 	},
 	"additionalProperties": false

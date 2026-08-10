@@ -387,6 +387,9 @@ export class Analyzer {
       symbolIndex: index,
       macroIndex: macros,
       errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
+      // Workspace-wide, so a standalone file in a project folder lints the same
+      // way the units around it do.
+      lint: this.project?.lint,
     };
     const callbacks = this.makeCallbacks(touched);
 
