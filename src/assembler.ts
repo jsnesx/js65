@@ -282,8 +282,15 @@ export class Assembler {
   /** Data on all the segments. */
   private segmentData = new Map<string, mod.Segment>();
 
+  /** 
+   * Segment name -> current ORG, when we switch segments we need to 
+   * set the ORG to the prev value
+   */
+  private segmentOrg = new Map<string, number>();
+
   /** Stack of segments for .pushseg/.popseg. */
-  private segmentStack: Array<readonly [/* readonly */ string[], Chunk?]> = [];
+  private segmentStack:
+      Array<readonly [/* readonly */ string[], Chunk?, number?]> = [];
 
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
@@ -1675,6 +1682,7 @@ export class Assembler {
     // A trailing `.align` belongs to the segment it appeared in, so pad it out
     // here rather than letting it leak onto the next segment's chunk.
     this.flushPendingAlign();
+    this.saveSegmentOrg();
     this.segments = segments.map(s => typeof s === 'string' ? s : s.name);
     for (const s of segments) {
       const name = typeof s === 'string' ? s : s.name;
@@ -1690,11 +1698,33 @@ export class Assembler {
     }
     this._chunk = undefined;
     this._name = undefined;
+    // `.org` is per-segment, so the previous segment's address doesn't carry
+    // over. Pick up this segment's own PC, or `.reloc` if it never had one.
+    this._org = this.segmentOrg.get(this.segmentKey());
     // An anonymous segment's positional address doubles as an implicit `.org`
-    if (segments.length === 1 && typeof segments[0] === 'object' &&
+    if (this._org == null &&
+        segments.length === 1 && typeof segments[0] === 'object' &&
         mod.Segment.isAnon(segments[0]) && segments[0].memory != null) {
       this._org = segments[0].memory;
     }
+  }
+
+  private segmentKey(): string {
+    return this.segments.join('\0');
+  }
+
+  private saveSegmentOrg() {
+    const key = this.segmentKey();
+    if (this._org == null) {
+      this.segmentOrg.delete(key);
+      return;
+    }
+    this.segmentOrg.set(key, this.orgPc());
+  }
+
+  /** Current PC, which is only meaningful in `.org` mode. */
+  private orgPc(): number {
+    return (this._chunk?.org ?? this._org!) + (this._chunk?.data.length ?? 0);
   }
 
   assert(expr: Expr, _level?: string, message?: string) {
@@ -1816,8 +1846,7 @@ export class Assembler {
     if (this._org != null) {
       // We have an org address, so we are in absolute mode meaning we can
       // do the padding now too.
-      const pc = (this._chunk?.org ?? this._org) + (this._chunk?.data.length ?? 0);
-      const pad = (boundary - (pc % boundary)) % boundary;
+      const pad = (boundary - (this.orgPc() % boundary)) % boundary;
       if (pad) this.res(pad, fill);
       return;
     }
@@ -2205,9 +2234,9 @@ export class Assembler {
   pushSeg(...segments: Array<string|mod.Segment>) {
     this.preventInvalidAnonSegChange('.pushseg');
     this.flushPendingAlign();
-    this.segmentStack.push([this.segments, this._chunk]);
+    this.segmentStack.push([this.segments, this._chunk, this._org]);
     // If pushseg was called without any segments, just keep the current segment
-    if (segments) {
+    if (segments.length) {
       this.segment(...segments);
     }
   }
@@ -2216,8 +2245,10 @@ export class Assembler {
     this.preventInvalidAnonSegChange('.popseg');
     if (!this.segmentStack.length) this.fail(`.popseg without .pushseg`);
     this.flushPendingAlign();
-    [this.segments, this._chunk] = this.segmentStack.pop()!;
-    this._org = this._chunk?.org;
+    this.saveSegmentOrg();
+    let org: number|undefined;
+    [this.segments, this._chunk, org] = this.segmentStack.pop()!;
+    this._org = this._chunk?.org ?? org;
   }
 
   private preventInvalidAnonSegChange(directive: string) {
