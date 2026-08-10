@@ -253,6 +253,36 @@ export class Linter {
     this.prev = undefined;
   }
 
+  /**
+   * Called for each label definition, before it is defined. A label is a branch
+   * target and so breaks the sequence, but it is first the target the
+   * instruction above may be jumping to.
+   */
+  label(ident: string): void {
+    this.jmpFallthrough(ident);
+    this.endInstructionSequence();
+  }
+
+  /** `jmp next` sitting directly above `next:`, which the jump falls into. */
+  private jmpFallthrough(ident: string): void {
+    const prev = this.prev;
+    if (prev?.mnemonic !== 'jmp' || prev.mode !== 'add') return;
+    // Only a bare symbol - `jmp next+1` lands somewhere else entirely, and
+    // `jmp Foo::next` is not necessarily this `next`.
+    const operand = prev.tokens.slice(1);
+    if (operand.length !== 1) return;
+    const target = operand[0];
+    if (target.token !== 'ident' || target.str !== ident) return;
+    this.report('jmp-fallthrough',
+                `\`jmp ${ident}\` jumps to the very next instruction. Use ` +
+                `\`FALLTHROUGH ${ident}\` (from \`.macpack common\`) to ` +
+                `assert the adjacency instead, or ` +
+                `\`; js65-lint-disable-next-line jmp-fallthrough\` to keep ` +
+                `the jump.`,
+                prev.tokens[0].source,
+                fallthroughFix(prev.tokens[0], ident));
+  }
+
   /** Called for a `:<rts` back reference, which claims the `rts` at `index`. */
   rtsBackref(index: number): void {
     this.referencedRts.add(index);
@@ -357,6 +387,27 @@ function tailCallFix(jsr: Token, target: string,
       endLine: to.line + 1,
       endColumn: 0,
       newText: '',
+    }],
+  };
+}
+
+/**
+ * The edit that turns `jmp next` into `FALLTHROUGH next`, keeping the operand
+ * as written. Don't offer this for macro expansions.
+ */
+function fallthroughFix(jmp: Token, target: string): MessageFix|undefined {
+  const from = jmp.source;
+  if (!from || from.parent) return undefined;
+  const written = Tokens.str(jmp);
+  return {
+    title: `Replace \`${written} ${target}\` with \`FALLTHROUGH ${target}\``,
+    edits: [{
+      file: from.file,
+      startLine: from.line,
+      startColumn: from.column,
+      endLine: from.line,
+      endColumn: from.column + written.length,
+      newText: 'FALLTHROUGH',
     }],
   };
 }

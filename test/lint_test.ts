@@ -607,6 +607,97 @@ describe('jsr-rts-tail-call', function() {
   });
 });
 
+describe('jmp-fallthrough', function() {
+  // Somewhere else for a jump that is not a fall-through to go.
+  const FAR = '\nfar:\n  rts';
+
+  it('should fire on a jmp to the label on the next line', async function() {
+    expect(await lintCodes(`  jmp next\nnext:\n  rts`))
+        .toEqual(['jmp-fallthrough']);
+    expect(await lintCodes(`  jmp @next\n@next:\n  rts`))
+        .toEqual(['jmp-fallthrough']);
+  });
+
+  it('should stay quiet when the jump goes somewhere else', async function() {
+    expect(await lintCodes(`  jmp far\nnext:\n  rts${FAR}`)).toEqual([]);
+    // The label is not what the instruction above jumps to, or it is not a
+    // jump at all.
+    expect(await lintCodes(`  jsr next\nnext:\n  rts`)).toEqual([]);
+    expect(await lintCodes(`  lda #1\nnext:\n  rts`)).toEqual([]);
+    expect(await lintCodes(`next:\n  rts`)).toEqual([]);
+  });
+
+  it('should stay quiet when the operand is not a bare symbol',
+     async function() {
+    // `next-1` and `(next)` land somewhere other than the next instruction.
+    expect(await lintCodes(`  jmp next-1\nnext:\n  rts`)).toEqual([]);
+    expect(await lintCodes(`  jmp (next)\nnext:\n  .word next`)).toEqual([]);
+  });
+
+  it('should stay quiet when something separates the pair', async function() {
+    expect(await lintCodes(`  jmp next\n  nop\nnext:\n  rts`)).toEqual([]);
+    expect(await lintCodes(`  jmp next\n  .byte 0\nnext:\n  rts`)).toEqual([]);
+  });
+
+  it('should stay quiet behind the FALLTHROUGH macro', async function() {
+    expect(await lintCodes(
+        `.macpack common\n  lda #1\n  FALLTHROUGH next\nnext:\n  rts`))
+        .toEqual([]);
+  });
+
+  it('should report at info level against the jmp', async function() {
+    const [msg] = await lints(`  jmp next\nnext:\n  rts`);
+    expect(msg.level).toBe('info');
+    expect(msg.code).toBe('jmp-fallthrough');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 3, column: 2});
+    expect(msg.message)
+        .toContain('`jmp next` jumps to the very next instruction');
+    expect(msg.message).toContain('`FALLTHROUGH next`');
+  });
+
+  it('should offer a fix replacing just the mnemonic', async function() {
+    const [msg] = await lints(`  jmp next\nnext:\n  rts`);
+    expect(msg.fix!.title)
+        .toBe('Replace `jmp next` with `FALLTHROUGH next`');
+    expect(msg.fix!.edits).toEqual([
+      {file: 'test.s', startLine: 3, startColumn: 2, endLine: 3, endColumn: 5,
+       newText: 'FALLTHROUGH'},
+    ]);
+  });
+
+  it('should report a macro-body jump without a fix', async function() {
+    // The edit would land in the macro definition, where the label the call
+    // site fell into is not even in scope.
+    const [msg] = await lints(
+        `.macro hop\n  jmp next\n.endmacro\n  hop\nnext:\n  rts`);
+    expect(msg.code).toBe('jmp-fallthrough');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 4});
+    expect(msg.fix).toBeUndefined();
+  });
+
+  it('should be silenced by a pragma on the jmp', async function() {
+    expect(await lintCodes(
+        `; js65-lint-disable-next-line jmp-fallthrough\n  jmp next\nnext:\n  rts`))
+        .toEqual([]);
+    expect(await lintCodes(
+        `  jmp next ; js65-lint-disable-line jmp-fallthrough\nnext:\n  rts`))
+        .toEqual([]);
+  });
+
+  it('should be silenced by configuration', async function() {
+    const body = `  jmp next\nnext:\n  rts`;
+    expect(await lintCodes(body, {rules: {'jmp-fallthrough': 'off'}}))
+        .toEqual([]);
+    expect(await lintCodes(body, {enabled: false})).toEqual([]);
+  });
+
+  it('should honor a configured level', async function() {
+    const [msg] = await lints(`  jmp next\nnext:\n  rts`,
+                              {rules: {'jmp-fallthrough': 'warning'}});
+    expect(msg.level).toBe('warning');
+  });
+});
+
 describe('LINT_RULES', function() {
   it('should describe every rule at a reportable level', function() {
     expect(LINT_RULES.size).toBe(5);

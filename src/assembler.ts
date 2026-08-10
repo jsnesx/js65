@@ -1216,9 +1216,6 @@ export class Assembler {
   }
 
   label(label: string|Token) {
-    // Something may branch here, so the instruction above no longer simply
-    // falls into the one below.
-    this.linter?.endInstructionSequence();
     let ident: string;
     let token: Token|undefined;
     const expr = this.pc();
@@ -1228,6 +1225,9 @@ export class Assembler {
       ident = Tokens.str(token = label);
       if (label.source) expr.source = label.source;
     }
+    // Something may branch here, so the instruction above no longer simply
+    // falls into the one below - but it may have been jumping right here.
+    this.linter?.label(ident);
     if (ident === ':') {
       // anonymous label - shift any forward refs off, and push onto the backs.
       this.anonymousReverse.push(expr);
