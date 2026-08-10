@@ -19,7 +19,7 @@ import {fork, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import * as path from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {URI} from 'vscode-uri';
 
 interface JsonRpcResponse { id?: number| string, result?: unknown, method?: string, params?: unknown }
 
@@ -228,7 +228,7 @@ describe('integration: round trip against a real project', () => {
     if (dir) rmSync(dir, {recursive: true, force: true});
   });
 
-  const uriOf = (p: string) => pathToFileURL(p).toString();
+  const uriOf = (p: string) => URI.file(p).toString();
 
   /** Spawn a server, initialize it against the fixture, and open `main.s`. */
   async function openedClient(): Promise<LspClient> {
