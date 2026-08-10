@@ -11,8 +11,10 @@ import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { applyFeatures,
          type AssemblerOptions as AsmOptions,
+         type LintOptions,
          type SymbolDefine,
          type TokenizerOptions } from './options.ts';
+import { LintPragmas } from './lint.ts';
 import * as Tokens from './token.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
@@ -111,6 +113,8 @@ export interface AssemblerOptions {
   /** Cache of all the macros/defines for the LSP */
   macroIndex?: MacroIndex;
   errorLimit?: number;
+  /** Lint rule configuration. Lints run by default. */
+  lint?: LintOptions;
 }
 
 /**
@@ -171,6 +175,8 @@ export interface Js65Options {
   defines?: SymbolDefine[];
   /** features passed in through --feature */
   features?: string[];
+  /** lint configuration, from `--no-lint` / `-Wno-<rule>` or a project file */
+  lint?: LintOptions;
 }
 
 /**
@@ -280,6 +286,9 @@ export async function assemble(
     lineContinuations: options?.lineContinuations ?? true,
     numberSeparators: options?.numberSeparators,
     cComments: options?.cComments,
+    // One shared instance: pragmas are keyed by file, and every module's
+    // tokenizer records into the same table the linter later consults.
+    lintPragmas: options?.lint?.enabled === false ? undefined : new LintPragmas(),
   };
   const baseAsmOpts: AsmOptions = {
     generateDebugInfo: options?.generateDebugInfo,
@@ -290,6 +299,7 @@ export async function assemble(
     collectReferences: options?.collectReferences,
     symbolIndex: options?.symbolIndex,
     errorLimit: options?.errorLimit,
+    lint: options?.lint,
   };
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
   allMessages.push(...featureMessages);
@@ -786,6 +796,7 @@ export async function compile(
       cComments: options.cComments,
       lineContinuations: options.lineContinuations,
       numberSeparators: options.numberSeparators,
+      lint: options.lint,
     };
     const linkerOpts: LinkerOptions = {
       target: options.target,

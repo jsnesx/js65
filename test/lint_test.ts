@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
+import {type AssemblerMessage} from '../src/error.ts';
+import {compile, type AssemblyInput} from '../src/libassembler.ts';
 import {LINT_RULES, LintPragmas} from '../src/lint.ts';
+import {type LintOptions} from '../src/options.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 
 /** Collects the pragmas in `src` the way the assembler's tokenizer would. */
@@ -15,6 +18,23 @@ async function pragmasOf(src: string, file = 'input.s'): Promise<LintPragmas> {
 
 function at(line: number, file = 'input.s') {
   return {file, line, column: 0};
+}
+
+/**
+ * Assembles a snippet that is expected to succeed and returns just the lint
+ * messages - the ones carrying a rule id.
+ */
+async function lints(body: string, lint?: LintOptions): Promise<AssemblerMessage[]> {
+  const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
+  const result = await compile(
+      [{type: 'source', code, name: 'test.s'} as AssemblyInput], {lint});
+  if (!result.success) throw new Error(JSON.stringify(result.messages));
+  return result.messages.filter(m => m.code);
+}
+
+/** The rule ids reported for `body`, in order. */
+async function lintCodes(body: string, lint?: LintOptions): Promise<string[]> {
+  return (await lints(body, lint)).map(m => m.code!);
 }
 
 describe('LintPragmas', function() {
@@ -114,6 +134,258 @@ describe('LintPragmas', function() {
     const p = await pragmasOf('; js65-lint-disable-line bare-number-operand\n');
     expect(p.suppressed('bare-number-operand', undefined)).toBe(false);
   });
+});
+
+describe('bare-number-operand', function() {
+  it('should fire on a lone decimal or binary address', async function() {
+    expect(await lintCodes('lda 5')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('lda %101')).toEqual(['bare-number-operand']);
+  });
+
+  it('should fire on every addressing mode but immediate', async function() {
+    expect(await lintCodes('lda 5,x')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('lda 5,y')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('lda (5),y')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('lda (5,x)')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('jmp (5)')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('sta 5')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('inc 5')).toEqual(['bare-number-operand']);
+    expect(await lintCodes('jsr 5')).toEqual(['bare-number-operand']);
+  });
+
+  it('should stay quiet for hex, immediates and expressions', async function() {
+    expect(await lintCodes('lda $05')).toEqual([]);
+    expect(await lintCodes('lda #5')).toEqual([]);
+    expect(await lintCodes('lda #%101')).toEqual([]);
+    expect(await lintCodes('lda 2+3')).toEqual([]);
+    expect(await lintCodes('lda ($05),y')).toEqual([]);
+    expect(await lintCodes('foo = 5\n  lda foo')).toEqual([]);
+    expect(await lintCodes('nop')).toEqual([]);
+    expect(await lintCodes('asl a')).toEqual([]);
+  });
+
+  it('should stay quiet when the address size is spelled out', async function() {
+    // `z:`/`a:` say the operand is an address in the assembler's own syntax,
+    // which is the acknowledgement this rule is asking for.
+    expect(await lintCodes('lda z:5')).toEqual([]);
+    expect(await lintCodes('lda a:5')).toEqual([]);
+    expect(await lintCodes('sta z:5')).toEqual([]);
+    expect(await lintCodes('lda a:5,x')).toEqual([]);
+    expect(await lintCodes('lda (z:5),y')).toEqual([]);
+    expect(await lintCodes('lda (z:5,x)')).toEqual([]);
+  });
+
+  it('should report at warning level against the literal', async function() {
+    const [msg] = await lints('  lda 5');
+    expect(msg.level).toBe('warning');
+    expect(msg.code).toBe('bare-number-operand');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 3, column: 6});
+    expect(msg.message).toContain('`lda 5` uses 5 as an address');
+    expect(msg.message).toContain('`lda #5`');
+    expect(msg.message).toContain('`$05`');
+    expect(msg.message).toContain('`lda z:5`');
+  });
+
+  it('should suggest the address size that matches the literal', async function() {
+    // The suggestion has to name a size the value actually fits in, and keep
+    // the rest of the operand as written.
+    expect((await lints('lda 300'))[0].message).toContain('`lda a:300`');
+    expect((await lints('lda (5),y'))[0].message).toContain('`lda (z:5),y`');
+    expect((await lints('lda 5,x'))[0].message).toContain('`lda z:5,x`');
+  });
+
+  it('should not offer the immediate for a mnemonic without one', async function() {
+    const [msg] = await lints('sta 5');
+    expect(msg.message).toContain('`sta 5` uses 5 as an address');
+    expect(msg.message).not.toContain('immediate');
+  });
+
+  it('should be silenced by a pragma', async function() {
+    expect(await lintCodes(
+        '; js65-lint-disable-next-line bare-number-operand\n  lda 5')).toEqual([]);
+    expect(await lintCodes(
+        'lda 5 ; js65-lint-disable-line bare-number-operand')).toEqual([]);
+    // The pragma only covers the line it names.
+    expect(await lintCodes(
+        '; js65-lint-disable-next-line bare-number-operand\n  lda 5\n  lda 6'))
+        .toEqual(['bare-number-operand']);
+  });
+
+  it('should be silenced by configuration', async function() {
+    expect(await lintCodes('lda 5', {rules: {'bare-number-operand': 'off'}}))
+        .toEqual([]);
+    expect(await lintCodes('lda 5', {enabled: false})).toEqual([]);
+  });
+
+  it('should honor a configured level', async function() {
+    const [msg] = await lints('lda 5', {rules: {'bare-number-operand': 'info'}});
+    expect(msg.level).toBe('info');
+  });
+});
+
+describe('suspicious-address-expr', function() {
+  // A label, not a constant: `<` of an *address* is what reads as a dropped
+  // `#`. See the `ca65 parity` block below for the rest of that distinction.
+  const FOO = 'foo:\n';
+  // A zero page label, which ca65 exempts - `<zfoo` is the whole address.
+  const ZP = '.segment "ZEROPAGE" :bank $00 :size $100 :mem $0000 :zeropage\n' +
+      '.org $0000\nzfoo: .res 1\n.segment "CODE"\n.org $8000\n';
+
+  it('should fire on a lo/hi byte used as an address', async function() {
+    expect(await lintCodes(`${FOO}  lda <foo`))
+        .toEqual(['suspicious-address-expr']);
+    expect(await lintCodes(`${FOO}  lda >foo`))
+        .toEqual(['suspicious-address-expr']);
+  });
+
+  it('should fire on a label it has not reached yet', async function() {
+    // A forward reference is still an unresolved symbol at this point, which
+    // is a different expression shape than a label already seen.
+    expect(await lintCodes('  lda <foo\nfoo:\n  rts'))
+        .toEqual(['suspicious-address-expr']);
+  });
+
+  it('should stay quiet for an immediate or a plain address', async function() {
+    expect(await lintCodes(`${FOO}  lda #<foo`)).toEqual([]);
+    expect(await lintCodes(`${FOO}  lda #>foo`)).toEqual([]);
+    expect(await lintCodes(`${FOO}  lda foo`)).toEqual([]);
+    // Only a leading lo/hi byte looks like a dropped `#`.
+    expect(await lintCodes(`${FOO}  lda foo+<foo`)).toEqual([]);
+  });
+
+  it('should stay quiet for a zero page label', async function() {
+    expect(await lintCodes(`${ZP}  lda <zfoo`)).toEqual([]);
+  });
+
+  it('should stay quiet for a mnemonic with no immediate', async function() {
+    expect(await lintCodes(`${FOO}  sta <foo`)).toEqual([]);
+  });
+
+  it('should stay quiet when the address size is spelled out', async function() {
+    expect(await lintCodes(`${FOO}  lda z:<foo`)).toEqual([]);
+    expect(await lintCodes(`${FOO}  lda a:<foo`)).toEqual([]);
+  });
+
+  it('should report at warning level with the suggested fixes', async function() {
+    const [msg] = await lints(`${FOO}  lda <foo`);
+    expect(msg.level).toBe('warning');
+    expect(msg.code).toBe('suspicious-address-expr');
+    expect(msg.message).toContain('`lda <foo` takes the low byte');
+    expect(msg.message).toContain('`lda #<foo`');
+    expect(msg.message).toContain('`lda z:<foo`');
+  });
+
+  it('should be silenced by a pragma', async function() {
+    expect(await lintCodes(
+        `${FOO}  lda <foo ; js65-lint-disable-line suspicious-address-expr`))
+        .toEqual([]);
+    expect(await lintCodes(
+        `${FOO}; js65-lint-disable-next-line suspicious-address-expr\n  lda <foo`))
+        .toEqual([]);
+  });
+
+  it('should be silenced by configuration', async function() {
+    expect(await lintCodes(`${FOO}  lda <foo`,
+                           {rules: {'suspicious-address-expr': 'off'}})).toEqual([]);
+    expect(await lintCodes(`${FOO}  lda <foo`, {enabled: false})).toEqual([]);
+  });
+
+  describe('ca65 parity', function() {
+    it('should stay quiet for a byte of a constant', async function() {
+      // ca65 folds `<CONST` to a literal before the check ever runs, so only
+      // an address reaches it. js65 inlines defined constants the same way.
+      expect(await lintCodes('foo = $1234\n  lda <foo')).toEqual([]);
+      expect(await lintCodes('  lda <$1234')).toEqual([]);
+      expect(await lintCodes('  lda <300')).toEqual([]);
+    });
+
+    it('should stay quiet unless the byte op is the whole expression',
+       async function() {
+         // Unary `<` binds tighter than `+` in both assemblers, so `<foo+1` is
+         // `(<foo)+1` - an address expression, not a truncated one.
+         expect(await lintCodes(`${FOO}  lda <foo+1`)).toEqual([]);
+         // Explicit parens do make it a byte op, but of an expression rather
+         // than of a symbol, which ca65 also declines to flag.
+         expect(await lintCodes(`${FOO}  lda <(foo+1)`)).toEqual([]);
+       });
+
+    it('should stay quiet for indexed and indirect operands', async function() {
+      // ca65 matches only its plain direct/absolute modes: `lda #<foo,x` is
+      // not a thing, so no `#` can have gone missing.
+      expect(await lintCodes(`${FOO}  lda <foo,x`)).toEqual([]);
+      expect(await lintCodes(`${FOO}  lda <foo,y`)).toEqual([]);
+      expect(await lintCodes(`${FOO}  lda (<foo),y`)).toEqual([]);
+      expect(await lintCodes(`${FOO}  lda (<foo,x)`)).toEqual([]);
+    });
+  });
+});
+
+describe('preprocessor substitution', function() {
+  // Both macro styles run before the assembler sees a line, so a named
+  // constant arrives as a bare literal. Naming the constant is what
+  // `bare-number-operand` asks for, so the expansion must not turn around and
+  // fault the author for it - that rule only judges a literal written where it
+  // stands. `suspicious-address-expr` needs no such care: it asks whether the
+  // finished expression takes a byte of an address, which substitution does
+  // not change either way.
+
+  it('should not fire on a .define substituted into an address', async function() {
+    expect(await lintCodes('.define foo 8\n  lda foo')).toEqual([]);
+    expect(await lintCodes('.define foo 8\n  lda foo,x')).toEqual([]);
+    expect(await lintCodes('.define foo 8\n  lda (foo),y')).toEqual([]);
+    expect(await lintCodes('.define foo 8\n  sta foo')).toEqual([]);
+    expect(await lintCodes('.define foo %00001000\n  lda foo')).toEqual([]);
+  });
+
+  it('should not fire on a macro parameter used as an address', async function() {
+    expect(await lintCodes(
+        '.macro load val\n  lda val\n.endmacro\n  load 8')).toEqual([]);
+    expect(await lintCodes(
+        '.macro load val\n  lda val,x\n.endmacro\n  load 8')).toEqual([]);
+  });
+
+  it('should not fire on a define holding a byte of a constant',
+     async function() {
+       // `<8` and `<$1234` are arithmetic on a value, whichever layer of
+       // substitution wrote them.
+       expect(await lintCodes('.define foo $1234\n  lda <foo')).toEqual([]);
+       expect(await lintCodes('.define foo 8\n.define bar <foo\n  lda bar'))
+           .toEqual([]);
+     });
+
+  it('should still fire on a literal written in a macro body', async function() {
+    // Nothing was substituted here - the body really does say `lda 8`.
+    expect(await lintCodes('.macro load\n  lda 8\n.endmacro\n  load'))
+        .toEqual(['bare-number-operand']);
+    expect(await lintCodes('.define load lda 8\n  load'))
+        .toEqual(['bare-number-operand']);
+  });
+
+  it('should follow a lo/hi byte of a label through any substitution',
+     async function() {
+       // Unlike a bare literal, `<label` keeps naming an address no matter how
+       // it was assembled out of macro pieces, and reads as a dropped `#` in
+       // every one of these - as it does under ca65, which sees only the
+       // finished expression.
+       expect(await lintCodes(
+           'foo:\n.macro load val\n  lda val\n.endmacro\n  load <foo'))
+           .toEqual(['suspicious-address-expr']);
+       expect(await lintCodes(
+           'foo:\n.macro load val\n  lda <val\n.endmacro\n  load foo'))
+           .toEqual(['suspicious-address-expr']);
+       expect(await lintCodes('foo:\n.define bar <foo\n  lda bar'))
+           .toEqual(['suspicious-address-expr']);
+       expect(await lintCodes(
+           'foo:\n.macro load\n  lda <foo\n.endmacro\n  load'))
+           .toEqual(['suspicious-address-expr']);
+     });
+
+  it('should report a macro-body lint at the body, under the call site',
+     async function() {
+       const [msg] = await lints('.macro load\n  lda 8\n.endmacro\n  load');
+       expect(msg.source).toMatchObject({file: 'test.s', line: 4});
+       expect(msg.source!.parent).toMatchObject({file: 'test.s', line: 6});
+     });
 });
 
 describe('LINT_RULES', function() {

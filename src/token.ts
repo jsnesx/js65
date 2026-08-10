@@ -373,6 +373,32 @@ export function isRegister(t: Token, reg: 'a'|'x'|'y'): boolean {
   return t.token === 'ident' && t.str.toLowerCase() === reg;
 }
 
+/** The address size that a `z:` / `a:` / `f:` operand prefix forces. */
+export type AddrSize = 'z'|'a'|'f';
+
+/**
+ * The address size `tokens[start]` forces, and the index just past the prefix,
+ * if it begins one.
+ *
+ * The tokenizer lexes the prefix as a single operator token, so `a:+2` and a
+ * `.define`d `a` cannot be mistaken for one, but a hand-built token list from
+ * the programmatic API may spell it as an identifier followed by a colon.
+ */
+export function addrSize(tokens: Token[],
+                         start: number): {size: AddrSize, next: number}|undefined {
+  const front = tokens[start];
+  if (!front) return undefined;
+  if (front.token === 'op') {
+    const match = /^([azf]):$/.exec(front.str);
+    if (match) return {size: match[1] as AddrSize, next: start + 1};
+  }
+  if (front.token === 'ident' && /^[azf]$/i.test(front.str) &&
+      eq(tokens[start + 1], COLON)) {
+    return {size: front.str.toLowerCase() as AddrSize, next: start + 2};
+  }
+  return undefined;
+}
+
 export function str(t: Token) {
   switch (t.token) {
     case 'cs':
