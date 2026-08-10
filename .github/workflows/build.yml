@@ -251,7 +251,7 @@ jobs:
           js65 --help
           # The stamped version has to survive into the shipped CLI.
           test "$(js65 --version)" = "js65 $(node -p "require('./package.json').version")"
-          printf '.segment "code"\nlda #1\nrts\n' > smoke.s
+          printf '.code\nlda #1\nrts\n' > smoke.s
           js65 --target=nes-nrom -o smoke.nes smoke.s
           test -s smoke.nes
           mkdir smoke-lib && cd smoke-lib
