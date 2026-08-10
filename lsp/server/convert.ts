@@ -5,7 +5,7 @@
  * and the file paths used in js65.
  */
 
-import type {AssemblerMessage, SourceInfo} from '../../src/error.ts';
+import type {AssemblerMessage, MessageEdit, SourceInfo} from '../../src/error.ts';
 import type {
   Diagnostic,
   DiagnosticSeverity,
@@ -13,6 +13,7 @@ import type {
   Location,
   Position,
   Range,
+  TextEdit,
 } from 'vscode-languageserver-protocol';
 import {URI} from 'vscode-uri';
 
@@ -46,6 +47,20 @@ export function sourceInfoToRange(info: SourceInfo): Range {
   return {
     start: {line: startLine, character: startChar},
     end: {line: endLine, character: endChar},
+  };
+}
+
+/**
+ * Converts a lint fix edit to an LSP text edit. 
+ * `MessageEdit` uses the same convention as `SourceInfo`: 1-based line, 0-based column.
+ */
+export function messageEditToTextEdit(edit: MessageEdit): TextEdit {
+  return {
+    range: {
+      start: {line: Math.max(0, edit.startLine - 1), character: Math.max(0, edit.startColumn)},
+      end: {line: Math.max(0, edit.endLine - 1), character: Math.max(0, edit.endColumn)},
+    },
+    newText: edit.newText,
   };
 }
 
@@ -89,6 +104,11 @@ export function messageToDiagnostic(
     source: 'js65',
   };
   if (related.length) diagnostic.relatedInformation = related;
+  // Lint rule id, shown by the client next to the message.
+  if (msg.code != null) diagnostic.code = msg.code;
+  // The fix rides along in `data`, which the client hands back verbatim on
+  // `textDocument/codeAction`, so the quick fix needs no re-analysis.
+  if (msg.fix) diagnostic.data = msg.fix;
   return diagnostic;
 }
 

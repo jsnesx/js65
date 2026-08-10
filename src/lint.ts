@@ -360,7 +360,7 @@ class JmpFallthrough extends AdjacentInstructions {
   static readonly id = 'jmp-fallthrough';
   static readonly level: LintLevel = 'info';
   static readonly description =
-      '`jmp` to the label defined on the very next line';
+      '`jmp` to the label defined on the next line';
 
   override label(ident: string): void {
     const prev = this.prev;

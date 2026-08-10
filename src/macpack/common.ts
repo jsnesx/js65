@@ -50,7 +50,7 @@ UPDATE_REFS target @ refs
   .free end - *
 .endmacro
 
-;;; Assert that |target| is the very next address, documenting a deliberate
+;;; Assert that |target| is the next address, documenting a deliberate
 ;;; fall-through into the routine that follows.
 ;;; Usage:
 ;;;   FALLTHROUGH target
