@@ -85,12 +85,28 @@ export class LintPragmas {
 /** The opcode table for a single mnemonic, as `Cpu.op()` returns it. */
 type Ops = {[mode in AddressingMode]?: number};
 
+/** One open `.proc`, tracking what would run after it falls off the end. */
+interface ProcFrame {
+  readonly name: string;
+  /** Instructions emitted directly in this proc, not in a nested one. */
+  count: number;
+  /** The most recent instruction as written, for the message. */
+  lastText: string;
+  /** Whether that instruction transfers control away. */
+  terminates: boolean;
+  /** Whether an `.assert` has vouched for the address since that instruction. */
+  asserted: boolean;
+}
+
 /**
  * Runs the lint rules. The assembler owns one of these and calls into it as it
  * walks the source; every rule reports through `report()`, which resolves the
  * configured level and honors suppression pragmas.
  */
 export class Linter {
+  // We only track procs and not scopes
+  private readonly procStack: ProcFrame[] = [];
+
   constructor(private readonly errorCollector: ErrorCollector,
               private readonly opts: LintOptions = {},
               private readonly pragmas?: LintPragmas) {}
@@ -114,6 +130,13 @@ export class Linter {
    * instruction came from the programmatic API rather than from source.
    */
   instruction(mnemonic: string, arg: Arg, ops: Ops, tokens?: Token[]): void {
+    const frame = this.procStack[this.procStack.length - 1];
+    if (frame) {
+      frame.count++;
+      frame.lastText = renderInstruction(mnemonic, tokens);
+      frame.terminates = transfersControl(mnemonic, ops);
+      frame.asserted = false;
+    }
     if (!tokens) return;
     const mode = arg[0];
     // Anything but an immediate is reading or writing an address, and an
@@ -183,6 +206,53 @@ export class Linter {
                 `the zero-page read is intentional.`,
                 first.source);
   }
+
+  /** Called for `.proc`, after the scope has been entered. */
+  enterProc(name: string): void {
+    this.procStack.push(
+        {name, count: 0, lastText: '', terminates: false, asserted: false});
+  }
+
+  /** Called for `.assert` so we can check if the user asserted something here. */
+  assert(): void {
+    const frame = this.procStack[this.procStack.length - 1];
+    if (frame) frame.asserted = true;
+  }
+
+  /** Called for `.endproc`, before the scope is left. */
+  exitProc(at?: SourceInfo): void {
+    const frame = this.procStack.pop();
+    if (!frame) return;
+    // A proc that emitted no instructions is a data table, which doesn't count.
+    if (!frame.count || frame.terminates || frame.asserted) return;
+    this.report('endproc-no-terminator',
+                `\`.endproc\` for \`${frame.name}\` ends with ` +
+                `\`${frame.lastText}\`, instead of a terminal instruction. ` +
+                `Add a terminating opcode (rts/rit/jmp/jsr/branch), assert the ` +
+                `fall-through with \`FALLTHROUGH next\` (from ` +
+                `\`.macpack common\`), or \`; js65-lint-disable-next-line ` +
+                `endproc-no-terminator\` if it is intentional.`,
+                at);
+  }
+}
+
+/**
+ * Mnemonics that do not simply continue on to the next instruction. `jsr` is
+ * included because a proc ending in one can be used in cases of a double return
+ * or a JumpEngine / stack manipulation based dispatcher. (Also includes branches)
+ */
+const TRANSFERS_CONTROL = new Set(['jmp', 'jsr', 'rts', 'rti', 'brk']);
+
+/** Whether `mnemonic` transfers control away from the following instruction. */
+function transfersControl(mnemonic: string, ops: Ops): boolean {
+  return TRANSFERS_CONTROL.has(mnemonic) || 'rel' in ops;
+}
+
+/** The instruction as written, or just the mnemonic if it had no source. */
+function renderInstruction(mnemonic: string, tokens?: Token[]): string {
+  if (!tokens?.length) return mnemonic;
+  const operand = render(...tokens.slice(1));
+  return operand ? `${render(tokens[0])} ${operand}` : render(tokens[0]);
 }
 
 function isAddress(expr: Expr): boolean {

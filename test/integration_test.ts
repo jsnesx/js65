@@ -182,6 +182,35 @@ FREE "CODE" [$8000, $10000)
 
   });
 
+  describe('.macpack common', function() {
+    const SEG = '.segment "CODE" :bank $00 :size $0010 :mem $8000 :off $0000\n';
+
+    it('should accept a FALLTHROUGH into the next address', async function() {
+      const result = await compileSource(
+          `.macpack common\n${SEG}.org $8000\n` +
+          '  lda #1\n  FALLTHROUGH next\nnext:\n  rts\n');
+      expect(Array.from(result.subarray(0, 3))).toEqual([0xa9, 0x01, 0x60]);
+    });
+
+    it('should reject a FALLTHROUGH that is not the next address',
+       async function() {
+      // A forward target defers to the linker, which only keeps the expression
+      // and so reports the generic text rather than the macro's message.
+      await expectCompileError(
+          `.macpack common\n${SEG}.org $8000\n` +
+          '  lda #1\n  FALLTHROUGH next\n  nop\nnext:\n  rts\n',
+          'Assertion failed');
+    });
+
+    it('should report the FALLTHROUGH message for a backward target',
+       async function() {
+      await expectCompileError(
+          `.macpack common\n${SEG}.org $8000\nprev:\n  rts\n` +
+          '  FALLTHROUGH prev\n',
+          'FALLTHROUGH target is not the next address');
+    });
+  });
+
   describe('Segment handling', function() {
     it('should handle multiple segments', async function() {
       const source = `
