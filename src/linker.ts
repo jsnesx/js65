@@ -1087,6 +1087,8 @@ class Link {
   private outputs = new Map<string, SparseByteArray>();
   /** The ld65 config in use, kept around for its SYMBOLS block. */
   private config?: LinkerConfig;
+  /** ld65 cfg file declared segments, segments are forced free if they came from here */
+  private configSegments = new Set<string>();
   /** Symbols the object files export, captured when the config was set. */
   private objectExports: ReadonlySet<string> = new Set();
 
@@ -1259,10 +1261,11 @@ class Link {
     this.stopIfFailed('the segment layout is not valid');
     // Add the free space
     for (const [name, s] of this.segments) {
-      // Check to see if the user has declared any space free in the segment,
-      // if not then we treat the entire segment as free'd
-      const explicit =
-          (this.rawSegments.get(name) ?? []).flatMap(seg => seg.free ?? []);
+      // A segment's bytes are only up for grabs where the source said so, with
+      // `.free` or a `:fill` (which the assembler turns into a whole-segment
+      // `.free`). Anything else may well be a ROM this build is patching, so
+      // the linker must not hand out bytes nobody claimed.
+      const explicit = this.explicitFree(name);
       if (explicit.length) {
         for (const [start, end] of explicit) {
           if (end <= start) continue;
@@ -1272,10 +1275,14 @@ class Link {
           // patch build searches for.
           this.data.splice(start + s.delta, end - start);
         }
-      } else if (s.size > 0) {
-        // Otherwise the whole segment is free, except that a mapped segment
-        // only owns what it did not hand out to the segments lowered into it.
-        // lowerSegments works out which parts of it those are.
+      } else if (s.size > 0 &&
+                 (s.isRam || s.fill != null || this.configSegments.has(name))) {
+        // A segment is free in its entirety when nothing of the image is at
+        // stake: a `:fill` overwrites whatever was there, a config lays out a
+        // ROM from nothing, and RAM holds no bytes of the image at all. The
+        // exception is that a mapped segment only owns what it did not hand
+        // out to the segments lowered into it. lowerSegments works out which
+        // parts of it those are.
         const ranges = this.segmentFree.get(name) ??
             [[s.memory, s.memory + s.size] as const];
         for (const [start, end] of ranges) {
@@ -1568,6 +1575,19 @@ class Link {
       const align = aligns.get(seg.name)!;
       const runSeg = mappingOf(seg, 'run');
       const loadSeg = mappingOf(seg, 'load');
+      // if the segment we are mapping into has free space declared, then
+      // treat it like we are in patching mode, and give the load segment
+      // the full memory space and let the free space handler place it later.
+      if (seg.memory == null && seg.size == null && seg.align == null &&
+          seg.alignLoad == null &&
+          this.isPatched(runSeg) && this.isPatched(loadSeg)) {
+        sizes.set(seg.name, Math.min(runSeg.size ?? 0, loadSeg.size ?? 0));
+        runs.set(seg.name, runSeg.memory ?? 0);
+        loads.set(seg.name, loadSeg.memory ?? 0);
+        this.segmentLoad.set(seg.name, loadSeg.memory ?? 0);
+        this.segmentExtent.set(seg.name, size);
+        return;
+      }
       // An explicit :mem places the run address instead of allocating one.
       const run = allocate(seg, runSeg, size, align, seg.memory);
       const load = loadSeg === runSeg ?
@@ -1661,6 +1681,29 @@ class Link {
       ranges.push([memory + (used.get(name) ?? 0), memory + size]);
       this.segmentFree.set(name, ranges);
     }
+  }
+
+  /** The ranges a segment's own declarations claimed as free, if any. */
+  private explicitFree(name: string): number[][] {
+    return (this.rawSegments.get(name) ?? []).flatMap(seg => seg.free ?? []);
+  }
+
+  /**
+   * Best effort guess to see if this segment is patching an existing segment.
+   * If there's free ranges that don't cover the full segment, then its likely
+   * patching a rom instead.
+   */
+  private isPatched(seg: Segment): boolean {
+    const ranges = this.explicitFree(seg.name)
+        .filter(([start, end]) => end > start)
+        .sort((a, b) => a[0] - b[0]);
+    if (!ranges.length) return false;
+    let covered = seg.memory ?? 0;
+    for (const [start, end] of ranges) {
+      if (start > covered) return true;
+      covered = Math.max(covered, end);
+    }
+    return covered < (seg.memory ?? 0) + (seg.size ?? 0);
   }
 
   /**
@@ -1969,6 +2012,7 @@ class Link {
     this.objectExports = exported;
     for (const segment of lowerLinkerConfig(cfg, exported, this.defines)) {
       this.addRawSegment(segment);
+      this.configSegments.add(segment.name);
       this.segmentOrder.push(segment.name);
     }
   }

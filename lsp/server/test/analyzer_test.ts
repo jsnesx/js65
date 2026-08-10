@@ -514,7 +514,7 @@ describe('analyzer', () => {
 
     it('links a unit whose layout comes from js65 extended .segment syntax', async () => {
       const analyzer = await standaloneAnalyzerFor(
-          '.segment "CODE" :size $10 :mem $8000 :off 0 :out "%O"\n' +
+          '.segment "CODE" :size $10 :mem $8000 :off 0 :out "%O" :fill\n' +
           '  .byte 1,2,3,4\n');
       const linked = await analyzer.linkSaved(pathToUri('/proj/m.s'));
       expect(linked).toBeDefined();

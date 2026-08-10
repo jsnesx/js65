@@ -229,8 +229,8 @@ describe('Linker', function() {
   });
 
   it('should fail to relocate chunks that do not fit', function() {
-    // A segment with no free ranges of its own is free in its entirety, so
-    // running out of space means declaring a segment too small to hold them.
+    // The segment freed the whole of itself, so running out of space means
+    // declaring a segment too small to hold them.
     const m = {
       chunks: [{
         segments: ['code'],
@@ -244,12 +244,16 @@ describe('Linker', function() {
       segments: [{
         name: 'code',
         size: 4, offset: 0x0010, memory: 0xc000,
+        free: [[0xc000, 0xc004]],
       }],
     };
     expect(() => link(m)).toThrow(/Could not find space/);
   });
 
-  it('should fill a segment with no free ranges of its own', function() {
+  it('should keep a segment with no free ranges of its own to itself',
+     function() {
+    // The segment may well be describing a ROM that already exists, so the
+    // linker has nothing to hand out until something says otherwise.
     const m = {
       chunks: [{
         segments: ['code'],
@@ -261,7 +265,23 @@ describe('Linker', function() {
         size: 0x400, offset: 0x0010, memory: 0xc000,
       }],
     };
-    expect(chunks(link(m))).toEqual([[0x10, [2, 4, 0x00, 0xc0]]]);
+    expect(() => link(m)).toThrow(/Could not find space/);
+  });
+
+  it('should fill a segment that a :fill blanks out', function() {
+    // A fill overwrites whatever was there, so the whole segment is free.
+    const m = {
+      chunks: [{
+        segments: ['code'],
+        data: Uint8Array.of(2, 4, 0xff, 0xff),
+        subs: [{offset: 2, size: 2, expr: off(0, 0)}],
+      }],
+      segments: [{
+        name: 'code',
+        size: 0x400, offset: 0x0010, memory: 0xc000, fill: 0,
+      }],
+    };
+    expect(chunks(link(m))[0]?.[1]?.slice(0, 4)).toEqual([2, 4, 0x00, 0xc0]);
   });
 
   it('should honor a chunk alignment and leave the skipped bytes free',
@@ -366,7 +386,8 @@ describe('Linker', function() {
         data: Uint8Array.of(2, 2, 2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'CODE', load: 'PRG'},
         {name: 'DATA', load: 'PRG'},
       ],
@@ -386,7 +407,8 @@ describe('Linker', function() {
         data: Uint8Array.of(2, 2, 2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory, out: '%O',
+         free: [[memory, memory + 0x100]]},
         {name: 'CODE', load: 'PRG'},
         {name: 'DATA', load: 'PRG'},
       ],
@@ -405,7 +427,8 @@ describe('Linker', function() {
         data: Uint8Array.of(2, 2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'CODE', load: 'PRG'},
         {name: 'DATA', load: 'PRG', align: 16},
       ],
@@ -426,7 +449,8 @@ describe('Linker', function() {
         data: Uint8Array.of(1, 2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'RAM', size: 0x100, memory: 0x300},
         {name: 'BOOT', load: 'PRG', run: 'RAM'},
         {name: 'CODE', load: 'PRG'},
@@ -451,7 +475,8 @@ describe('Linker', function() {
         data: Uint8Array.of(2, 2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'RAM', size: 0x100, memory: 0x300},
         {name: 'A', load: 'PRG', run: 'RAM'},
         {name: 'B', load: 'PRG', run: 'RAM', alignLoad: 16},
@@ -480,7 +505,8 @@ describe('Linker', function() {
         data: new Uint8Array(2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'ZP', size: 0x100, memory: 0x00},
         {name: 'CODE', load: 'PRG'},
         {name: 'VARS', run: 'ZP'},
@@ -518,7 +544,8 @@ describe('Linker', function() {
         data: Uint8Array.of(1, 1),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'CODE', load: 'PRG'},
       ],
     };
@@ -553,7 +580,8 @@ describe('Linker', function() {
         data: Uint8Array.of(2, 2),
       }],
       segments: [
-        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O'},
+        {name: 'PRG', size: 0x100, offset: 0x10, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
         {name: 'CODE', load: 'PRG', memory: 0x8000},
         {name: 'DATA', load: 'PRG'},
       ],
@@ -573,9 +601,11 @@ describe('Linker', function() {
         data: Uint8Array.of(9, 9),
       }],
       segments: [
-        {name: 'HDR', size: 0x10, offset: 0, memory: 0, out: '%O'},
-        {name: 'PRG', size: 0x100, memory: 0x8000, out: '%O'},
-        {name: 'FTR', size: 0x20, memory: 0, out: '%O'},
+        {name: 'HDR', size: 0x10, offset: 0, memory: 0, out: '%O',
+         free: [[0, 0x10]]},
+        {name: 'PRG', size: 0x100, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
+        {name: 'FTR', size: 0x20, memory: 0, out: '%O', free: [[0, 0x20]]},
         {name: 'CODE', load: 'PRG'},
       ],
     };
@@ -1422,7 +1452,8 @@ describe('Linker with an ld65 config', function() {
           {offset: 4, size: 2, expr: imp('__RAM_LAST__')},
         ],
       }],
-      segments: [{name: 'CODE', size: 8, offset: 0, memory: 0x9000}],
+      segments: [{name: 'CODE', size: 8, offset: 0, memory: 0x9000,
+                  free: [[0x9000, 0x9008]]}],
     };
     expect(chunks(linkCfg(cfg, m)))
         .toEqual([[0, [0x00, 0x02, 0x00, 0x01, 0x04, 0x02]]]);
