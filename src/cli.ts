@@ -7,6 +7,7 @@ import { createHash } from "sha1-uint8array";
 import { Base64 } from './base64.ts';
 import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
 import * as Tokens from './token.ts';
+import { LINT_RULES } from './lint.ts';
 import { dirOf, joinDir } from './util.ts';
 import { VERSION } from './version.ts';
 
@@ -50,6 +51,7 @@ class Arguments {
     lineContinuations: true,
     debugLevel: 0, // -1 = disabled, 0 = comments/labels only, 1 = full source
     generateDebugInfo: true,
+    lint: {rules: {}},
   };
 }
 
@@ -148,6 +150,20 @@ const OPTIONS: Option[] = [
      for (const name of value.split(',')) {
        out.options.features!.push(name.trim());
      }
+   }},
+  {names: ['--no-lint'], arity: 0,
+   apply(out) { out.options.lint!.enabled = false; }},
+  {names: ['-W'], arity: 1, attached: true,
+   apply(out, value) {
+     const rule = value.startsWith('no-') ? value.substring(3) : '';
+     if (!LINT_RULES.has(rule)) {
+       const known = [...LINT_RULES.keys()].join(', ');
+       this.usage(1, [new Error(
+           `Invalid -W option: '-W${value}'. Expected -Wno-<rule>, where ` +
+           `<rule> is one of: ${known}`)]);
+       return;
+     }
+     out.options.lint!.rules![rule] = 'off';
    }},
 ];
 
@@ -586,6 +602,14 @@ optional arguments:
                           file started with \`.feature NAME\`. Takes a comma separated
                           list. Repeatable.
                           EX: --feature c_comments --feature pc_assignment,force_range
+  --no-lint               Turn off every lint. Lints are warnings/notes about code that
+                          assembles cleanly but probably isn't what was meant; they never
+                          fail the build.
+  -Wno-RULE               Turn off a single lint rule. Repeatable. Rules:
+${[...LINT_RULES].map(([id, r]) => `                            ${id.padEnd(24)}${r.description}`).join('\n')}
+                          A single line can also be exempted from the source with a
+                          \`; js65-lint-disable-next-line RULE\` or
+                          \`; js65-lint-disable-line RULE\` comment.
   -t NAME/--target=NAME   Link with a built-in segment layout instead of a linker config.
                           js65 has two: \`sim\` and \`nes-nrom\`.
                           Ignored when a config is given with -C.

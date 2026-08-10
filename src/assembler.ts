@@ -10,6 +10,7 @@ import type { AssemblerMessage, ErrorLevel } from './error.ts';
 import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
+import { Linter } from './lint.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from './options.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
@@ -395,6 +396,9 @@ export class Assembler {
   /** Collector for errors and messages */
   readonly errorCollector = new ErrorCollector();
 
+  /** Runs the lint rules, unless linting was turned off. */
+  readonly linter?: Linter;
+
   /** Supports refExtractor. */
   private _exprMap?: WeakMap<Expr, Expr> = undefined;
 
@@ -414,6 +418,10 @@ export class Assembler {
     }
     if (opts.errorLimit != null) {
       this.errorCollector.limit = opts.errorLimit;
+    }
+    if (opts.lint?.enabled !== false) {
+      this.linter = new Linter(this.errorCollector, opts.lint,
+                               opts.tokenizerOptions?.lintPragmas);
     }
   }
 
@@ -1382,9 +1390,12 @@ export class Assembler {
     // The token the mnemonic came from, so an unknown one can be reported
     // against it instead of somewhere upstream.
     let at: Token|undefined;
+    // The whole source line, when there was one; the linter reads the operand
+    // as written, which the parsed `arg` no longer preserves.
+    let tokens: Token[]|undefined;
     if (args.length === 1 && Array.isArray(args[0])) {
       // handle the line...
-      const tokens = args[0];
+      tokens = args[0];
       at = tokens[0];
       mnemonic = Tokens.expectIdentifier(tokens[0]).toLowerCase();
       arg = this.parseArg(tokens, 1);
@@ -1410,6 +1421,7 @@ export class Assembler {
     // cpu will take 'add', 'a,x', and 'a,y' and indicate which it actually is.
     const ops = this.cpu.op(mnemonic);
     if (!ops) this.fail(`Bad mnemonic: ${mnemonic}`, at);
+    this.linter?.instruction(mnemonic, arg, ops, tokens);
     const m = arg[0];
     if (m === 'add' || m === 'a,x' || m === 'a,y') {
       // Special case for address mnemonics
@@ -1462,7 +1474,7 @@ export class Assembler {
     } else if (Tokens.eq(front, Tokens.IMMEDIATE)) {
       // An immediate has no address to size, so catch `lda #a:foo` here rather
       // than letting the expression parser trip over the prefix.
-      const size = addrSize(tokens, start + 1);
+      const size = Tokens.addrSize(tokens, start + 1);
       if (size) {
         this.fail(`Cannot force ${ADDR_SIZE_NAMES[size.size]} addressing on ` +
                   `imm arguments`, tokens[start + 1]);
@@ -1482,7 +1494,7 @@ export class Assembler {
     // A `z:`/`a:` prefix forces the address size of the rest of the operand:
     // `lda z:foo` is zero page even for a symbol we cannot size yet, and
     // `lda a:foo` is absolute even for one we know is in the zero page.
-    const forced = addrSize(tokens, start);
+    const forced = Tokens.addrSize(tokens, start);
     if (forced) {
       if (forced.size === 'f') {
         this.fail(`Far addressing (\`f:\`) is 65816-only`, front);
@@ -1510,7 +1522,7 @@ export class Assembler {
       // inside the parens can only ever agree with it: accept and ignore it,
       // rather than failing on ca65 sources that spell out `(z:ptr),y`.
       const inner = args[0];
-      const innerSize = addrSize(inner, 0);
+      const innerSize = Tokens.addrSize(inner, 0);
       if (innerSize?.size === 'f') {
         this.fail(`Far addressing (\`f:\`) is 65816-only`, inner[0]);
       }
@@ -2689,29 +2701,7 @@ function parseSymbol(name: string): ParsedSymbol {
   return {type: 'none'};
 }
 
-/**
- * The address size a `z:` / `a:` / `f:` operand prefix forces, and the index
- * just past it, if `tokens[start]` begins one.
- *
- * The tokenizer lexes the prefix as a single operator token, so `a:+2` and a
- * `.define`d `a` cannot be mistaken for one, but a hand-built token list from
- * the programmatic API may spell it as an identifier followed by a colon.
- */
 const ADDR_SIZE_NAMES = {z: 'direct', a: 'absolute', f: 'far'} as const;
-
-function addrSize(tokens: Token[], start: number): {size: 'z'|'a'|'f', next: number}|undefined {
-  const front = tokens[start];
-  if (!front) return undefined;
-  if (front.token === 'op') {
-    const match = /^([azf]):$/.exec(front.str);
-    if (match) return {size: match[1] as 'z'|'a'|'f', next: start + 1};
-  }
-  if (front.token === 'ident' && /^[azf]$/i.test(front.str) &&
-      Tokens.eq(tokens[start + 1], Tokens.COLON)) {
-    return {size: front.str.toLowerCase() as 'z'|'a'|'f', next: start + 2};
-  }
-  return undefined;
-}
 
 const ForceDirectAddressingMap : Map<string, ArgMode> = new Map(
   [
