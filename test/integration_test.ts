@@ -820,7 +820,7 @@ AnotherLabel:
 
     it('should collect multiple unplaceable chunks', async function() {
       const source = `
-.segment "CODE" :bank $00 :size $30 :mem $8000 :off $0000
+.segment "CODE" :bank $00 :size $30 :mem $8000 :off $0000 :fill
 .segment "CODE"
 .reloc
 one:
@@ -846,7 +846,7 @@ three:
 
     it('should collect multiple failing link-time asserts', async function() {
       const source = `
-.segment "CODE" :bank $00 :size $100 :mem $8000 :off $0000
+.segment "CODE" :bank $00 :size $100 :mem $8000 :off $0000 :fill
 .segment "CODE"
 .reloc
 lbl1:
