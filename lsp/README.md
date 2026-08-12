@@ -24,9 +24,9 @@ bun install   # from the repo root, installs both packages
 | Command | Run from | Result |
 | --- | --- | --- |
 | `bun run lsp` | repo root | `build/js65-lsp.cjs` |
-| `npm run build:server` | `lsp/client` | the above, copied to `lsp/client/server/js65-lsp.cjs` |
-| `npm run build` | `lsp/client` | `dist/extension.js` (esbuild) plus `out/` (tsc, for tests) |
-| `npm run package` | `lsp/client` | `lsp/client/js65-vscode-<version>.vsix` |
+| `bun run build:server` | `lsp/client` | the above, copied to `lsp/client/server/js65-lsp.cjs` |
+| `bun run build` | `lsp/client` | `dist/extension.js` (esbuild) plus `out/` (tsc, for tests) |
+| `bun run package` | `lsp/client` | `lsp/client/js65-vscode-<version>.vsix` |
 
 Packaging uses `vsce package --no-dependencies`: the extension's dependencies
 are hoisted to the workspace root and would be unreachable from the extension
@@ -46,7 +46,7 @@ server, use `autoAttachChildProcesses` or **Attach to Language Server** (port
 
 ```sh
 cd lsp/client
-npm run package
+bun run package
 code --install-extension js65-vscode-0.1.0.vsix
 ```
 
@@ -69,13 +69,13 @@ the setting also restarts the server.
 ```sh
 bun run test                # repo root: core suite + lsp/server suite
 bun run test:lsp            # repo root: builds the bundle, then its suite only
-cd lsp/client && npm test   # end-to-end, inside a downloaded VS Code
+cd lsp/client && bun run test   # end-to-end, inside a downloaded VS Code
 ```
 
 The end-to-end suite downloads VS Code into `lsp/client/.vscode-test/` and
 drives the extension through `vscode.execute*Provider`, so every assertion is a
-full round trip through the server. Narrow a run with `JS65_TEST_GREP=hover npm
-test`.
+full round trip through the server. Narrow a run with `JS65_TEST_GREP=hover bun
+run test`.
 
 Headless Linux (including a bare WSL distro) needs Electron's shared libraries.
 On Ubuntu 24.04:

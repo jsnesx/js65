@@ -14,7 +14,7 @@ export async function run(): Promise<void> {
 		timeout: 60000,
 	});
 
-	// `JS65_TEST_GREP=<pattern> npm test` narrows a run to one suite. Each test
+	// `JS65_TEST_GREP=<pattern> bun run test` narrows a run to one suite. Each test
 	// waits on a real assemble, so a full run is slow to iterate against.
 	if (process.env.JS65_TEST_GREP) mocha.grep(process.env.JS65_TEST_GREP);
 

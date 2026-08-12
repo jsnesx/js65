@@ -74,5 +74,8 @@
   "workspaces": [
     "./lsp/server",
     "./lsp/client"
+  ],
+  "trustedDependencies": [
+    "@vscode/vsce-sign"
   ]
 }

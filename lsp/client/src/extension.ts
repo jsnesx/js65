@@ -64,7 +64,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 		const configured = vscode.workspace.getConfiguration('js65').get<string | null>('server.path');
 		outputChannel?.appendLine(configured
 			? `Could not find a server at js65.server.path: ${configured}`
-			: 'No bundled server found. Run `npm run build:server` in the extension, ' +
+			: 'No bundled server found. Run `bun run build:server` in the extension, ' +
 			  'or point js65.server.path at a js65-lsp.cjs built with `bun run lsp`.');
 		void vscode.window.showErrorMessage(
 			'js65: language server not found.',
