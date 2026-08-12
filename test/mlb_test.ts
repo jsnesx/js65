@@ -5,14 +5,7 @@ import {describe, it, expect} from 'bun:test';
 import {type MesenLabelFormat} from '../src/linker.ts';
 import {compile} from '../src/libassembler.ts';
 
-async function assembleAndGetDebugInfo(source: string, filename: string = 'test.s', debugLevel: number = 0): Promise<MesenLabelFormat[]> {
-  const opts = {
-    lineContinuations: true,
-    generateDebugInfo: true,
-    debugLevel
-  };
-
-  const initsrc = { type: 'source' as const, name: 'init.s', code: `
+const DEFAULT_INIT = `
 .macpack common
 .segment "HEADER" :bank $00 :size $0010 :mem $0000 :off $00000
 .segment "PRG"    :bank $00 :size $4000 :mem $8000 :off $00010
@@ -20,7 +13,16 @@ async function assembleAndGetDebugInfo(source: string, filename: string = 'test.
 .segment "CHR"    :bank $00 :size $2000 :mem $0000 :off $08010
 FREE "PRG" [$8000, $c000)
 FREE "FIXED" [$c000, $10000)
-`};
+`;
+
+async function assembleAndGetDebugInfo(source: string, filename: string = 'test.s', debugLevel: number = 0, init: string = DEFAULT_INIT): Promise<MesenLabelFormat[]> {
+  const opts = {
+    lineContinuations: true,
+    generateDebugInfo: true,
+    debugLevel
+  };
+
+  const initsrc = { type: 'source' as const, name: 'init.s', code: init };
 
   const modulesrc = { type: 'source' as const, name: filename, code: source };
 
@@ -395,6 +397,35 @@ ResetVector:
       // Verify offset calculation
       expect(fixedBank?.address).toBe('4000');
       expect(resetVector?.address).toBe('6000');
+    });
+
+    it('should skip the iNES header even when it runs at a ROM address', async function() {
+      // ld65 configs give the header segment a dummy run address, which is
+      // often up in ROM space (NovaTheSquirrel's is $7f00). The addresses are
+      // still relative to PRG ROM, which starts after the 16 byte header.
+      const init = `
+.macpack common
+.segment "HEADER" :bank $00 :size $0010 :mem $7f00 :off $00000
+.segment "PRG"    :bank $00 :size $4000 :mem $8000 :off $00010
+FREE "HEADER" [$7f00, $7f10)
+FREE "PRG" [$8000, $c000)
+`;
+      const source = `
+.segment "HEADER"
+.byte "NES", $1a, $02, $01, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+
+.segment "PRG"
+.org $8000
+
+Start:
+  nop
+`;
+
+      const entries = await assembleAndGetDebugInfo(source, 'test.s', 0, init);
+
+      const start = entries.find(e => e.label === 'Start');
+      expect(start?.type).toBe('NesPrgRom');
+      expect(start?.address).toBe('0');
     });
   });
 

@@ -1101,6 +1101,47 @@ describe('Linker with an ld65 config', function() {
     expect(chunks(linkCfg(cfg, m))).toEqual([[0, [0xa5, 0x00]]]);
   });
 
+  it('should give each RAM area its own space', function() {
+    // Banked RAM: two areas cover the same addresses on purpose, so filling
+    // one must not take the other's room away. Segments sharing an area still
+    // line up one after the other.
+    const cfg = `
+      MEMORY {
+        WRAM:   start = $7000, size = $1000;
+        EXWRAM: start = $6000, size = $2000;
+        PRG:    start = $8000, size = $8, file = %O;
+      }
+      SEGMENTS {
+        BSS:   load = WRAM,   type = bss;
+        BSS2:  load = WRAM,   type = bss;
+        EXBSS: load = EXWRAM, type = bss;
+        CODE:  load = PRG;
+      }`;
+    const m = {
+      chunks: [{
+        // Runs from $6000 to $7200, over everything WRAM holds.
+        segments: ['EXBSS'],
+        data: new Uint8Array(0x1200),
+      }, {
+        segments: ['BSS'],
+        data: new Uint8Array(0x10),
+      }, {
+        segments: ['BSS2'],
+        data: new Uint8Array(0x10),
+      }, {
+        segments: ['CODE'],
+        data: new Uint8Array(6).fill(0xff),
+        subs: [
+          {offset: 0, size: 2, expr: off(0, 0)},
+          {offset: 2, size: 2, expr: off(1, 0)},
+          {offset: 4, size: 2, expr: off(2, 0)},
+        ],
+      }],
+    };
+    expect(chunks(linkCfg(cfg, m)))
+        .toEqual([[0, [0x00, 0x60, 0x00, 0x70, 0x10, 0x70]]]);
+  });
+
   it('should fill a merged area around the segments lowered into it', function() {
     const cfg = `
       MEMORY {

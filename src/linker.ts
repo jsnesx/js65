@@ -204,6 +204,29 @@ export class Linker {
     return { type: labelType, address };
   }
 
+  /**
+   * Check for an ines header in the output, if we have one, skip it.
+   * Also check for a trainer and skip it too.
+   */
+  private prgBaseOffset(): number {
+    const data = this._link.data;
+    const inesMagic = [0x4e, 0x45, 0x53, 0x1a];  // "NES\x1a"
+    if (inesMagic.every((b, i) => data.get(i) === b)) {
+      // A trainer, if flag 6 asks for one, sits between header and PRG.
+      return ((data.get(6) ?? 0) & 0x04) ? 0x210 : 0x10;
+    }
+
+    // No header in the output, so fall back to the earliest file offset of a
+    // segment that runs where only ROM can, ignoring anything that doesn't
+    // land in the main output file.
+    let offset = Infinity;
+    for (const [_, seg] of this._link.segments) {
+      if (seg.isRam || (seg.out != null && seg.out !== '%O')) continue;
+      if (seg.memory >= 0x4000 && seg.offset < offset) offset = seg.offset;
+    }
+    return offset === Infinity ? 0 : offset;
+  }
+
   getDebugInfo(sources?: SourceContents, debugLevel: number = 1) : string {
     if (!sources) return "";
 
@@ -273,17 +296,7 @@ export class Linker {
       }
     };
 
-    // Calculate PRG ROM base offset from the minimum segment file offset
-    // Find the earliest file offset where the ORG address is at least > $4000
-    // which is a good enough approximation for any ROM only output segments
-    let prgBaseOffset = Infinity;
-    for (const [_, seg] of this._link.segments) {
-      if (seg.offset < prgBaseOffset && seg.memory >= 0x4000) {
-        prgBaseOffset = seg.offset;
-      }
-    }
-    // If we can't find any "PRG" segments, then just assume there's an iNES header?
-    if (prgBaseOffset === Infinity) prgBaseOffset = 0x10;
+    const prgBaseOffset = this.prgBaseOffset();
 
     // Build a set of all labels that appear in chunks to avoid duplicates
     const chunkLabels = new Set<string>();
@@ -697,16 +710,23 @@ class LinkSegment {
    */
   readonly used: number;
 
-  constructor(segment: Segment, used = 0) {
+  /**
+   * A segment is RAM if it emits no bytes, declared `bss`/`zp`, or
+   * it has no output file and no offset specified.
+   * If out is specified (any string), it outputs.
+   * If offset is specified without out, it outputs to main file.
+   */
+  static isRamSegment(segment: Segment): boolean {
+    return segment.bss ?? (!segment.out && segment.offset == null);
+  }
+
+  constructor(segment: Segment, used = 0, ramBase = LinkSegment.RAM_OFFSET) {
     const name = this.name = segment.name;
     this.bank = segment.bank ?? 0;
     this.addressing = segment.addressing ?? 2;
     this.size = segment.size ?? fail(`Size must be specified: ${name}`);
-    // A segment is RAM if it emits no bytes, declared `bss`/`zp`, or
-    // (the legacy heuristic) it has no output file and no offset specified.
-    // If out is specified (any string), it outputs.
-    // If offset is specified without out, it outputs to main file.
-    this.isRam = segment.bss ?? (!segment.out && segment.offset == null);
+    this.isRam = LinkSegment.isRamSegment(segment);
+    this.ramBase = ramBase;
     // For RAM segments, offset defaults to memory (so delta=0, org space = tracking space)
     this.offset = segment.offset ?? (this.isRam ? segment.memory ?? 0 : fail(`Offset must be specified: ${name}`));
     // this.memory = segment.memory ?? fail(`Memory must be specified: ${name}`);
@@ -722,7 +742,13 @@ class LinkSegment {
   // For RAM segments, use a high bit offset to separate from ROM file offset space
   // This prevents RAM free space tracking from conflicting with ROM file offsets
   static readonly RAM_OFFSET = 0x80000000;
-  get delta(): number { return this.isRam ? LinkSegment.RAM_OFFSET : (this.offset - this.memory); }
+  /**
+   * Where this segment's memory area starts in the linker's offset space.
+   * Each area gets a slice of its own, since two of them may cover the same
+   * addresses (banked/overlapping RAM) and must not be allocated out of the same space.
+   */
+  readonly ramBase: number;
+  get delta(): number { return this.isRam ? this.ramBase : (this.offset - this.memory); }
 }
 
 class LinkChunk {
@@ -900,13 +926,14 @@ class LinkChunk {
       }
       this.linker.written.add(offset, offset + data.length);
     }
+    // Run this before resolving the follow up chunks so it properly reserves
+    // the following space even if this chunk failed to place.
+    this.linker.free.delete(this.offset!, this.offset! + this.size);
 
     // Retry the follow-ons
     for (const [sub, chunk] of this.follow) {
       chunk.resolveSub(sub, false);
     }
-
-    this.linker.free.delete(this.offset!, this.offset! + this.size);
   }
 
   resolveSubs(initial = false) { //: Map<number, Substitution[]> {
@@ -1083,6 +1110,10 @@ class Link {
   private segmentAlign = new Map<string, number>();
   /** Internal offset base for each output file. The main file is always 0. */
   private fileBases = new Map<string, number>([['%O', 0]]);
+  /** Internal offset base for each RAM memory area. */
+  private ramBases = new Map<string, number>();
+  /** Maps RAM SEGMENTs to the underlying MEMORY area */
+  private segmentArea = new Map<string, string>();
   /** Bytes written to each output file, keyed the same way as `fileBases`. */
   private outputs = new Map<string, SparseByteArray>();
   /** The ld65 config in use, kept around for its SYMBOLS block. */
@@ -1255,7 +1286,10 @@ class Link {
 
     // Build up the LinkSegment objects
     this.collect(merged, ([name, s]) => {
-      this.segments.set(name, new LinkSegment(s, this.segmentUsed.get(name)));
+      const ramBase = LinkSegment.isRamSegment(s) ?
+          this.ramBase(this.segmentArea.get(name) ?? name) : 0;
+      this.segments.set(
+          name, new LinkSegment(s, this.segmentUsed.get(name), ramBase));
     });
     // Everything below needs valid geometry, so stop here if we haven't got it.
     this.stopIfFailed('the segment layout is not valid');
@@ -1656,6 +1690,9 @@ class Link {
       seg.fill = seg.fill ?? loadSeg.fill;
       seg.addressing = seg.addressing ?? runSeg.addressing;
       seg.bss = seg.bss ?? !emits;
+      // A lowered RAM segment shares its space with everything else that runs
+      // in the same area, and with nothing outside it.
+      this.segmentArea.set(seg.name, runSeg.name);
     }, seg => drop(seg.name));
 
     // Finally, work out what part of each mapped segment is still up for grabs.
@@ -1744,6 +1781,22 @@ class Link {
   }
 
   private static readonly FILE_SPACE = 0x1000000;
+
+  /**
+   * Base of a RAM area in the linker's internal offset space.
+   * To support banked or overlapping ram, we give each ram segment mapped into memory
+   * its own base so we can assign address that overlap easier.
+   */
+  private ramBase(area: string): number {
+    let base = this.ramBases.get(area);
+    if (base == null) {
+      base = LinkSegment.RAM_OFFSET + Link.RAM_SPACE * this.ramBases.size;
+      this.ramBases.set(area, base);
+    }
+    return base;
+  }
+
+  private static readonly RAM_SPACE = 0x10000;
 
   /** The bytes written to one output file, `undefined` meaning the main one. */
   private output(file: string|undefined): SparseByteArray {
@@ -1909,7 +1962,7 @@ class Link {
       // Adjacent free ranges merge, so the space a mapped segment handed to the
       // ones lowered into it has to be excluded here rather than left out of
       // `free`.
-      const base = segment.isRam ? segment.memory + LinkSegment.RAM_OFFSET : segment.offset;
+      const base = segment.isRam ? segment.memory + segment.delta : segment.offset;
       const s0 = base + segment.used;
       const s1 = base + segment.size;
       // Any space skipped over for alignment stays free, so we can use it later.
