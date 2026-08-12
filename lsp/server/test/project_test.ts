@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 
+/**
+ * The node-`fs` half of project loading. Parsing and validation are covered by
+ * `test/project_test.ts` against `src/driver/project.ts`; what matters here is that
+ * the server finds the file, expands globs and reads the linker config off disk.
+ */
+
 import {describe, it, expect} from 'bun:test';
 import * as path from 'node:path';
 
-import {findProjectFile, loadProject, unitsOwningFile, standaloneUnit, toPosix} from '../project.ts';
+import {findProjectFile, loadProject, projectsOwningFile, standaloneProject, toPosix} from '../project.ts';
 import {MemFs} from './memfs.ts';
 
 describe('project', () => {
   describe('findProjectFile', () => {
     it('walks up until it finds a js65.json', () => {
       const fs = new MemFs({
-        '/proj/js65.json': {content: '{"units":[]}'},
+        '/proj/js65.json': {content: '{"projects":[]}'},
       });
       const found = findProjectFile('/proj/src/main.s', fs.sync as any);
       expect(found).toBe(path.join('/proj', 'js65.json'));
@@ -24,10 +30,10 @@ describe('project', () => {
   });
 
   describe('loadProject', () => {
-    it('parses a multi-unit project and resolves paths against root', () => {
+    it('parses a multi-project file and resolves paths against root', () => {
       const fs = new MemFs({
         '/proj/js65.json': {content: JSON.stringify({
-          units: [{
+          projects: [{
             name: 'main',
             sources: ['src/main.s'],
             includePaths: ['inc'],
@@ -35,102 +41,100 @@ describe('project', () => {
             target: 'nes',
           }],
         })},
-        '/proj/cfg/nes.cfg': {content: 'MEMORY { RAM: start = $0400, size = $0800 }'},
+        '/proj/src/main.s': {content: ''},
       });
       const proj = loadProject('/proj/js65.json', fs.sync as any);
-      expect(proj.units).toHaveLength(1);
-      const u = proj.units[0];
+      expect(proj.projects).toHaveLength(1);
+      const u = proj.projects[0];
       expect(u.name).toBe('main');
       // Paths get resolved absolute + normalized POSIX.
       expect(toPosix(u.sources[0]).endsWith('src/main.s')).toBe(true);
       expect(toPosix(u.includePaths[0]).endsWith('inc')).toBe(true);
     });
 
+    it('expands source globs against the filesystem, sorted', () => {
+      const fs = new MemFs({
+        '/proj/js65.json': {content: JSON.stringify({
+          projects: [{name: 'main', sources: ['src/**/*.s']}],
+        })},
+        '/proj/src/b.s': {content: ''},
+        '/proj/src/a.s': {content: ''},
+        '/proj/src/deep/c.s': {content: ''},
+        '/proj/src/notes.txt': {content: ''},
+      });
+      const proj = loadProject('/proj/js65.json', fs.sync as any);
+      expect(proj.projects[0].sources)
+          .toEqual(['/proj/src/a.s', '/proj/src/b.s', '/proj/src/deep/c.s']);
+    });
+
+    it('reports a glob that matches nothing', () => {
+      const fs = new MemFs({
+        '/proj/js65.json': {content: JSON.stringify({
+          projects: [{name: 'main', sources: ['src/*.s']}],
+        })},
+        '/proj/src/main.txt': {content: ''},
+      });
+      expect(() => loadProject('/proj/js65.json', fs.sync as any))
+          .toThrow(/no files matched source pattern/);
+    });
+
     it('reads linkerConfig from the referenced file', () => {
       const fs = new MemFs({
         '/proj/js65.json': {content: JSON.stringify({
-          units: [{name: 'x', sources: ['x.s'], linkerConfig: 'cfg/x.cfg'}],
+          projects: [{name: 'x', sources: ['x.s'], linkerConfig: 'cfg/x.cfg'}],
         })},
         '/proj/cfg/x.cfg': {content: 'MEMORY { ... }'},
       });
       const proj = loadProject('/proj/js65.json', fs.sync as any);
-      expect(proj.units[0].linkerConfig).toBe('MEMORY { ... }');
+      expect(proj.projects[0].linkerConfig).toBe('MEMORY { ... }');
+      expect(proj.projects[0].linkerConfigPath).toBe('/proj/cfg/x.cfg');
     });
 
-    it('rejects a project file without a units array', () => {
-      const fs = new MemFs({'/proj/js65.json': {content: '{}'}});
-      expect(() => loadProject('/proj/js65.json', fs.sync as any)).toThrow(/units/);
-    });
-
-    it('rejects a unit whose sources is missing or wrong type', () => {
-      const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({units: [{name: 'x'}]})}});
-      expect(() => loadProject('/proj/js65.json', fs.sync as any)).toThrow(/sources/);
-    });
-
-    it('has no lint block when the project file omits it', () => {
-      const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
-        units: [{name: 'x', sources: ['x.s']}],
-      })}});
-      expect(loadProject('/proj/js65.json', fs.sync as any).lint).toBeUndefined();
-    });
-
-    it('parses the top-level lint block', () => {
-      const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
-        units: [{name: 'x', sources: ['x.s']}],
-        lint: {enabled: true, rules: {'jmp-fallthrough': 'off', 'jsr-rts-tail-call': 'warning'}},
-      })}});
-      const proj = loadProject('/proj/js65.json', fs.sync as any);
-      expect(proj.lint).toEqual({
-        enabled: true,
-        rules: {'jmp-fallthrough': 'off', 'jsr-rts-tail-call': 'warning'},
+    it('names the file when the linker config is missing', () => {
+      const fs = new MemFs({
+        '/proj/js65.json': {content: JSON.stringify({
+          projects: [{name: 'x', sources: ['x.s'], linkerConfig: 'cfg/x.cfg'}],
+        })},
       });
+      expect(() => loadProject('/proj/js65.json', fs.sync as any))
+          .toThrow(/could not read linkerConfig \/proj\/cfg\/x\.cfg/);
     });
 
-    it('rejects a malformed lint block', () => {
-      const bad = (lint: unknown) => {
-        const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
-          units: [{name: 'x', sources: ['x.s']}], lint,
-        })}});
-        return () => loadProject('/proj/js65.json', fs.sync as any);
-      };
-      expect(bad('off')).toThrow(/"lint" must be an object/);
-      expect(bad({enabled: 'no'})).toThrow(/lint\.enabled/);
-      expect(bad({rules: []})).toThrow(/lint\.rules" must be an object/);
-      // A typo'd rule would otherwise silently do nothing.
-      expect(bad({rules: {'jmp-falthrough': 'off'}})).toThrow(/unknown lint rule/);
-      expect(bad({rules: {'jmp-fallthrough': 'error'}})).toThrow(/off, info, warning/);
+    it('surfaces validation errors from the parser', () => {
+      const fs = new MemFs({'/proj/js65.json': {content: '{}'}});
+      expect(() => loadProject('/proj/js65.json', fs.sync as any)).toThrow(/projects/);
     });
   });
 
-  describe('unitsOwningFile', () => {
+  describe('projectsOwningFile', () => {
     it('finds direct sources entries', () => {
       const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
-        units: [{name: 'a', sources: ['src/a.s']}, {name: 'b', sources: ['src/b.s']}],
+        projects: [{name: 'a', sources: ['src/a.s']}, {name: 'b', sources: ['src/b.s']}],
       })}});
       const proj = loadProject('/proj/js65.json', fs.sync as any);
-      expect(unitsOwningFile(proj, toPosix('/proj/src/a.s')).map(u => u.name)).toEqual(['a']);
+      expect(projectsOwningFile(proj, toPosix('/proj/src/a.s')).map(u => u.name)).toEqual(['a']);
     });
 
     it('returns nothing for an orphan leaf (handled by include graph later)', () => {
       const fs = new MemFs({'/proj/js65.json': {content: JSON.stringify({
-        units: [{name: 'a', sources: ['src/a.s']}],
+        projects: [{name: 'a', sources: ['src/a.s']}],
       })}});
       const proj = loadProject('/proj/js65.json', fs.sync as any);
-      expect(unitsOwningFile(proj, toPosix('/proj/include/leaf.inc'))).toHaveLength(0);
+      expect(projectsOwningFile(proj, toPosix('/proj/include/leaf.inc'))).toHaveLength(0);
     });
   });
 
-  describe('standaloneUnit', () => {
+  describe('standaloneProject', () => {
     it('sets include paths to the file dir + workspace root', () => {
-      const unit = standaloneUnit(toPosix('/proj/src/x.s'), '/proj');
-      expect(toPosix(unit.sources[0]).endsWith('src/x.s')).toBe(true);
-      expect(unit.includePaths.some(p => toPosix(p).endsWith('src'))).toBe(true);
+      const project = standaloneProject(toPosix('/proj/src/x.s'), '/proj');
+      expect(toPosix(project.sources[0]).endsWith('src/x.s')).toBe(true);
+      expect(project.includePaths.some(p => toPosix(p).endsWith('src'))).toBe(true);
     });
 
     // Finding #21: keying by basename collided for two same-named files.
-    it('names the unit by full path, so same-named files stay distinct', () => {
-      const one = standaloneUnit(toPosix('/proj/one/main.s'), '/proj');
-      const two = standaloneUnit(toPosix('/proj/two/main.s'), '/proj');
+    it('names the project by full path, so same-named files stay distinct', () => {
+      const one = standaloneProject(toPosix('/proj/one/main.s'), '/proj');
+      const two = standaloneProject(toPosix('/proj/two/main.s'), '/proj');
       expect(one.name).not.toBe(two.name);
     });
   });

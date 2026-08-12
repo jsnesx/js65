@@ -218,7 +218,7 @@ describe('integration: round trip against a real project', () => {
     dir = mkdtempSync(path.join(tmpdir(), 'js65-lsp-'));
     mkdirSync(path.join(dir, 'inc'), {recursive: true});
     writeFileSync(files.project(), JSON.stringify({
-      units: [{name: 'main', sources: ['main.s'], includePaths: ['inc']}],
+      projects: [{name: 'main', sources: ['main.s'], includePaths: ['inc']}],
     }));
     writeFileSync(files.main(), MAIN);
     writeFileSync(files.macros(), MACROS);

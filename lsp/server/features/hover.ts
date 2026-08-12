@@ -19,8 +19,8 @@ import {Cpu} from '../../../src/cpu.ts';
 import {Macro} from '../../../src/macro.ts';
 import {Tokenizer} from '../../../src/tokenizer.ts';
 import type {Token} from '../../../src/token.ts';
-import {Analyzer, type UnitAnalysis} from '../analyzer.ts';
-import {findSymbolAt, unitForDoc} from './navigation.ts';
+import {Analyzer, type ProjectAnalysis} from '../analyzer.ts';
+import {findSymbolAt, projectForDoc} from './navigation.ts';
 
 export function registerHoverFeatures(connection: Connection, analyzer: Analyzer): void {
   connection.onHover(async (p): Promise<Hover | undefined> => {
@@ -42,13 +42,13 @@ export function registerHoverFeatures(connection: Connection, analyzer: Analyzer
 
 /** Compute the hover for a position, or null if there's nothing to show. */
 function computeHover(analyzer: Analyzer, p: HoverParams): Hover | null {
-  // Pick the unit that actually owns this document.
-  // the first unit in the map answers wrongly in any multi-unit project.
-  const unit = unitForDoc(analyzer, p.textDocument.uri);
+  // Pick the project that actually owns this document.
+  // the first project in the map answers wrongly in any multi-project workspace.
+  const analysis = projectForDoc(analyzer, p.textDocument.uri);
 
   // 1) Symbol so load value + scope path.
-  if (unit) {
-    const sym = findSymbolAt(unit, p.textDocument.uri, p.position.line, p.position.character);
+  if (analysis) {
+    const sym = findSymbolAt(analysis, p.textDocument.uri, p.position.line, p.position.character);
     if (sym?.expr) {
       const num = numericValue(sym.expr);
       const lines: string[] = [];
@@ -82,7 +82,7 @@ function computeHover(analyzer: Analyzer, p: HoverParams): Hover | null {
   }
 
   // 3) Macro / define invocation so load signature + pointer at `js65/expandMacro`.
-  const entry = unit?.macros.get(word);
+  const entry = analysis?.macros.get(word);
   if (entry) {
     const lines: string[] = [];
     if (entry.kind === 'macro' && entry.macro instanceof Macro) {
@@ -145,8 +145,8 @@ export interface ExpandMacroResult {
  * Expand the macro invocation under the cursor and render the result as text.
  */
 function expandMacroAt(analyzer: Analyzer, p: ExpandMacroParams): ExpandMacroResult {
-  const unit = unitForDoc(analyzer, p.uri);
-  if (!unit) return {text: '', found: false};
+  const analysis = projectForDoc(analyzer, p.uri);
+  if (!analysis) return {text: '', found: false};
   const text = analyzer.peekDoc(p.uri);
   if (text == null) return {text: '', found: false};
   const line = text.split(/\r?\n/)[p.position.line];
@@ -154,7 +154,7 @@ function expandMacroAt(analyzer: Analyzer, p: ExpandMacroParams): ExpandMacroRes
 
   const word = wordAt(line, p.position.character);
   if (!word) return {text: '', found: false};
-  const entry = unit.macros.get(word);
+  const entry = analysis.macros.get(word);
   if (!entry) return {text: '', found: false};
 
   const tokens = lexLine(line);
@@ -175,7 +175,7 @@ function expandMacroAt(analyzer: Analyzer, p: ExpandMacroParams): ExpandMacroRes
 }
 
 /** Expand a single invocation, dispatching on macro vs define. */
-function expandOnce(entry: NonNullable<ReturnType<UnitAnalysis['macros']['get']>>,
+function expandOnce(entry: NonNullable<ReturnType<ProjectAnalysis['macros']['get']>>,
                     tokens: Token[], start: number): Token[][] | undefined {
   if (entry.macro instanceof Macro) {
     // `Macro.expand` wants the invocation starting at the macro's own ident.

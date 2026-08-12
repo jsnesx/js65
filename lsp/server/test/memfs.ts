@@ -37,6 +37,29 @@ export class MemFs {
       }
       return f.content;
     },
+    /**
+     * Only the `{withFileTypes: true}` form, which is all `loadProject` uses to
+     * expand `sources` globs. Directories are inferred from the file keys.
+     */
+    readdirSync: (p: string, _opts?: unknown): Array<{name: string, isDirectory(): boolean}> => {
+      const dir = norm(p).replace(/\/+$/, '');
+      const prefix = dir === '' || dir === '.' ? '' : `${dir}/`;
+      const names = new Map<string, boolean>();
+      for (const key of Object.keys(this.files)) {
+        if (prefix && !key.startsWith(prefix)) continue;
+        const rest = key.substring(prefix.length);
+        if (!rest) continue;
+        const slash = rest.indexOf('/');
+        const name = slash < 0 ? rest : rest.substring(0, slash);
+        names.set(name, slash >= 0 || names.get(name) === true);
+      }
+      if (!names.size) {
+        const err: NodeJS.ErrnoException = new Error(`ENOENT: ${p}`);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return [...names].map(([name, isDir]) => ({name, isDirectory: () => isDir}));
+    },
   };
 
   /**

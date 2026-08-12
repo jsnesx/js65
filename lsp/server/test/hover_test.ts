@@ -28,7 +28,7 @@ async function analyzerWith(docs: Array<{path: string, text: string}>,
   }
   for (const d of docs) analyzer.open(pathToUri(d.path), d.text, 1);
   // Opening several docs coalesces into one debounced pass; wait for it to
-  // finish rather than for the first callback, so every unit is present.
+  // finish rather than for the first callback, so every project is present.
   await new Promise(r => setTimeout(r, 100));
   return analyzer;
 }
@@ -88,23 +88,23 @@ describe('hover', () => {
     expect(hover).toBeNull();
   });
 
-  // Finding #4: hover took the *first* unit rather than the one owning the doc.
-  // `a.s` deliberately sorts first, so answering from the first unit would miss
-  // a macro that only unit b defines.
-  it('picks the unit that owns the document in a multi-unit project', async () => {
+  // Finding #4: hover took the *first* project rather than the one owning the doc.
+  // `a.s` deliberately sorts first, so answering from the first project would miss
+  // a macro that only project b defines.
+  it('picks the project that owns the document in a multi-project workspace', async () => {
     const analyzer = await analyzerWith([
       {path: '/proj/a.s', text: '.macro only_in_a\n  nop\n.endmacro\n  only_in_a\n'},
       {path: '/proj/b.s', text: '.macro only_in_b arg\n  nop\n.endmacro\n  only_in_b 1\n'},
     ], {
       rootDir: '/proj',
       json: JSON.stringify({
-        units: [
+        projects: [
           {name: 'a', sources: ['a.s']},
           {name: 'b', sources: ['b.s']},
         ],
       }),
     });
-    // Hovering `only_in_b` in b.s must resolve against unit b's macro table.
+    // Hovering `only_in_b` in b.s must resolve against project b's macro table.
     const hover = computeHover(
         analyzer, hoverAt(pathToUri('/proj/b.s'), 3, 4) as any);
     expect(hover).not.toBeNull();

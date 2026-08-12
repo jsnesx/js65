@@ -104,7 +104,7 @@ describe('analyzer', () => {
   it('reaches an included file through the open-docs vfs', async () => {
     const fs = new MemFs();
     // ca65 convention: `.include "name"` resolves against the file's own dir
-    // and then the -I directories. The unit's `inc` is on the search path.
+    // and then the -I directories. The project's `inc` is on the search path.
     const main = '.include "header.inc"\nmain:\n  rts\n';
     const header = 'HEADER_MAGIC = 1\n';
     const result = await runAnalyzer(fs, [
@@ -113,7 +113,7 @@ describe('analyzer', () => {
     ], {
       rootDir: '/proj',
       json: JSON.stringify({
-        units: [{
+        projects: [{
           name: 'main',
           sources: ['src/main.s'],
           includePaths: ['inc'],
@@ -123,21 +123,21 @@ describe('analyzer', () => {
     // No diagnostics expected (include resolves, no undefined symbols).
     expect([...result.diagnostics.values()].every(d => d.length === 0)).toBe(true);
     // The header should have been touched.
-    const unit = result.units.get('main');
-    expect(unit).toBeDefined();
+    const analysis = result.projects.get('main');
+    expect(analysis).toBeDefined();
     const headerPosix = toPosix('/proj/inc/header.inc');
-    expect(unit!.touchedFiles.has(headerPosix)).toBe(true);
+    expect(analysis!.touchedFiles.has(headerPosix)).toBe(true);
   });
 
   it('captures a definition in the symbol index', async () => {
     const fs = new MemFs();
     const code = 'main:\n  lda #$01\n  rts\n';
     const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}]);
-    // Find any unit; in standalone mode there's exactly one.
-    const unit = [...result.units.values()][0];
-    expect(unit).toBeDefined();
+    // Find any project; in standalone mode there's exactly one.
+    const analysis = [...result.projects.values()][0];
+    expect(analysis).toBeDefined();
     // `main` should be a defined symbol.
-    const found = unit.index.findSymbol('main');
+    const found = analysis.index.findSymbol('main');
     expect(found).toBeDefined();
     expect(found!.sym.def).toBeDefined();
     expect(found!.sym.def!.file).toBe(toPosix('/proj/main.s'));
@@ -156,7 +156,7 @@ describe('analyzer', () => {
     expect(standalone!.severity).toBe(2);
   });
 
-  // Finding #1: a unit pointing at a path that doesn't exist used to let ENOENT
+  // Finding #1: a project pointing at a path that doesn't exist used to let ENOENT
   // escape run() as an unhandled rejection, killing the process, with
   // onDiagnostics never firing at all.
   it('reports a missing source file as a diagnostic instead of crashing', async () => {
@@ -164,7 +164,7 @@ describe('analyzer', () => {
     const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: 'main:\n  rts\n'}], {
       rootDir: '/proj',
       json: JSON.stringify({
-        units: [{name: 'main', sources: ['main.s', 'does_not_exist.s']}],
+        projects: [{name: 'main', sources: ['main.s', 'does_not_exist.s']}],
       }),
     });
     const diags = [...result.diagnostics.values()].flat();
@@ -222,12 +222,12 @@ describe('analyzer', () => {
     // Whatever was published last must reflect the newest buffer text.
     const final = analyzer.getResult();
     expect(final).toBeDefined();
-    const unit = [...final!.units.values()][0];
-    expect(unit.index.findSymbol('SECOND')).toBeDefined();
-    expect(unit.index.findSymbol('FIRST')).toBeUndefined();
+    const analysis = [...final!.projects.values()][0];
+    expect(analysis.index.findSymbol('SECOND')).toBeDefined();
+    expect(analysis.index.findSymbol('FIRST')).toBeUndefined();
     // And the stale pass must not have published at all.
     for (const r of published) {
-      const u = [...r.units.values()][0];
+      const u = [...r.projects.values()][0];
       if (u) expect(u.index.findSymbol('FIRST')).toBeUndefined();
     }
   });
@@ -242,12 +242,12 @@ describe('analyzer', () => {
     });
     let result: AnalysisResult | undefined;
     analyzer.onDiagnostics = (r) => { result = r; };
-    // Two different files inside one debounce window: both units must rebuild.
+    // Two different files inside one debounce window: both projects must rebuild.
     analyzer.open(pathToUri('/proj/a.s'), 'a_sym = 1\n', 1);
     analyzer.open(pathToUri('/proj/b.s'), 'b_sym = 2\n', 1);
     await new Promise(r => setTimeout(r, 120));
     expect(result).toBeDefined();
-    expect(result!.units.size).toBe(2);
+    expect(result!.projects.size).toBe(2);
   });
 
   // Finding #20: schedule() early-returned when openDocs was empty, so the
@@ -298,8 +298,8 @@ describe('analyzer', () => {
       // Without the wait there is no result at all yet.
       expect(analyzer.getResult()).toBeUndefined();
       await analyzer.settled();
-      const unit = [...analyzer.getResult()!.units.values()][0];
-      expect(unit.index.findSymbol('main')).toBeDefined();
+      const analysis = [...analyzer.getResult()!.projects.values()][0];
+      expect(analysis.index.findSymbol('main')).toBeDefined();
     });
 
     it('waits through a pass that was superseded mid-flight', async () => {
@@ -317,8 +317,8 @@ describe('analyzer', () => {
       analyzer.change(uri, '.include "slow.inc"\nSECOND = 2\n', 2);
       await analyzer.settled();
       // Must reflect the newest buffer, not whichever pass finished first.
-      const unit = [...analyzer.getResult()!.units.values()][0];
-      expect(unit.index.findSymbol('SECOND')).toBeDefined();
+      const analysis = [...analyzer.getResult()!.projects.values()][0];
+      expect(analysis.index.findSymbol('SECOND')).toBeDefined();
     });
 
     it('gives up after its timeout rather than hanging a request', async () => {
@@ -337,7 +337,7 @@ describe('analyzer', () => {
     });
   });
 
-  // Finding #21: standalone units keyed by basename collided.
+  // Finding #21: standalone projects keyed by basename collided.
   it('keeps two same-named files in different directories apart', async () => {
     const fs = new MemFs();
     const analyzer = new Analyzer({
@@ -352,39 +352,39 @@ describe('analyzer', () => {
     analyzer.open(pathToUri('/proj/two/main.s'), 'two_sym = 2\n', 1);
     await new Promise(r => setTimeout(r, 80));
     expect(result).toBeDefined();
-    expect(result!.units.size).toBe(2);
+    expect(result!.projects.size).toBe(2);
   });
 
-  // A file inside a `js65.json` workspace that no unit owns (a scratch file, a
+  // A file inside a `js65.json` workspace that no project owns (a scratch file, a
   // header not `.include`d yet) used to get no diagnostics at all: it belonged
-  // to no unit, so nothing assembled it, and the editor showed a clean file.
-  it('falls back to standalone for an open file no unit owns', async () => {
+  // to no project, so nothing assembled it, and the editor showed a clean file.
+  it('falls back to standalone for an open file no project owns', async () => {
     const fs = new MemFs();
     const result = await runAnalyzer(fs, [
       {path: '/proj/main.s', text: 'main:\n  rts\n'},
       {path: '/proj/scratch.s', text: '  lda #$xx\n'},
     ], {
       rootDir: '/proj',
-      json: JSON.stringify({units: [{name: 'main', sources: ['main.s']}]}),
+      json: JSON.stringify({projects: [{name: 'main', sources: ['main.s']}]}),
     });
     const scratch = result.diagnostics.get(pathToUri('/proj/scratch.s')) ?? [];
     expect(scratch.some(d => /hex/i.test(messageOf(d)))).toBe(true);
-    // And the owned file still went through its real unit, not a standalone one.
-    expect(result.units.get('main')?.standalone).toBe(false);
+    // And the owned file still went through its real project, not a standalone one.
+    expect(result.projects.get('main')?.standalone).toBe(false);
   });
 
-  it('does not double-assemble a file its unit already covers', async () => {
+  it('does not double-assemble a file its project already covers', async () => {
     const fs = new MemFs();
     const result = await runAnalyzer(fs, [
       {path: '/proj/main.s', text: '.include "header.inc"\nmain:\n  rts\n'},
       {path: '/proj/header.inc', text: '  lda #$xx\n'},
     ], {
       rootDir: '/proj',
-      json: JSON.stringify({units: [{name: 'main', sources: ['main.s'], includePaths: ['.']}]}),
+      json: JSON.stringify({projects: [{name: 'main', sources: ['main.s'], includePaths: ['.']}]}),
     });
-    // `header.inc` is reached through the unit, so there must be no second
-    // standalone unit for it — that would publish every diagnostic twice.
-    expect(result.units.size).toBe(1);
+    // `header.inc` is reached through the project, so there must be no second
+    // standalone project for it — that would publish every diagnostic twice.
+    expect(result.projects.size).toBe(1);
     const header = result.diagnostics.get(pathToUri('/proj/header.inc')) ?? [];
     expect(header.filter(d => /hex/i.test(messageOf(d)))).toHaveLength(1);
   });
@@ -398,7 +398,7 @@ describe('analyzer', () => {
     ], {
       rootDir: '/proj',
       json: JSON.stringify({
-        units: [{name: 'both', sources: ['a.s', 'b.s'], includePaths: ['.']}],
+        projects: [{name: 'both', sources: ['a.s', 'b.s'], includePaths: ['.']}],
       }),
       extraFiles: {'bad.inc': '  lda #$xx\n'},
     });
@@ -427,7 +427,7 @@ describe('analyzer', () => {
     async function analyzerFor(code: string) {
       const fs = new MemFs();
       fs.add('/proj/js65.json', JSON.stringify({
-        units: [{name: 'main', sources: ['main.s'], linkerConfig: 'nes.cfg'}],
+        projects: [{name: 'main', sources: ['main.s'], linkerConfig: 'nes.cfg'}],
       }));
       fs.add('/proj/nes.cfg', CFG);
       fs.add('/proj/main.s', code);
@@ -461,7 +461,7 @@ describe('analyzer', () => {
       const linked = await analyzer.linkSaved(pathToUri('/proj/main.s'));
       // `Segment CODE ($20 bytes at $200) does not fit in RAM` is about a MEMORY
       // area in the .cfg, so it has no source at all. Bucketing drops unlocated
-      // messages, so it must land on the unit's entry file instead of vanishing.
+      // messages, so it must land on the project's entry file instead of vanishing.
       const diags = linked!.diagnostics.get(pathToUri('/proj/main.s'));
       expect(diags).toBeDefined();
       const fit = diags!.find(d => /does not fit/i.test(messageOf(d)));
@@ -469,7 +469,7 @@ describe('analyzer', () => {
       expect(fit!.range.start.line).toBe(0);
     });
 
-    it('reports nothing for a unit that fits', async () => {
+    it('reports nothing for a project that fits', async () => {
       const analyzer = await analyzerFor('.segment "CODE"\n  .byte 1,2\n');
       const linked = await analyzer.linkSaved(pathToUri('/proj/main.s'));
       expect(linked).toBeDefined();
@@ -491,7 +491,7 @@ describe('analyzer', () => {
       return analyzer;
     }
 
-    it('does nothing for a unit that declares no layout at all', async () => {
+    it('does nothing for a project that declares no layout at all', async () => {
       const analyzer = await standaloneAnalyzerFor('main:\n  rts\n');
       // No config, no target, and nothing in the source either.
       expect(await analyzer.linkSaved(pathToUri('/proj/m.s'))).toBeUndefined();
@@ -512,7 +512,7 @@ describe('analyzer', () => {
       expect(await analyzer.linkSaved(pathToUri('/proj/m.s'))).toBeUndefined();
     });
 
-    it('links a unit whose layout comes from js65 extended .segment syntax', async () => {
+    it('links a project whose layout comes from js65 extended .segment syntax', async () => {
       const analyzer = await standaloneAnalyzerFor(
           '.segment "CODE" :size $10 :mem $8000 :off 0 :out "%O" :fill\n' +
           '  .byte 1,2,3,4\n');
@@ -538,7 +538,7 @@ describe('analyzer', () => {
       expect(overflow!.range.start.line).toBe(1);
     });
 
-    it('links a unit whose layout comes from an anonymous .segment', async () => {
+    it('links a project whose layout comes from an anonymous .segment', async () => {
       const analyzer = await standaloneAnalyzerFor(
           '.segment $8000 :size $10\n  .byte 1,2,3,4\n');
       const linked = await analyzer.linkSaved(pathToUri('/proj/m.s'));
@@ -554,7 +554,7 @@ describe('analyzer', () => {
     const code = 'main:\n  jmp next\nnext:\n  rts\n';
     const projectWith = (lint?: unknown) => ({
       rootDir: '/proj',
-      json: JSON.stringify({units: [{name: 'main', sources: ['main.s']}], ...(lint ? {lint} : {})}),
+      json: JSON.stringify({projects: [{name: 'main', sources: ['main.s']}], ...(lint ? {lint} : {})}),
     });
     const codesIn = (result: AnalysisResult) =>
         [...result.diagnostics.values()].flat().map(d => d.code);
@@ -580,7 +580,7 @@ describe('analyzer', () => {
     });
 
     it('applies the project config to a standalone file too', async () => {
-      // scratch.s is in the workspace but owned by no unit.
+      // scratch.s is in the workspace but owned by no project.
       const result = await runAnalyzer(
           new MemFs(),
           [{path: '/proj/main.s', text: 'main:\n  rts\n'},
@@ -600,8 +600,8 @@ describe('analyzer', () => {
       '.endproc',
     ].join('\n') + '\n';
     const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}]);
-    const unit = [...result.units.values()][0];
-    const scope = unit.index.findScope('MyProc');
+    const analysis = [...result.projects.values()][0];
+    const scope = analysis.index.findScope('MyProc');
     expect(scope).toBeDefined();
     expect(scope!.kind).toBe('proc');
     expect(scope!.start).toBeDefined();

@@ -17,7 +17,7 @@ import {CompletionItemKind} from 'vscode-languageserver-protocol';
 import {DIRECTIVES, TOKENFUNCS} from '../../../src/token.ts';
 import {Cpu} from '../../../src/cpu.ts';
 import type {IndexedScope} from '../../../src/lspindex.ts';
-import {Analyzer, type UnitAnalysis} from '../analyzer.ts';
+import {Analyzer, type ProjectAnalysis} from '../analyzer.ts';
 import {uriToPath} from '../convert.ts';
 import {toPosix} from '../project.ts';
 
@@ -69,11 +69,11 @@ function computeCompletion(analyzer: Analyzer, p: CompletionParams): CompletionI
   const result = analyzer.getResult();
   if (result) {
     const file = toPosix(uriToPath(p.textDocument.uri));
-    let unit: UnitAnalysis | undefined =
-        [...result.units.values()].find(u => u.touchedFiles.has(file));
-    if (!unit) unit = result.units.values().next().value;
-    if (unit) {
-      for (const [name, scope] of symbolsInScope(unit, file, p.position.line)) {
+    let analysis: ProjectAnalysis | undefined =
+        [...result.projects.values()].find(a => a.touchedFiles.has(file));
+    if (!analysis) analysis = result.projects.values().next().value;
+    if (analysis) {
+      for (const [name, scope] of symbolsInScope(analysis, file, p.position.line)) {
         out.push({
           label: name,
           kind: CompletionItemKind.Variable,
@@ -82,7 +82,7 @@ function computeCompletion(analyzer: Analyzer, p: CompletionParams): CompletionI
       }
       // Macros and defines are callable at instruction position too.
       if (where === 'mnemonic') {
-        for (const macro of unit.macros.all()) {
+        for (const macro of analysis.macros.all()) {
           out.push({
             label: macro.name,
             kind: CompletionItemKind.Function,
@@ -124,22 +124,22 @@ function classifyPosition(line: string | undefined, character: number,
 
 /**
  * Names visible at (file, line): the innermost scope containing the cursor plus
- * every ancestor up to the root. Falls back to the whole unit when the position
+ * every ancestor up to the root. Falls back to the whole project when the position
  * doesn't land inside any recorded scope.
  *
  * Yields `[name, qualifiedScopeName]` pairs.
  */
-function symbolsInScope(unit: UnitAnalysis, file: string, line: number):
+function symbolsInScope(analysis: ProjectAnalysis, file: string, line: number):
     Array<[string, string]> {
   const out: Array<[string, string]> = [];
   const seen = new Set<string>();
   // `scopeAt` works in the assembler's 1-based line numbering. A position
   // outside every `.proc`/`.scope` legitimately resolves to no scope — the
-  // right answer there is the root, not "every symbol in the unit", which is
+  // right answer there is the root, not "every symbol in the project", which is
   // what would leak a proc's locals into file-level completion.
-  const innermost = unit.index.scopeAt(file, line + 1) ?? unit.index.root;
+  const innermost = analysis.index.scopeAt(file, line + 1) ?? analysis.index.root;
   // Walk from the innermost scope outwards, so a shadowing local wins.
-  for (const scope of ancestorsOf(unit, innermost)) {
+  for (const scope of ancestorsOf(analysis, innermost)) {
     for (const name of scope.symbols.keys()) {
       if (seen.has(name)) continue;
       seen.add(name);
@@ -150,17 +150,17 @@ function symbolsInScope(unit: UnitAnalysis, file: string, line: number):
 }
 
 /** The scope chain from `scope` up to (and including) the index root. */
-function ancestorsOf(unit: UnitAnalysis, scope: IndexedScope): IndexedScope[] {
+function ancestorsOf(analysis: ProjectAnalysis, scope: IndexedScope): IndexedScope[] {
   // `IndexedScope` has no parent pointer, so reconstruct the chain by matching
   // qualified-name prefixes so `Foo::Bar`'s ancestors are `Foo` and the root.
   const chain: IndexedScope[] = [scope];
   const parts = scope.qualifiedName ? scope.qualifiedName.split('::') : [];
   for (let i = parts.length - 1; i > 0; i--) {
     const qualified = parts.slice(0, i).join('::');
-    const found = unit.index.findScope(qualified);
+    const found = analysis.index.findScope(qualified);
     if (found) chain.push(found);
   }
-  if (scope !== unit.index.root) chain.push(unit.index.root);
+  if (scope !== analysis.index.root) chain.push(analysis.index.root);
   return chain;
 }
 
