@@ -39,6 +39,9 @@ export interface TokenizerOptions {
   numberSeparators?: boolean;
   /** ca65 name: `c_comments` `/* ... *\/` block comments. */
   cComments?: boolean;
+  /** ca65 name: `leading_dot_in_identifiers` allows user defined `.whatever` labels and macros */
+  leadingDotInIdentifiers?: boolean;
+
   /** Sink for `; js65-lint-disable...` comment pragmas, when linting. */
   lintPragmas?: LintPragmas;
 }
@@ -112,6 +115,7 @@ export function applyFeature(name: string, asm: AssemblerOptions, tok: Tokenizer
     // ca65 defaults this off; js65 defaults it on. Turning it off works.
     case 'line_continuations': tok.lineContinuations = on; return;
     case 'underline_in_numbers': tok.numberSeparators = on; return;
+    case 'leading_dot_in_identifiers': tok.leadingDotInIdentifiers = on; return;
 
     // Features js65 already applies unconditionally, so there is nothing to toggle.
     case 'at_in_identifiers':
@@ -172,8 +176,6 @@ const UNCONDITIONAL = new Map<string, string>([
 ]);
 
 const UNSUPPORTED = new Map<string, string>([
-  ['leading_dot_in_identifiers',
-   'a leading `.` currently always starts a control statement'],
   ['dollar_in_identifiers', '`$` currently always starts a hex literal'],
   ['dollar_is_pc',
    '`$` currently always starts a hex literal; js65 spells the PC `*`'],

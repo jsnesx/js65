@@ -27,7 +27,8 @@ const RE_AT_IDENT = /@+[a-z0-9_]*/iy;
 // is actually treated as a separate token in ca65. We glue it back together
 // later in the preprocessor with mergeScopePrefix
 const RE_IDENT = /[a-z_][a-z0-9_]*/iy;
-const RE_CS = /\.[a-z][a-z0-9]*/iy;
+// Allow _ in here for user defined directives
+const RE_CS = /\.[a-z_][a-z0-9_]*/iy;
 const RE_ADDR_SIZE = /[azf]:(?!:)/iy;
 /** Non-sticky as it tests a whole identifier, not a slice of the buffer. */
 const RE_REGISTER = /^[axy]$/i;
@@ -295,6 +296,10 @@ export class Tokenizer implements Tokens.Source {
 
   private csTok(): Token {
     let grp = this.buffer.group()!;
+    const lower = grp.toLowerCase();
+    if (this.opts.leadingDotInIdentifiers && !Tokens.CS_KEYWORDS.has(lower)) {
+      return {token: 'ident', str: lower};
+    }
     return {
       token: 'cs', 
       str: Tokens.CS_TOKEN_ALIAS_MAP.get(grp.toLowerCase()) ?? grp.toLowerCase(),

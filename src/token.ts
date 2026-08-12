@@ -131,6 +131,40 @@ export const CS_TOKEN_ALIAS_MAP = new Map([
   ['.undef', '.undefine'],
 ]);
 
+// All reserved leading dot directives that take priority over user leading dot directives
+export const CS_KEYWORDS: ReadonlySet<string> = new Set([
+  '.a16', '.a8', '.addr', '.addrsize', '.align', '.and', '.asciiz',
+  '.asize', '.assert', '.autoimport', '.bank', '.bankbyte', '.bankbytes',
+  '.bitand', '.bitnot', '.bitor', '.bitxor', '.blank', '.bss', '.byt',
+  '.byte', '.byteat', '.bytestr', '.case', '.charmap', '.code', '.concat',
+  '.cond', '.condes', '.const', '.constantsymbol', '.constructor',
+  '.cpu', '.data', '.dbg', '.dbyt', '.debuginfo', '.def', '.define',
+  '.defined', '.definedmacro', '.definedsymbol', '.delmac', '.delmacro',
+  '.destructor', '.dword', '.else', '.elseif', '.end', '.endenum',
+  '.endif', '.endmac', '.endmacro', '.endproc', '.endrep', '.endrepeat',
+  '.endscope', '.endstruct', '.endunion', '.enum', '.eol', '.error',
+  '.exitmac', '.exitmacro', '.export', '.exportzp', '.faraddr', '.fatal',
+  '.feature', '.fileopt', '.fopt', '.forceimport', '.forceword', '.free',
+  '.global', '.globalzp', '.hibyte', '.hibytes', '.hiword', '.i16',
+  '.i8', '.ident', '.if', '.ifblank', '.ifconst', '.ifdef', '.ifnblank',
+  '.ifnconst', '.ifndef', '.ifnref', '.ifnsym', '.ifp02', '.ifp4510',
+  '.ifp816', '.ifpc02', '.ifpdtv', '.ifpsc02', '.ifref', '.ifsym',
+  '.import', '.importzp', '.incbin', '.include', '.interruptor', '.isize',
+  '.ismnem', '.ismnemonic', '.left', '.linecont', '.list', '.listbytes',
+  '.literal', '.lobyte', '.lobytes', '.local', '.localchar', '.loword',
+  '.mac', '.macpack', '.macro', '.match', '.max', '.mid', '.min',
+  '.mod', '.move', '.noexpand', '.not', '.null', '.or', '.org', '.out',
+  '.p02', '.p4510', '.p816', '.pagelen', '.pagelength', '.paramcount',
+  '.pc02', '.pdtv', '.popcharmap', '.popcpu', '.popseg', '.proc',
+  '.psc02', '.pushcharmap', '.pushcpu', '.pushseg', '.ref', '.referenced',
+  '.referencedsymbol', '.referto', '.refto', '.reloc', '.repeat',
+  '.res', '.right', '.rodata', '.scope', '.segment', '.segmentprefix',
+  '.set', '.setcpu', '.shl', '.shr', '.sizeof', '.skip', '.smart',
+  '.sprintf', '.strat', '.string', '.strlen', '.strmap', '.struct',
+  '.tag', '.tcount', '.time', '.undef', '.undefine', '.union', '.version',
+  '.warning', '.word', '.wordat', '.xmatch', '.xor', '.zeropage',
+]);
+
 export function match(left: Token, right: Token): boolean {
   if (left.token !== right.token) return false;
   if (left.token === 'num' || left.token === 'str') return true;
@@ -165,7 +199,7 @@ export function name(arg: Token): string {
       return arg.str;
     case 'cs':
     case 'op':
-      return `${(arg.rawStr ?? arg.str).toUpperCase()}`;
+      return `${(arg.rawStr ?? arg.str).toLowerCase()}`;
     default:
       assertNever(arg);
   }
