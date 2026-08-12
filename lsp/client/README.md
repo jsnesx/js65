@@ -1,9 +1,6 @@
 # js65 for VS Code
 
-Language support for js65/ca65 6502 assembly, backed by the
-[js65](https://github.com/jsnesx/js65) assembler itself. Diagnostics,
-navigation, and hover all come from a real assemble, so they agree with what the
-command line produces.
+Language support for js65 6502 assembler, backed by the [js65](https://github.com/jsnesx/js65) assembler itself.
 
 ## Features
 
@@ -15,54 +12,43 @@ command line produces.
 - **Document and workspace symbols** for labels, constants, macros, and scopes.
 - **Hover** for a symbol's resolved value (hex and decimal) and scope path, the
   addressing modes a mnemonic supports, or a macro's parameter list.
-- **Completion** aware of cursor position: directives after `.`, mnemonics and
-  in-scope symbols mid-line, labels only at column 0.
+- **Completion** aware of cursor position. Directives after `.`, mnemonics and
+  in-scope symbols mid-line, etc.
 - **Folding** on `.scope`, `.proc`, `.macro`, `.repeat`, `.struct`, `.enum`.
 - **Semantic highlighting** on top of the bundled TextMate grammar.
 - **Expand Macro at Cursor** (`js65.expandMacro`).
 
 ## Project setup
 
-Add a `js65.json` at the workspace root to describe how your sources fit
-together:
+Add a `js65.json` at the workspace root to describe how your sources fit together
 
 ```json
 {
-  "units": [
+  "projects": [
     {
       "name": "main",
-      "sources": ["src/main.s"],
+      "sources": ["src/**/*.s"],
       "includePaths": ["inc"],
-      "target": "nes"
+      "target": "nes-nrom"
     }
   ]
 }
 ```
 
-Each unit is one independently assembled program. `linkerConfig` points at an
-ld65 config file; `target` selects a built-in layout otherwise. A JSON schema is
-attached, so the file gets completion and validation as you edit it.
+`js65 init` writes one of these, along with a project that builds as it stands.
 
-Without a `js65.json`, files are analyzed standalone: syntax errors, navigation,
-and hover still work, and references to symbols defined in other files are
-reported as warnings rather than errors.
+Each project is one independently assembled program.
+Without a `js65.json`, files are analyzed standalone  syntax errors, navigation, and hover still work, and references to symbols defined in other files are reported as warnings rather than errors.
 
 ## Language id
 
-This extension contributes the language id `js65` (shown as "js65 Assembly")
-with grammar scope `source.js65`, claiming `.s`, `.asm`, `.inc`, and `.mac`.
+This extension contributes the language id `js65` (shown as "js65 Assembly") with grammar scope `source.js65`, for files with the extensions `.s`, `.asm`, `.inc`, and `.mac`.
 
-Other ca65 extensions use the id `ca65`. Both can be installed at once, but they
-claim the same file extensions and VS Code resolves the conflict by load order.
-If a file opens in the wrong mode, switch it from the status bar language picker
-or pin it for the workspace:
+If you have a different language extension that takes the `.s`, then you can associate them with js65 using the following 
 
 ```json
 { "files.associations": { "*.s": "js65", "*.inc": "js65" } }
 ```
-
-The server attaches to `js65` documents only, so a file resolved to `ca65` gets
-no diagnostics from this extension.
 
 ## Settings
 
@@ -95,3 +81,7 @@ npm test             # end-to-end suite inside a downloaded VS Code
 ## License
 
 MPL-2.0. See `LICENSE.txt` at the root of the js65 repository.
+
+## AI (LLM) Policy
+
+See `LLMContributions.md` at the root of the js65 repository.

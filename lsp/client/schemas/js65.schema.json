@@ -1,11 +1,20 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
 	"title": "js65 project file",
-	"description": "Compilation units the js65 language server assembles. Paths resolve against this file's directory.",
+	"description": "The projects `js65 build` assembles and the language server analyzes. Paths resolve against this file's directory.",
 	"type": "object",
-	"required": ["units"],
+	"required": ["projects"],
 	"properties": {
-		"units": {
+		"$schema": {
+			"type": "string",
+			"description": "Optional pointer at this schema, for editors that do not map js65.json automatically."
+		},
+		"outDir": {
+			"type": "string",
+			"description": "Directory build outputs are written to. Defaults to `build`.",
+			"default": "build"
+		},
+		"projects": {
 			"type": "array",
 			"description": "One entry per independently-assembled program.",
 			"items": {
@@ -14,31 +23,71 @@
 				"properties": {
 					"name": {
 						"type": "string",
-						"description": "Human-readable unit name. Defaults to the first source's basename."
+						"description": "Human-readable project name, and the default stem of its output files. Defaults to the first literal source's basename, or the directory holding this file."
 					},
 					"sources": {
 						"type": "array",
-						"description": "Entry source files assembled for this unit.",
+						"description": "Source files assembled for this project; each match is its own module. Globs are allowed: `*` and `?` stay inside one path segment, `**` spans whole segments. Matching is case-sensitive on every platform, matches are sorted, and a pattern that matches nothing is an error.",
 						"items": { "type": "string" }
 					},
 					"includePaths": {
 						"type": "array",
-						"description": "Search path for `.include`.",
+						"description": "Search path for `.include`. Literal directories, no globs.",
 						"items": { "type": "string" }
 					},
 					"binIncludePaths": {
 						"type": "array",
-						"description": "Search path for `.incbin`.",
+						"description": "Search path for `.incbin`. Literal directories, no globs.",
 						"items": { "type": "string" }
 					},
 					"linkerConfig": {
 						"type": "string",
-						"description": "Path to an ld65 config file. Linking runs on save to surface segment-overflow errors."
+						"description": "Path to an ld65 config file, in place of a built-in `target`. In the editor, linking runs on save to surface segment-overflow errors."
 					},
 					"target": {
 						"type": "string",
-						"description": "Built-in target layout, used when no linkerConfig is given.",
-						"examples": ["nes", "none"]
+						"description": "Built-in segment layout, used when no linkerConfig is given. `nes-nrom` is a 40976-byte NROM-256 cartridge; `sim` is a headerless 64KB address space for tests and tools.",
+						"enum": ["nes-nrom", "sim"]
+					},
+					"output": {
+						"type": "string",
+						"description": "Linked output file, relative to `outDir`. Defaults to `<name>.nes`."
+					},
+					"dbgfile": {
+						"type": "string",
+						"description": "Debug info (MLB labels) output, relative to `outDir`."
+					},
+					"mapfile": {
+						"type": "string",
+						"description": "Linker map (free space / placed chunks) output, relative to `outDir`."
+					},
+					"format": {
+						"type": "string",
+						"enum": ["binary", "ips", "object"],
+						"description": "Output format. `binary` links a ROM, `ips` emits a patch against `baseRom`, `object` writes unlinked modules.",
+						"default": "binary"
+					},
+					"baseRom": {
+						"type": "string",
+						"description": "ROM a patch or `ips` build assembles against, relative to this file."
+					},
+					"defines": {
+						"type": "object",
+						"description": "Symbols defined before assembly, as if passed with `-D`. Numbers and booleans are stringified.",
+						"additionalProperties": {
+							"type": ["string", "number", "boolean"]
+						}
+					},
+					"features": {
+						"type": "array",
+						"description": "Assembler features to enable, as if passed with `--feature`.",
+						"items": { "type": "string" },
+						"examples": [["c_comments", "labels_without_colons"]]
+					},
+					"debug": {
+						"type": "integer",
+						"description": "Debug info level. -1 disables debug info entirely.",
+						"default": 0
 					}
 				},
 				"additionalProperties": false
@@ -46,7 +95,7 @@
 		},
 		"lint": {
 			"type": "object",
-			"description": "Lint configuration for every unit in this project. Lints run by default; a single line can also be silenced with a `; js65-lint-disable-next-line RULE` comment.",
+			"description": "Lint configuration for every project in this file. Lints run by default; a single line can also be silenced with a `; js65-lint-disable-next-line RULE` comment.",
 			"properties": {
 				"enabled": {
 					"type": "boolean",
