@@ -152,11 +152,11 @@ jobs:
         # VS Code is an Electron app and will not start headless.
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Run VS Code extension tests
-        # `npm test` runs `pretest` first (bundles the language server and
+        # `bun run test` runs `pretest` first (bundles the language server and
         # compiles the extension), then downloads a real VS Code build and runs
         # the suite inside it.
         working-directory: lsp/client
-        run: xvfb-run -a npm test
+        run: xvfb-run -a bun run test
 
   package:
     runs-on: ubuntu-latest
@@ -277,7 +277,7 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - name: Build npm package
-        run: npm run build:npm
+        run: bun run build:npm
       - name: Pack tarball
         run: npm pack
       - name: Smoke test the packed tarball

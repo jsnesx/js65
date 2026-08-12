@@ -72,10 +72,10 @@ Requires [bun](https://bun.sh) on PATH.
 
 ```sh
 bun install          # from the repo root; this is a workspace package
-npm run build        # bundle the extension and compile the tests
-npm run build:server # build lsp/server and copy the bundle into server/
-npm run package      # produce a .vsix
-npm test             # end-to-end suite inside a downloaded VS Code
+bun run build        # bundle the extension and compile the tests
+bun run build:server # build lsp/server and copy the bundle into server/
+bun run package      # produce a .vsix
+bun run test         # end-to-end suite inside a downloaded VS Code
 ```
 
 ## License

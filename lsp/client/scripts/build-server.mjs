@@ -15,7 +15,7 @@ const bundleName = 'js65-lsp.cjs';
 
 if (!existsSync(join(repo, 'package.json'))) {
 	console.error(`js65 repo not found at ${repo}.`);
-	console.error('Set JS65_REPO to your js65 checkout, e.g. JS65_REPO=~/src/js65 npm run build:server');
+	console.error('Set JS65_REPO to your js65 checkout, e.g. JS65_REPO=~/src/js65 bun run build:server');
 	process.exit(1);
 }
 
