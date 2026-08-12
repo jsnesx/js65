@@ -288,9 +288,10 @@ export class Assembler {
    */
   private segmentOrg = new Map<string, number>();
 
-  /** Stack of segments for .pushseg/.popseg. */
+  /** Stack of segments for .pushseg/.popseg, with the chunk and its index. */
   private segmentStack:
-      Array<readonly [/* readonly */ string[], Chunk?, number?]> = [];
+      Array<readonly [/* readonly */ string[], Chunk|undefined, number,
+                      number?]> = [];
 
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
@@ -368,6 +369,9 @@ export class Assembler {
 
   /** Currently active chunk */
   private _chunk: Chunk|undefined = undefined;
+
+  /** Index of `_chunk` in `chunks`, or -1 when there is no active chunk. */
+  private _chunkIndex = -1;
 
   /** Name of the next chunk */
   private _name: string|undefined = undefined;
@@ -491,8 +495,15 @@ export class Assembler {
       if (this.segmentsAreZeropage()) {
         this._chunk.zeropage = true;
       }
+      this._chunkIndex = this.chunks.length;
       this.chunks.push(this._chunk);
     }
+  }
+
+  /** Ends the current chunk, so the next byte emitted starts a new one. */
+  private clearChunk() {
+    this._chunk = undefined;
+    this._chunkIndex = -1;
   }
 
   private walkSymbolTree(sym: string): Expr|undefined {
@@ -590,7 +601,7 @@ export class Assembler {
     const num = this._chunk?.data.length ?? 0;
     const meta: Exprs.Meta = {
       rel: true,
-      chunk: this._chunk ? this.chunks.length - 1 : this.chunks.length,
+      chunk: this._chunk ? this._chunkIndex : this.chunks.length,
     };
     const org = this._chunk?.org ?? this._org;
     if (org != null) meta.org = org;
@@ -1607,7 +1618,7 @@ export class Assembler {
     // TODO - clean this up to be more efficient.
     // TODO - handle local/anonymous labels separately?
     const num = this.chunk.data.length + arglen + 1;
-    const meta: Exprs.Meta = {rel: true, chunk: this.chunks.length - 1};
+    const meta: Exprs.Meta = {rel: true, chunk: this._chunkIndex};
     if (this._chunk?.org) meta.org = this._chunk.org;
     const nextPc = {op: 'num', num, meta};
     // Mark the subtraction as a branch for signed range checking
@@ -1693,14 +1704,14 @@ export class Assembler {
     }
     this.flushPendingAlign();
     this._org = addr;
-    this._chunk = undefined;
+    this.clearChunk();
     this._name = name;
   }
 
   reloc(name?: string) {
     this.flushPendingAlign();
     this._org = undefined;
-    this._chunk = undefined;
+    this.clearChunk();
     this._name = name;
   }
 
@@ -1737,7 +1748,7 @@ export class Assembler {
         this.segmentData.set(name, mod.Segment.merge(data || {name}, s));
       }
     }
-    this._chunk = undefined;
+    this.clearChunk();
     this._name = undefined;
     // `.org` is per-segment, so the previous segment's address doesn't carry
     // over. Pick up this segment's own PC, or `.reloc` if it never had one.
@@ -1895,7 +1906,7 @@ export class Assembler {
     if (this._pendingAlign == null) this._alignChunk = this._chunk;
     this._pendingAlign = Math.max(this._pendingAlign ?? 1, boundary);
     this._pendingFill = fill ?? this._pendingFill;
-    this._chunk = undefined;
+    this.clearChunk();
   }
 
   /**
@@ -2122,7 +2133,7 @@ export class Assembler {
     if (this._chunk) {
       this._org += this._chunk.data.length;
     }
-    this._chunk = undefined;
+    this.clearChunk();
     // Ensure a segment object exists.
     const name = segments[0];
     let s = this.segmentData.get(name);
@@ -2275,7 +2286,8 @@ export class Assembler {
   pushSeg(...segments: Array<string|mod.Segment>) {
     this.preventInvalidAnonSegChange('.pushseg');
     this.flushPendingAlign();
-    this.segmentStack.push([this.segments, this._chunk, this._org]);
+    this.segmentStack.push(
+        [this.segments, this._chunk, this._chunkIndex, this._org]);
     // If pushseg was called without any segments, just keep the current segment
     if (segments.length) {
       this.segment(...segments);
@@ -2288,7 +2300,8 @@ export class Assembler {
     this.flushPendingAlign();
     this.saveSegmentOrg();
     let org: number|undefined;
-    [this.segments, this._chunk, org] = this.segmentStack.pop()!;
+    [this.segments, this._chunk, this._chunkIndex, org] =
+        this.segmentStack.pop()!;
     this._org = this._chunk?.org ?? org;
   }
 
