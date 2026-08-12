@@ -516,13 +516,25 @@ export class Assembler {
 
   /**
    * The value is needed by the preprocessor to determine if something
-   * is chunk relative. `* - Label` is a valid way to get a size of some code,
-   * but if you use the normal scope resolve, it would try to get a numeric
-   * value when we want to keep it as an expression for computing the diff.
+   * is chunk relative. `* - Label` or `Label - Label` is valid,
+   * so we need to handle these cases. Resolve the label here, and then
+   * if we do math on it later, we can substitute the label again.
    */
   definedValue(sym: string): Expr|undefined {
     if (sym === '*') return this.pc();
-    return this.walkSymbolTree(sym);
+    const expr = this.walkSymbolTree(sym);
+    // A forward reference is allowed at the spot a label is defined, but if you
+    // try to resolve it, then the forward reference needs to be resolvable at this stage.
+    // So we need to call `resolve` here to get a numeric value for a label if possible.
+    // EX:
+    // base = MyLabel   ; Okay (forward ref)
+    // test1 = base + 2 ; still okay
+    // test2 = base + 3
+    // test3 = test2 - test1 ; still still okay since its not used yet
+    // ; .if test3 ; not okay since MyLabel is unresolved
+    // MyLabel:
+    // .if test3  ; okay since MyLabel is resolved.
+    return expr && this.resolve(expr);
   }
 
   constantSymbol(sym: string): boolean {
@@ -641,6 +653,7 @@ export class Assembler {
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
       }
+      e = this.substituteResolvedRef(e);
       return Exprs.evaluate(rec(e));
     });
     if (this.opts.refExtractor?.ref && out !== expr) {
@@ -648,6 +661,24 @@ export class Assembler {
       this.exprMap.set(out, orig);
     }
     return out;
+  }
+
+  /**
+   * Walk through a sym ref tree to find the actual value if its available.
+   * `seen` is making sure we don't get stuck in a loop for self referential
+   * sym refs. We'll eventually run out of refs to check and either return
+   * the underlying value or the deepest sym ref we found so far.
+   */
+  private substituteResolvedRef(expr: Expr): Expr {
+    const seen = new Set<number>();
+    while (expr.op === 'sym' && expr.sym == null && expr.num != null &&
+           !seen.has(expr.num)) {
+      seen.add(expr.num);
+      const value = this.symbols[expr.num]?.expr;
+      if (!value) break;
+      expr = value;
+    }
+    return expr;
   }
 
   private defineSizeOfSymbol(scope: Scope, name: string, size: Expr|number) {
