@@ -2,12 +2,12 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import {findSymbolAt, symbolsForFileInUnit, __internals} from '../features/navigation.ts';
+import {findSymbolAt, symbolsForFileInProject, __internals} from '../features/navigation.ts';
 import {Analyzer, type AnalysisResult} from '../analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {pathToUri} from '../convert.ts';
 
-/** Run the analyzer and return the (single) unit result. */
+/** Run the analyzer and return the (single) project result. */
 async function analyzeOne(fs: MemFs, path: string, text: string): Promise<AnalysisResult> {
   const analyzer = new Analyzer({
     workspaceRoot: '/proj', debounceMs: 0,
@@ -27,19 +27,19 @@ describe('navigation', () => {
       //         column:   0    5
       const text = 'main:\n  lda main\n  rts\n';
       const result = await analyzeOne(fs, '/proj/main.s', text);
-      const unit = [...result.units.values()][0];
+      const analysis = [...result.projects.values()][0];
       // `main` is defined at line 1 col 0 (1-based). SourceInfo range:
       // start line=0 (0-based), character=0, end character=4.
       // The reference is on line 2 (`  lda main`); click there should still
       // find the symbol via its ref range.
-      const sym = findSymbolAt(unit, pathToUri('/proj/main.s'), 1, 7);
+      const sym = findSymbolAt(analysis, pathToUri('/proj/main.s'), 1, 7);
       expect(sym).toBeDefined();
       expect(sym!.def).toBeDefined();
     });
   });
 
   // Finding #6: resolveIncludeTarget unconditionally returned undefined after
-  // `void file; void unit; void p;`, making the `.include` branch of
+  // `void file; void analysis; void p;`, making the `.include` branch of
   // onDefinition unreachable while the module header claimed it worked.
   describe('resolveIncludeTarget', () => {
     /** Analyze a project with a real `.include` and return analyzer + result. */
@@ -48,7 +48,7 @@ describe('navigation', () => {
       const main = '.include "header.inc"\nmain:\n  rts\n';
       const header = 'HEADER_MAGIC = 1\n';
       fs.add('/proj/js65.json', JSON.stringify({
-        units: [{name: 'main', sources: ['src/main.s'], includePaths: ['inc']}],
+        projects: [{name: 'main', sources: ['src/main.s'], includePaths: ['inc']}],
       }));
       fs.add('/proj/src/main.s', main);
       fs.add('/proj/inc/header.inc', header);
@@ -67,8 +67,8 @@ describe('navigation', () => {
 
     it('resolves an .include string to the file the assemble actually opened', async () => {
       const {analyzer, main} = await withInclude();
-      const unit = analyzer.getResult()!.units.get('main')!;
-      const target = __internals.resolveIncludeTarget(unit, {
+      const analysis = analyzer.getResult()!.projects.get('main')!;
+      const target = __internals.resolveIncludeTarget(analysis, {
         textDocument: {uri: pathToUri('/proj/src/main.s')},
         position: {line: 0, character: 12}, // inside "header.inc"
       } as any, main);
@@ -83,7 +83,7 @@ describe('navigation', () => {
       const main = '; a comment\n\n.include "header.inc"\nmain:\n  rts\n';
       const header = 'HEADER_MAGIC = 1\n';
       fs.add('/proj/js65.json', JSON.stringify({
-        units: [{name: 'main', sources: ['src/main.s'], includePaths: ['inc']}],
+        projects: [{name: 'main', sources: ['src/main.s'], includePaths: ['inc']}],
       }));
       fs.add('/proj/src/main.s', main);
       fs.add('/proj/inc/header.inc', header);
@@ -96,8 +96,8 @@ describe('navigation', () => {
       if (proj) analyzer.setProject(proj);
       analyzer.open(pathToUri('/proj/src/main.s'), main, 1);
       await analyzer.settled();
-      const unit = analyzer.getResult()!.units.get('main')!;
-      const target = __internals.resolveIncludeTarget(unit, {
+      const analysis = analyzer.getResult()!.projects.get('main')!;
+      const target = __internals.resolveIncludeTarget(analysis, {
         textDocument: {uri: pathToUri('/proj/src/main.s')},
         position: {line: 2, character: 12}, // inside "header.inc" on line 2
       } as any, main);
@@ -106,8 +106,8 @@ describe('navigation', () => {
 
     it('returns undefined when the cursor is off the string literal', async () => {
       const {analyzer, main} = await withInclude();
-      const unit = analyzer.getResult()!.units.get('main')!;
-      const target = __internals.resolveIncludeTarget(unit, {
+      const analysis = analyzer.getResult()!.projects.get('main')!;
+      const target = __internals.resolveIncludeTarget(analysis, {
         textDocument: {uri: pathToUri('/proj/src/main.s')},
         position: {line: 0, character: 3}, // on `.include` itself
       } as any, main);
@@ -116,8 +116,8 @@ describe('navigation', () => {
 
     it('returns undefined on a line that is not an include', async () => {
       const {analyzer, main} = await withInclude();
-      const unit = analyzer.getResult()!.units.get('main')!;
-      const target = __internals.resolveIncludeTarget(unit, {
+      const analysis = analyzer.getResult()!.projects.get('main')!;
+      const target = __internals.resolveIncludeTarget(analysis, {
         textDocument: {uri: pathToUri('/proj/src/main.s')},
         position: {line: 1, character: 1},
       } as any, main);
@@ -126,8 +126,8 @@ describe('navigation', () => {
 
     it('returns undefined without buffer text', async () => {
       const {analyzer} = await withInclude();
-      const unit = analyzer.getResult()!.units.get('main')!;
-      const target = __internals.resolveIncludeTarget(unit, {
+      const analysis = analyzer.getResult()!.projects.get('main')!;
+      const target = __internals.resolveIncludeTarget(analysis, {
         textDocument: {uri: pathToUri('/proj/src/main.s')},
         position: {line: 0, character: 12},
       } as any, undefined);
@@ -135,7 +135,7 @@ describe('navigation', () => {
     });
   });
 
-  describe('symbolsForFileInUnit', () => {
+  describe('symbolsForFileInProject', () => {
     it('emits a DocumentSymbol for a .proc block', async () => {
       const fs = new MemFs();
       const text = [
@@ -145,8 +145,8 @@ describe('navigation', () => {
         '.endproc',
       ].join('\n') + '\n';
       const result = await analyzeOne(fs, '/proj/main.s', text);
-      const unit = [...result.units.values()][0];
-      const syms = symbolsForFileInUnit(unit, '/proj/main.s');
+      const analysis = [...result.projects.values()][0];
+      const syms = symbolsForFileInProject(analysis, '/proj/main.s');
       expect(syms.length).toBeGreaterThan(0);
       const proc = syms.find(s => s.name === 'MyProc');
       expect(proc).toBeDefined();

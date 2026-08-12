@@ -18,26 +18,26 @@ import {joinDir} from '../../src/util.ts';
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
 import {
-  type CompilationUnit,
-  type Project,
+  type Js65Project,
+  type Js65Config,
   findProjectFile,
   loadProject,
-  standaloneUnit,
+  standaloneProject,
   toPosix,
-  unitsOwningFile,
+  projectsOwningFile,
 } from './project.ts';
 import {messageToDiagnostic, uriToPath, pathToUri} from './convert.ts';
 
-/** One cached assemble run for a single compilation unit. */
-export interface UnitAnalysis {
-  readonly unit: CompilationUnit;
+/** One cached assemble run for a single project. */
+export interface ProjectAnalysis {
+  readonly project: Js65Project;
   /** Symbol index the LSP navigates against, populated by the assembler. */
   readonly index: SymbolIndex;
   /** Macro/define table the run built for hover. */
   readonly macros: MacroIndex;
   /** Every source/.include/.incbin path the run touched used for invalidation. */
   readonly touchedFiles: ReadonlySet<string>;
-  /** True if the unit was assembled in standalone (no `js65.json`) mode. */
+  /** True if the project was assembled in standalone (no `js65.json`) mode. */
   readonly standalone: boolean;
   /**
    * Modules the assemble produced, retained so `link()` can run on save
@@ -54,8 +54,8 @@ export interface UnitAnalysis {
 export interface AnalysisResult {
   /** URI -> diagnostics for that file. */
   readonly diagnostics: ReadonlyMap<string, Diagnostic[]>;
-  /** Per-unit results, keyed by unit name. */
-  readonly units: ReadonlyMap<string, UnitAnalysis>;
+  /** Per-project results, keyed by project name. */
+  readonly projects: ReadonlyMap<string, ProjectAnalysis>;
   /** Source URIs that contributed diagnostics this run, for empty-publish logic. */
   readonly touchedUris: ReadonlySet<string>;
 }
@@ -70,7 +70,7 @@ export interface AnalyzerOptions {
   fsImplPromises?: typeof fsp;
   /** Sink for analyzer log output. */
   onLog?: (msg: string) => void;
-  /** Cap on messages a single unit's assemble may report. */
+  /** Cap on messages a single project's assemble may report. */
   errorLimit?: number;
 }
 
@@ -94,7 +94,7 @@ export class Analyzer {
   /** Open documents keyed by their POSIX-normalized path. */
   private readonly openDocs = new Map<string, {version?: number, text: string}>();
   /** Most recent project, discovered lazily and cached per workspace root. */
-  private project: Project | undefined;
+  private project: Js65Config | undefined;
   /** Last analysis result, used by feature modules for navigation. */
   private lastResult: AnalysisResult | undefined;
   /** Pending debounce + cancellation state. */
@@ -115,12 +115,12 @@ export class Analyzer {
   setWorkspaceRoot(root: string): void { this.opts.workspaceRoot = root; }
 
   /** Replace the current project such as when `js65.json` changes. */
-  setProject(project: Project | undefined): void {
+  setProject(project: Js65Config | undefined): void {
     this.project = project;
     this.scheduleAll();
   }
 
-  discoverProject(absFile: string): Project | undefined {
+  discoverProject(absFile: string): Js65Config | undefined {
     const projectFile = findProjectFile(absFile, this.opts.fsImpl ?? fs);
     if (!projectFile) return undefined;
     try {
@@ -193,11 +193,11 @@ export class Analyzer {
   }
 
   /**
-   * Look up the analysis for a unit by name. Convenience for navigation
-   * features that know which unit owns the cursor's file.
+   * Look up the analysis for a project by name. Convenience for navigation
+   * features that know which project owns the cursor's file.
    */
-  getUnit(name: string): UnitAnalysis | undefined {
-    return this.lastResult?.units.get(name);
+  getProject(name: string): ProjectAnalysis | undefined {
+    return this.lastResult?.projects.get(name);
   }
 
   /**
@@ -211,13 +211,13 @@ export class Analyzer {
     return this.openDocs.get(toPosix(p))?.text;
   }
 
-  /** All known units from the current project, in declaration order. */
-  get units(): readonly CompilationUnit[] {
-    return this.project?.units ?? [];
+  /** All known projects from the current config, in declaration order. */
+  get projects(): readonly Js65Project[] {
+    return this.project?.projects ?? [];
   }
 
   /**
-   * Build a virtual filesystem reader for a unit. Open documents win over
+   * Build a virtual filesystem reader for a project. Open documents win over
    * disk; both are normalized to the POSIX paths the assembler expects. Every
    * successful read is tracked into `touched` for include-graph invalidation.
    */
@@ -267,7 +267,7 @@ export class Analyzer {
     if (this.pending) this.pending.signal.aborted = true;
     if (this.inFlight) this.inFlight.aborted = true;
     // Union rather than replace: editing file A then file B inside one debounce
-    // window must rebuild both units, not just B's.
+    // window must rebuild both projects, not just B's.
     const paths = new Set<string>([
       ...(this.pending?.paths ?? []),
       ...changedPaths.map(toPosix),
@@ -316,71 +316,71 @@ export class Analyzer {
   }
 
   /**
-   * Assemble every unit that owns (or might include) one of the changed
-   * paths. Aggregates diagnostics + per-unit results into a single
+   * Assemble every project that owns (or might include) one of the changed
+   * paths. Aggregates diagnostics + per-project results into a single
    * `AnalysisResult`, and triggers `onDiagnostics`.
    */
   private async run(changedPaths: ReadonlySet<string>, token: CancelToken): Promise<void> {
     if (token.aborted) return;
-    const project = this.project;
-    const unitsToRun = this.pickUnitsToRun(project, changedPaths);
+    const config = this.project;
+    const toRun = this.pickProjectsToRun(config, changedPaths);
     const diagnostics = new Map<string, Diagnostic[]>();
-    const unitResults = new Map<string, UnitAnalysis>();
+    const projectResults = new Map<string, ProjectAnalysis>();
     const touchedUris = new Set<string>();
 
     const uriOf = (p: string) => pathToUri(p);
 
-    for (const {unit, standalone} of unitsToRun) {
+    for (const {project, standalone} of toRun) {
       if (token.aborted) return;
-      const analysis = await this.analyzeUnit(unit, standalone, token, diagnostics,
-                                              touchedUris, uriOf);
-      unitResults.set(unit.name, analysis);
+      const analysis = await this.analyzeProject(project, standalone, token, diagnostics,
+                                                 touchedUris, uriOf);
+      projectResults.set(project.name, analysis);
     }
 
     // Check any opened files outside of the current project. If they are open and not
     // in the project, then compile them as standalone, in order to get *some* analysis
     // and also check to see if this includes something we have seen before
-    if (project) {
+    if (config) {
       for (const p of changedPaths) {
         if (token.aborted) return;
         if (!this.openDocs.has(p)) continue; // closed files have no editor to publish to
-        if (isCoveredBy(unitResults, p)) continue;
-        const unit = standaloneUnit(p, this.opts.workspaceRoot);
-        if (unitResults.has(unit.name)) continue;
-        const analysis = await this.analyzeUnit(unit, true, token, diagnostics,
-                                                touchedUris, uriOf);
-        unitResults.set(unit.name, analysis);
+        if (isCoveredBy(projectResults, p)) continue;
+        const project = standaloneProject(p, this.opts.workspaceRoot);
+        if (projectResults.has(project.name)) continue;
+        const analysis = await this.analyzeProject(project, true, token, diagnostics,
+                                                   touchedUris, uriOf);
+        projectResults.set(project.name, analysis);
       }
     }
 
     // A newer pass superseded this one while it was awaiting the assembler.
     if (token.aborted) return;
 
-    const result: AnalysisResult = {diagnostics, units: unitResults, touchedUris};
+    const result: AnalysisResult = {diagnostics, projects: projectResults, touchedUris};
     this.lastResult = result;
     if (this.inFlight === token) this.inFlight = undefined;
     this.onDiagnostics?.(result);
     this.notifySettled();
   }
 
-  /** Assemble one unit and bucket its messages. */
-  private async analyzeUnit(
-      unit: CompilationUnit,
+  /** Assemble one project and bucket its messages. */
+  private async analyzeProject(
+      project: Js65Project,
       standalone: boolean,
       token: CancelToken,
       diagnostics: Map<string, Diagnostic[]>,
       touchedUris: Set<string>,
-      uriOf: (p: string) => string): Promise<UnitAnalysis> {
+      uriOf: (p: string) => string): Promise<ProjectAnalysis> {
     const touched = new Set<string>();
     // Seed with the entry sources so the include graph has roots even if
     // the assembler bails before reading anything.
-    for (const s of unit.sources) touched.add(toPosix(s));
+    for (const s of project.sources) touched.add(toPosix(s));
 
     const index = new SymbolIndex();
     const macros = new MacroIndex();
     const asmOpts: AssemblerOptions = {
-      includePaths: unit.includePaths,
-      binIncludePaths: unit.binIncludePaths,
+      includePaths: project.includePaths,
+      binIncludePaths: project.binIncludePaths,
       lineContinuations: true,
       generateDebugInfo: true,
       collectReferences: true,
@@ -388,12 +388,12 @@ export class Analyzer {
       macroIndex: macros,
       errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
       // Workspace-wide, so a standalone file in a project folder lints the same
-      // way the units around it do.
+      // way the projects around it do.
       lint: this.project?.lint,
     };
     const callbacks = this.makeCallbacks(touched);
 
-    // Any file in the unit may be missing (a typo'd path in js65.json, or a
+    // Any file in the project may be missing (a typo'd path in js65.json, or a
     // source deleted while the editor is open). Reading them inside the try
     // turns that into a diagnostic on a real document rather than a rejection
     // that escapes the pass.
@@ -401,7 +401,7 @@ export class Analyzer {
     let modules: readonly Module[] = [];
     try {
       const inputs: AssemblyInput[] = [];
-      for (const s of unit.sources) {
+      for (const s of project.sources) {
         const posix = toPosix(s);
         inputs.push({
           type: 'source',
@@ -415,11 +415,11 @@ export class Analyzer {
       messages = [...result.messages];
       modules = result.modules;
     } catch (err) {
-      messages = [internalErrorMessage(err, unit)];
+      messages = [internalErrorMessage(err, project)];
     }
 
     if (standalone) {
-      // A file with no owning unit gets noise from undefined symbols that
+      // A file with no owning project gets noise from undefined symbols that
       // a real link would have resolved. Downgrade per the plan.
       messages = downgradeUndefinedForStandalone(messages);
     }
@@ -428,18 +428,18 @@ export class Analyzer {
     // editor: `bucketMessages` drops unlocated messages, so without this an
     // error like a failed `.include` search publishes nothing at all and the
     // file reads as clean.
-    bucketMessages(messages.map(m => anchorToUnit(m, unit)),
+    bucketMessages(messages.map(m => anchorToProject(m, project)),
                    diagnostics, touchedUris, uriOf);
 
-    return {unit, index, macros, touchedFiles: touched, standalone, modules};
+    return {project, index, macros, touchedFiles: touched, standalone, modules};
   }
 
   /**
-   * Re-link the units owning a saved file and merge the linker's diagnostics
+   * Re-link the projects owning a saved file and merge the linker's diagnostics
    * (segment overflow, free-space problems) into the published set. Assembling
    * already happened so this reuses the modules that pass produced.
    *
-   * Skipped for units with no memory layout to place chunks into
+   * Skipped for projects with no memory layout to place chunks into
    */
   async linkSaved(uri: string): Promise<AnalysisResult | undefined> {
     const result = this.lastResult;
@@ -450,50 +450,50 @@ export class Analyzer {
     const touchedUris = new Set(result.touchedUris);
     let linked = false;
 
-    for (const unit of result.units.values()) {
-      if (!unit.touchedFiles.has(file)) continue;
-      if (!unit.modules.length) continue;
-      if (!hasMemoryLayout(unit)) continue;
+    for (const analysis of result.projects.values()) {
+      if (!analysis.touchedFiles.has(file)) continue;
+      if (!analysis.modules.length) continue;
+      if (!hasMemoryLayout(analysis)) continue;
       let messages: AssemblerMessage[];
       try {
-        const out = link([...unit.modules], {
-          target: unit.unit.target,
-          linkerConfig: unit.unit.linkerConfig,
-          linkerConfigName: unit.unit.linkerConfigName,
+        const out = link([...analysis.modules], {
+          target: analysis.project.target,
+          linkerConfig: analysis.project.linkerConfig,
+          linkerConfigName: analysis.project.linkerConfigPath,
         });
         messages = out.messages;
       } catch (err) {
-        messages = [internalErrorMessage(err, unit.unit)];
+        messages = [internalErrorMessage(err, analysis.project)];
       }
-      // anchorToUnit is used here in case the error message doesn't have a source location
+      // anchorToProject is used here in case the error message doesn't have a source location
       // which can happen right now with things like ld65 linker cfg files.
-      bucketMessages(messages.map(m => anchorToUnit(m, unit.unit)),
+      bucketMessages(messages.map(m => anchorToProject(m, analysis.project)),
                      diagnostics, touchedUris, p => pathToUri(p));
       linked = true;
     }
     if (!linked) return undefined;
 
-    const merged: AnalysisResult = {diagnostics, units: result.units, touchedUris};
+    const merged: AnalysisResult = {diagnostics, projects: result.projects, touchedUris};
     this.lastResult = merged;
     this.onDiagnostics?.(merged);
     return merged;
   }
 
   /**
-   * Decide which units need to reassemble given a set of changed paths.
+   * Decide which projects need to reassemble given a set of changed paths.
    *
-   * - If we have a project, run every unit that directly owns the path, plus
-   *   every unit whose previous run touched it (include-graph invalidation).
-   * - If a path is unknown to any unit (orphan `.inc`), conservatively rerun
-   *   all units until per-unit include graphs land.
-   * - Without a project, every changed file is its own standalone unit.
+   * - If we have a config, run every project that directly owns the path, plus
+   *   every project whose previous run touched it (include-graph invalidation).
+   * - If a path is unknown to any project (orphan `.inc`), conservatively rerun
+   *   all projects until per-project include graphs land.
+   * - Without a config, every changed file is its own standalone project.
    */
-  private pickUnitsToRun(project: Project | undefined, changed: ReadonlySet<string>):
-      Array<{unit: CompilationUnit, standalone: boolean}> {
-    const out: Array<{unit: CompilationUnit, standalone: boolean}> = [];
-    if (!project) {
+  private pickProjectsToRun(config: Js65Config | undefined, changed: ReadonlySet<string>):
+      Array<{project: Js65Project, standalone: boolean}> {
+    const out: Array<{project: Js65Project, standalone: boolean}> = [];
+    if (!config) {
       for (const p of changed) {
-        out.push({unit: standaloneUnit(p, this.opts.workspaceRoot), standalone: true});
+        out.push({project: standaloneProject(p, this.opts.workspaceRoot), standalone: true});
       }
       return out;
     }
@@ -501,42 +501,42 @@ export class Analyzer {
     const anyOrphan = new Set<string>();
     for (const p of changed) {
       const posix = toPosix(p);
-      const owners = unitsOwningFile(project, posix);
+      const owners = projectsOwningFile(config, posix);
       if (owners.length) {
         for (const u of owners) {
           if (seen.has(u.name)) continue;
           seen.add(u.name);
-          out.push({unit: u, standalone: false});
+          out.push({project: u, standalone: false});
         }
       } else {
         anyOrphan.add(posix);
       }
     }
     // If we've already run at least once, consult the include graph for which
-    // units actually include each orphan path.
+    // projects actually include each orphan path.
     if (anyOrphan.size && this.lastResult) {
-      for (const unit of this.lastResult.units.values()) {
-        if (seen.has(unit.unit.name)) continue;
-        if ([...anyOrphan].some(p => unit.touchedFiles.has(p))) {
-          seen.add(unit.unit.name);
-          out.push({unit: unit.unit, standalone: unit.standalone});
+      for (const analysis of this.lastResult.projects.values()) {
+        if (seen.has(analysis.project.name)) continue;
+        if ([...anyOrphan].some(p => analysis.touchedFiles.has(p))) {
+          seen.add(analysis.project.name);
+          out.push({project: analysis.project, standalone: analysis.standalone});
         }
       }
     }
-    // No prior result + orphans + project present: rebuild everything, since
-    // we don't yet know which units include what.
+    // No prior result + orphans + config present: rebuild everything, since
+    // we don't yet know which projects include what.
     if (anyOrphan.size && !this.lastResult) {
-      for (const u of project.units) {
+      for (const u of config.projects) {
         if (seen.has(u.name)) continue;
         seen.add(u.name);
-        out.push({unit: u, standalone: false});
+        out.push({project: u, standalone: false});
       }
     }
     // If we got nothing (e.g. changed paths are all closed), still rebuild any
-    // units we previously knew about so cleared diagnostics propagate.
+    // projects we previously knew about so cleared diagnostics propagate.
     if (!out.length && this.lastResult) {
-      for (const unit of this.lastResult.units.values()) {
-        out.push({unit: unit.unit, standalone: unit.standalone});
+      for (const analysis of this.lastResult.projects.values()) {
+        out.push({project: analysis.project, standalone: analysis.standalone});
       }
     }
     return out;
@@ -544,28 +544,28 @@ export class Analyzer {
 }
 
 /**
- * Per-unit message cap. Far above the CLI's 30 so a real file's diagnostics are
+ * Per-project message cap. Far above the CLI's 30 so a real file's diagnostics are
  * never truncated, but bounded so that a pathological buffer can't build an
  * unbounded message list on every keystroke.
  */
 const DEFAULT_LSP_ERROR_LIMIT = 1000;
 
-/** True if any completed unit analysis actually read this file. */
-function isCoveredBy(units: ReadonlyMap<string, UnitAnalysis>, file: string): boolean {
-  for (const unit of units.values()) {
-    if (unit.touchedFiles.has(file)) return true;
+/** True if any completed project analysis actually read this file. */
+function isCoveredBy(projects: ReadonlyMap<string, ProjectAnalysis>, file: string): boolean {
+  for (const analysis of projects.values()) {
+    if (analysis.touchedFiles.has(file)) return true;
   }
   return false;
 }
 
 /**
  * Build the fallback diagnostic for an error that escaped the assemble. It gets
- * a `source` pointing at the unit's first entry file: a message with no source
+ * a `source` pointing at the project's first entry file: a message with no source
  * is dropped by the bucketing loop, which would clear every existing squiggle
  * and report nothing at all.
  */
-function internalErrorMessage(err: unknown, unit: CompilationUnit): AssemblerMessage {
-  const file = unit.sources[0] ? toPosix(unit.sources[0]) : undefined;
+function internalErrorMessage(err: unknown, project: Js65Project): AssemblerMessage {
+  const file = project.sources[0] ? toPosix(project.sources[0]) : undefined;
   const source: SourceInfo | undefined =
       file ? {file, line: 1, column: 0} : undefined;
   const msg: AssemblerMessage = {
@@ -577,20 +577,20 @@ function internalErrorMessage(err: unknown, unit: CompilationUnit): AssemblerMes
 }
 
 /**
- * Give a message with no location one pointing at the unit's entry file, so it
+ * Give a message with no location one pointing at the project's entry file, so it
  * reaches a document the user can actually see. Messages that already have a
  * source are returned untouched.
  */
-function anchorToUnit(msg: AssemblerMessage, unit: CompilationUnit): AssemblerMessage {
+function anchorToProject(msg: AssemblerMessage, project: Js65Project): AssemblerMessage {
   if (msg.source) return msg;
-  const file = unit.sources[0] ? toPosix(unit.sources[0]) : undefined;
+  const file = project.sources[0] ? toPosix(project.sources[0]) : undefined;
   if (!file) return msg;
   return {...msg, source: {file, line: 1, column: 0}};
 }
 
 /**
  * Bucket messages by URI, deduping on (file, line, column, message). A header
- * included by two sources in the same unit otherwise reports every diagnostic
+ * included by two sources in the same project otherwise reports every diagnostic
  * in it twice.
  */
 function bucketMessages(
@@ -614,7 +614,7 @@ function bucketMessages(
 }
 
 /**
- * Whether a unit has enough of a memory layout for `link()` to place its
+ * Whether a project has enough of a memory layout for `link()` to place its
  * chunks. Three ways to get one:
  *
  *  - an ld65 linker config, or
@@ -634,9 +634,9 @@ function bucketMessages(
  * to rule out is ca65's predeclared `ZEROPAGE`, which `.zeropage` registers as
  * `{name, addressing: 1}` with no placement of any kind.
  */
-function hasMemoryLayout(unit: UnitAnalysis): boolean {
-  if (unit.unit.linkerConfig || unit.unit.target) return true;
-  return unit.modules.some(m => m.segments?.some(
+function hasMemoryLayout(analysis: ProjectAnalysis): boolean {
+  if (analysis.project.linkerConfig || analysis.project.target) return true;
+  return analysis.modules.some(m => m.segments?.some(
       s => s.size !== undefined || s.memory !== undefined ||
            s.offset !== undefined || s.out !== undefined ||
            s.free?.length));

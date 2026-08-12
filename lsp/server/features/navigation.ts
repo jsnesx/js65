@@ -18,7 +18,7 @@ import type {
 } from 'vscode-languageserver-protocol';
 import {SymbolKind} from 'vscode-languageserver-protocol';
 
-import type {Analyzer, UnitAnalysis} from '../analyzer.ts';
+import type {Analyzer, ProjectAnalysis} from '../analyzer.ts';
 import type {Symbol} from '../../../src/assembler.ts';
 import type {Token} from '../../../src/token.ts';
 import {Tokenizer} from '../../../src/tokenizer.ts';
@@ -32,13 +32,13 @@ export function registerNavigationFeatures(connection: Connection, analyzer: Ana
   // result against the document version and never ask again.
   connection.onDefinition(async (p): Promise<Definition> => {
     await analyzer.settled();
-    const unit = unitForDoc(analyzer, p.textDocument.uri);
-    if (!unit) return [];
+    const analysis = projectForDoc(analyzer, p.textDocument.uri);
+    if (!analysis) return [];
     const pos = p.position;
     // Try `.include`/`.incbin` literal first since it has a different resolution
     // path than ordinary symbols.
     const includeTarget =
-        resolveIncludeTarget(unit, p, analyzer.peekDoc(p.textDocument.uri));
+        resolveIncludeTarget(analysis, p, analyzer.peekDoc(p.textDocument.uri));
     if (includeTarget) {
       const loc: Location = {
         uri: pathToUri(includeTarget),
@@ -46,16 +46,16 @@ export function registerNavigationFeatures(connection: Connection, analyzer: Ana
       };
       return loc;
     }
-    const sym = findSymbolAt(unit, p.textDocument.uri, pos.line, pos.character);
+    const sym = findSymbolAt(analysis, p.textDocument.uri, pos.line, pos.character);
     if (!sym?.def) return [];
     return sourceInfoToLocation(sym.def, pathToUri);
   });
 
   connection.onReferences(async (p): Promise<Location[]> => {
     await analyzer.settled();
-    const unit = unitForDoc(analyzer, p.textDocument.uri);
-    if (!unit) return [];
-    const sym = findSymbolAt(unit, p.textDocument.uri, p.position.line, p.position.character);
+    const analysis = projectForDoc(analyzer, p.textDocument.uri);
+    if (!analysis) return [];
+    const sym = findSymbolAt(analysis, p.textDocument.uri, p.position.line, p.position.character);
     if (!sym) return [];
     // The definition site is recorded in both `def` and `refs`.
     // `assignSymbol` resolves the name it is defining, which counts as a reference.
@@ -82,27 +82,27 @@ export function registerNavigationFeatures(connection: Connection, analyzer: Ana
 
   connection.onDocumentSymbol(async (p): Promise<DocumentSymbol[]> => {
     await analyzer.settled();
-    const unit = unitForDoc(analyzer, p.textDocument.uri);
-    if (!unit) return [];
+    const analysis = projectForDoc(analyzer, p.textDocument.uri);
+    if (!analysis) return [];
     const file = toPosix(uriToPath(p.textDocument.uri));
-    return symbolsForFileInUnit(unit, file);
+    return symbolsForFileInProject(analysis, file);
   });
 
   connection.onWorkspaceSymbol(async (p): Promise<SymbolInformation[]> => {
     await analyzer.settled();
     const out: SymbolInformation[] = [];
     const query = p.query.toLowerCase();
-    for (const unit of analyzer.getResult()?.units.values() ?? []) {
-      for (const scope of unit.index.walk()) {
+    for (const analysis of analyzer.getResult()?.projects.values() ?? []) {
+      for (const scope of analysis.index.walk()) {
         for (const [name, sym] of scope.symbols) {
           if (query && !name.toLowerCase().includes(query)) continue;
           const def = sym.def;
           if (!def) continue;
           out.push({
             name,
-            // A symbol may exist in one unit and not another because of
+            // A symbol may exist in one project and not another because of
             // conditional assembly; tag the container so callers see which.
-            containerName: `${unit.unit.name}::${scope.qualifiedName || '<root>'}`,
+            containerName: `${analysis.project.name}::${scope.qualifiedName || '<root>'}`,
             kind: SymbolKind.Variable,
             location: sourceInfoToLocation(def, pathToUri),
           });
@@ -120,19 +120,19 @@ function locationKey(loc: Location): string {
 }
 
 /**
- * Find the unit the LSP request is targeting. If the URI is part of a
- * multi-unit workspace, prefer the unit whose touched files include it; if
+ * Find the project the LSP request is targeting. If the URI is part of a
+ * multi-project workspace, prefer the project whose touched files include it; if
  * none, fall back to the first available so editing an unrelated file still
- * works (e.g. a header file included by several units).
+ * works (e.g. a header file included by several projects).
  */
-function unitForDoc(analyzer: Analyzer, uri: string): UnitAnalysis | undefined {
+function projectForDoc(analyzer: Analyzer, uri: string): ProjectAnalysis | undefined {
   const result = analyzer.getResult();
   if (!result) return undefined;
   const file = toPosix(uriToPath(uri));
-  let fallback: UnitAnalysis | undefined;
-  for (const unit of result.units.values()) {
-    if (!fallback) fallback = unit;
-    if (unit.touchedFiles.has(file)) return unit;
+  let fallback: ProjectAnalysis | undefined;
+  for (const analysis of result.projects.values()) {
+    if (!fallback) fallback = analysis;
+    if (analysis.touchedFiles.has(file)) return analysis;
   }
   return fallback;
 }
@@ -147,11 +147,11 @@ function unitForDoc(analyzer: Analyzer, uri: string): UnitAnalysis | undefined {
  * one identifier shadows another through scope), the innermost scope wins
  * because the index walks depth-first.
  */
-function findSymbolAt(unit: UnitAnalysis, uri: string, line: number, character: number):
+function findSymbolAt(analysis: ProjectAnalysis, uri: string, line: number, character: number):
     Symbol | undefined {
   const file = toPosix(uriToPath(uri));
   const pos = {line, character};
-  for (const scope of unit.index.walk()) {
+  for (const scope of analysis.index.walk()) {
     for (const sym of scope.symbols.values()) {
       if (sym.def && sym.def.file === file &&
           rangeContains(sourceInfoToRange(sym.def), pos)) return sym;
@@ -166,12 +166,12 @@ function findSymbolAt(unit: UnitAnalysis, uri: string, line: number, character: 
 }
 
 /**
- * Build a `DocumentSymbol` tree for one file from the unit's index. Only the
+ * Build a `DocumentSymbol` tree for one file from the project's index. Only the
  * scopes that started in this file (and their direct symbols) are emitted.
  */
-function symbolsForFileInUnit(unit: UnitAnalysis, file: string): DocumentSymbol[] {
+function symbolsForFileInProject(analysis: ProjectAnalysis, file: string): DocumentSymbol[] {
   const out: DocumentSymbol[] = [];
-  for (const scope of unit.index.walk()) {
+  for (const scope of analysis.index.walk()) {
     // Only show scopes whose opening directive lives in this file. Anonymous
     // scopes and scopes from other files (via `.include`) are skipped since they
     // belong in their own document's outline.
@@ -211,11 +211,11 @@ function childSymbolsOf(scope: {symbols: Map<string, Symbol>}, file: string): Do
  *
  * The cursor's line is re-lexed to find the `str` token the cursor sits in,
  * then resolved in `TokenStream.loadFile` order: the including file's own
- * directory first, then the unit's include paths. Each candidate is validated
- * against `unit.touchedFiles` which is an authoritative record of what the last real
+ * directory first, then the project's include paths. Each candidate is validated
+ * against `analysis.touchedFiles` which is an authoritative record of what the last real
  * assemble actually opened so the answer can never disagree with the build.
  */
-function resolveIncludeTarget(unit: UnitAnalysis, p: DefinitionParams,
+function resolveIncludeTarget(analysis: ProjectAnalysis, p: DefinitionParams,
                               text: string | undefined): string | undefined {
   if (text == null) return undefined;
   const line = text.split(/\r?\n/)[p.position.line];
@@ -249,21 +249,21 @@ function resolveIncludeTarget(unit: UnitAnalysis, p: DefinitionParams,
   const rel = toPosix(target.str);
   // Absolute paths bypass the search order entirely.
   if (rel.startsWith('/')) {
-    return unit.touchedFiles.has(rel) ? rel : undefined;
+    return analysis.touchedFiles.has(rel) ? rel : undefined;
   }
 
   const file = toPosix(uriToPath(p.textDocument.uri));
   const searchDirs = [dirOf(file),
                       ...(directive === '.incbin'
-                          ? unit.unit.binIncludePaths
-                          : unit.unit.includePaths)];
+                          ? analysis.project.binIncludePaths
+                          : analysis.project.includePaths)];
   for (const dir of searchDirs) {
     const candidate = joinDir(toPosix(dir), rel);
-    if (unit.touchedFiles.has(candidate)) return candidate;
+    if (analysis.touchedFiles.has(candidate)) return candidate;
   }
   return undefined;
 }
 
 // Re-export for tests.
-export {findSymbolAt, symbolsForFileInUnit, unitForDoc};
+export {findSymbolAt, symbolsForFileInProject, projectForDoc};
 export const __internals = {resolveIncludeTarget, childSymbolsOf};
