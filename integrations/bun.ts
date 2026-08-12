@@ -3,10 +3,14 @@
 
 // Compiler frontend for using the bun single file exe
 
-import { Cli } from '../src/cli.ts';
+import { Cli } from '../src/driver/cli.ts';
 
-const { resolve } = require('path');
-const { readdir } = require('fs').promises;
+const { dirname, resolve } = require('path');
+const { mkdir, readdir } = require('fs').promises;
+
+async function mkdirFor(fullpath: string): Promise<void> {
+  await mkdir(dirname(fullpath), { recursive: true });
+}
 
 const cli = new Cli({
   fsReadString: async (path: string, filename: string) => {
@@ -20,18 +24,22 @@ const cli = new Cli({
   fsWriteString: async (path: string, filename: string, data: string) => {
     const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
     const d = new TextEncoder().encode(data);
-    filename === Cli.STDOUT ? await Bun.write(Bun.stdout, d) : await Bun.write(fullpath, d);
+    if (filename === Cli.STDOUT) { await Bun.write(Bun.stdout, d); return; }
+    await mkdirFor(fullpath);
+    await Bun.write(fullpath, d);
   },
   fsWriteBytes: async (path: string, filename: string, data: Uint8Array) => {
     const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
-    filename === Cli.STDOUT ? await Bun.write(Bun.stdout, data) : await Bun.write(fullpath, data);
+    if (filename === Cli.STDOUT) { await Bun.write(Bun.stdout, data); return; }
+    await mkdirFor(fullpath);
+    await Bun.write(fullpath, data);
   },
-  fsWalk: async (path: string, action: (filename: string) => Promise<boolean>) => {
-    for await (const dir of readdir(path, {recursive: true})) {
-      if (await action(dir.path)) {
-        break;
-      }
-    }
+  fsListDir: async (dir: string) => {
+    // withFileTypes so directories can be marked; readdir rejects on a missing dir,
+    // which is exactly the contract callers rely on.
+    const entries = await readdir(resolve(dir), {withFileTypes: true});
+    return entries.map((e: {name: string, isDirectory(): boolean}) =>
+        e.isDirectory() ? `${e.name}/` : e.name);
   },
   exit: (code: number) => process.exit(code),
 });

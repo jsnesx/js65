@@ -120,7 +120,7 @@ const MAIN_SOURCE = `\
   .byte $01             ; mapper 0 (NROM), vertical mirroring
   .res 9, $00
 
-.zp
+.zeropage
 frame_count: .res 1
 
 .code

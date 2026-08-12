@@ -57,7 +57,7 @@ void setFn(jsi::Runtime &rt, const char *name, unsigned argc, jsi::HostFunctionT
 
 // Read a whole file into out; returns false (leaving out untouched) if it cannot be read.
 bool readFileInto(const std::filesystem::path &path, std::vector<uint8_t> &out);
-// Write data to path; throws a JS error on failure.
+// Write data to path, creating any missing parent directories; throws a JS error on failure.
 void writeFileBytes(jsi::Runtime &rt, const std::filesystem::path &path, const std::vector<uint8_t> &data);
 // Join an include base directory with a requested file. An absolute file replaces the
 // base, matching the resolvePath in hermes.ts so the CLI and the in-process callbacks
@@ -73,7 +73,7 @@ int32_t fsReadBinary(void *ctx, const char *basePath, const char *relPath,
 
 // Install the bindings both entries share: __js65_args, the read callbacks
 // (__js65_cbReadText / __js65_cbReadBinary), __js65_writeText / __js65_writeBytes,
-// __js65_listFiles, and __js65_exit.
+// __js65_listDir, and __js65_exit.
 void installCommonBindings(jsi::Runtime &rt, HostContext &ctx);
 
 // Init the runtime + console bindings, install the common bindings plus the entry's own

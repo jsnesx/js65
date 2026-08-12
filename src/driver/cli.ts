@@ -1,15 +1,23 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import { Cpu } from './cpu.ts';
-import { clean, smudge } from './smudge.ts';
+import { Cpu } from '../cpu.ts';
+import { clean, smudge } from '../smudge.ts';
 import { createHash } from "sha1-uint8array";
-import { Base64 } from './base64.ts';
-import { compile, findOutput, isGzip, deserializeObjectFile, type AssemblyInput, type Js65Options, type FileCallbacks } from './libassembler.ts';
-import * as Tokens from './token.ts';
-import { LINT_RULES } from './lint.ts';
-import { dirOf, joinDir } from './util.ts';
-import { VERSION } from './version.ts';
+import { Base64 } from '../base64.ts';
+import { compile, type AssemblyInput, type Js65Options } from '../libassembler.ts';
+import * as Tokens from '../token.ts';
+import { LINT_RULES } from '../lint.ts';
+import { dirOf, joinDir } from '../util.ts';
+import { VERSION } from '../version.ts';
+import { Builder, BuildSession, selectProjects, STDIN, STDOUT,
+         type BuildOverrides } from './build.ts';
+import { walkFiles, type Callbacks } from './fs.ts';
+import { init as scaffoldProject, DEFAULT_TARGET } from './init.ts';
+import { parseProject, type Js65Config, type Js65Project } from './project.ts';
+
+// Re-exported so `js65/cli` consumers and the frontends keep a single import site.
+export { type Callbacks } from './fs.ts';
 
 export interface CompileOptions {
   files: string[],
@@ -19,15 +27,6 @@ export interface CompileOptions {
 export interface HydrateOptions {
   rom?: string,
   file?: string,
-}
-
-export interface Callbacks {
-  fsReadString: (path: string, filename: string) => Promise<string>,
-  fsReadBytes: (path: string, filename: string) => Promise<Uint8Array|string>,
-  fsWriteString: (path: string, filename: string, data: string) => Promise<void>,
-  fsWriteBytes: (path: string, filename: string, data: Uint8Array) => Promise<void>,
-  fsWalk: (path: string, action: (filename: string) => Promise<boolean>) => Promise<void>,
-  exit: (code: number) => void,
 }
 
 class Arguments {
@@ -41,6 +40,8 @@ class Arguments {
   mapfile = "";
   cfgfile = "";
   depfile = "";
+  projectFile = "";
+  force = false;
   compileonly = false;
   patch : "ips" | "" = "";
   options: Js65Options = {
@@ -94,6 +95,10 @@ const OPTIONS: Option[] = [
    apply: once(out => out.depfile, (out, v) => { out.depfile = v; })},
   {names: ['-C', '--config'], arity: 1,
    apply: once(out => out.cfgfile, (out, v) => { out.cfgfile = v; })},
+  {names: ['-p', '--project'], arity: 1,
+   apply: once(out => out.projectFile, (out, v) => { out.projectFile = v; })},
+  {names: ['--force'], arity: 0,
+   apply(out) { out.force = true; }},
   {names: ['-g', '-g0'], arity: 0,
    apply(out) {
      out.options.debugLevel = 0; // Comments and labels only
@@ -173,10 +178,18 @@ const SUBCOMMANDS = new Map<string, (src: string, cpu: Cpu, prg: Uint8Array) => 
   ['dehydrate', clean],
 ]);
 
-/** Make doesn't accept windows style paths */
-function escapeMakePath(path: string): string {
-  return path.replace(/ /g, '\\ ');
-}
+/**
+ * The options `js65 build` takes, named by each option's first spelling. Everything else
+ * in OPTIONS describes a single assembly, which is `js65.json`'s job in a build, so
+ * giving one is an error rather than something quietly ignored.
+ */
+const BUILD_OPTIONS = new Set([
+  '-h', '-V', '-p', '-o', '--dbgfile', '-m', DEPFILE_FLAGS[0], '-I',
+  '--bin-include-dir', '-D', '--feature', '--no-lint', '-W',
+]);
+
+/** The options `js65 init` takes. Scaffolding a folder needs almost nothing. */
+const INIT_OPTIONS = new Set(['-h', '-V', '-t', '--force']);
 
 // const DEBUG_PRINT = false;
 
@@ -187,63 +200,15 @@ function escapeMakePath(path: string): string {
 // }
 
 export class Cli {
-  public static readonly STDIN : string = "//stdin";
-  public static readonly STDOUT : string = "//stdout";
+  public static readonly STDIN : string = STDIN;
+  public static readonly STDOUT : string = STDOUT;
 
-  // Keep a local cache of sources opened and compiled for diagnostic printing
-  // later so we don't need to reload the files
-  private readonly sources = new Map<string, string>();
-  private readonly sourceLines = new Map<string, string[]>();
-
-  // Resolved paths of every file this build actually read, for --create-dep. A Set
-  // dedupes the header that gets included from a dozen places while keeping read
-  // order, so the dependency file comes out the same on every run.
-  private readonly deps = new Set<string>();
+  /** State of the build in progress: source cache, dep list, output writing. */
+  private readonly session: BuildSession;
 
   constructor(readonly callbacks: Callbacks) {
     this.callbacks = callbacks;
-  }
-
-  private trackDep(path: string, filename: string) {
-    if (filename === Cli.STDIN) return;
-    this.deps.add(joinDir(path, filename));
-  }
-
-  // Load the file and keep the source code in our local cache for later.
-  private async readSource(path: string, filename: string): Promise<string> {
-    const code = await this.callbacks.fsReadString(path, filename);
-    this.trackDep(path, filename);
-    this.sources.set(filename, code);
-    this.sourceLines.delete(filename);
-    return code;
-  }
-
-  private async readBinary(path: string, filename: string): Promise<Uint8Array|string> {
-    const data = await this.callbacks.fsReadBytes(path, filename);
-    this.trackDep(path, filename);
-    return data;
-  }
-
-  /**
-   * Peak at the file as a binary input and check to see if its a gzip file or
-   * a text file (skipping over the BOM if its there)
-   */
-  private async readInput(filename: string): Promise<AssemblyInput> {
-    let bytes = await this.readBinary("", filename);
-    if (typeof bytes === "string") bytes = new Base64().decode(bytes);
-    if (isGzip(bytes)) {
-      return { type: 'module', module: await deserializeObjectFile(bytes, filename) };
-    }
-    // Frontends also strip the BOM, but it doesn't hurt to check it in this path too.
-    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
-    const code = new TextDecoder().decode(bytes);
-    // No assembly source starts with `{` so error out if it didn't decompress earlier.
-    if (code.trimStart().startsWith('{')) {
-      throw new Error(`${filename}: not a valid object file`);
-    }
-    this.sources.set(filename, code);
-    this.sourceLines.delete(filename);
-    return { type: 'source', code, name: filename };
+    this.session = new BuildSession(callbacks);
   }
 
   private matchOption(arg: string): {option: Option, value?: string} | undefined {
@@ -292,7 +257,20 @@ export class Cli {
   }
 
   public async run(argv: string[]) {
+    // `build` and `init` take different flag sets than an assembly does, so they are
+    // dispatched on before the arguments are parsed rather than picked out of the
+    // positionals after.
+    if (argv[0] === 'build') return this.build(argv.slice(1));
+    if (argv[0] === 'init') return this.init(argv.slice(1));
+
     const args = this.parseArgs(argv);
+    if (args.projectFile) {
+      return this.usage(8, [new Error(
+          '-p/--project only applies to `js65 build`')]);
+    }
+    if (args.force) {
+      return this.usage(8, [new Error('--force only applies to `js65 init`')]);
+    }
     if (args.version) {
       console.log(`js65 ${VERSION}`);
       return this.callbacks.exit(0);
@@ -349,7 +327,7 @@ export class Cli {
       // Convert CLI arguments to libassembler inputs
       const inputs: AssemblyInput[] = [];
       for (const file of args.files) {
-        inputs.push(await this.readInput(file));
+        inputs.push(await this.session.readInput(file));
       }
 
       // Seed the include path with each input file's directory, so a file given as
@@ -363,24 +341,20 @@ export class Cli {
       // Load the ld65 linker config, if given. readSource caches the text so a
       // parse error further in gets a source snippet like any other file.
       if (args.cfgfile) {
-        args.options.linkerConfig = await this.readSource("", args.cfgfile);
+        args.options.linkerConfig = await this.session.readSource("", args.cfgfile);
         args.options.linkerConfigName = args.cfgfile;
       }
 
       // Load base ROM if specified
       let baseRom: Uint8Array | undefined;
       if (args.rom) {
-        let romData = await this.readBinary("", args.rom);
+        let romData = await this.session.readBinary("", args.rom);
         if (typeof romData === "string") romData = new Base64().decode(romData);
         baseRom = romData;
       }
 
-      const callbacks: FileCallbacks = {
-        readText: (path, filename) => this.readSource(path, filename),
-        readBinary: (path, filename) => this.readBinary(path, filename)
-      };
-
-      const result = await compile(inputs, args.options, callbacks, baseRom);
+      const result =
+          await compile(inputs, args.options, this.session.fileCallbacks, baseRom);
 
       if (result.messages.length > 0) {
         this.printMessages(result.messages);
@@ -391,43 +365,141 @@ export class Cli {
         return;
       }
 
-      // The linked ROM / first artifact goes to outfile for now
-      const primary = result.outputs.find(o => o.type === 'binary' || o.type === 'object')
-          ?? result.outputs[0];
-      await this.callbacks.fsWriteBytes("", args.outfile, primary.data);
-
-      // A linker config can send segments to files of their own. Their names
-      // come from the config verbatim, so `%O` still has to be filled in.
-      for (const extra of result.outputs) {
-        if (extra === primary || extra.type !== 'binary') continue;
-        await this.callbacks.fsWriteBytes(
-            "", extra.name.replace(/%O/g, args.outfile), extra.data);
-      }
-
-      // Write debug info if requested
-      const debug = findOutput(result, 'debug');
-      if (args.dbgfile && debug) {
-        await this.callbacks.fsWriteBytes("", args.dbgfile, debug.data);
-      }
-
-      // Write the linker map if requested
-      const map = findOutput(result, 'map');
-      if (args.mapfile && map) {
-        await this.callbacks.fsWriteBytes("", args.mapfile, map.data);
-      }
-
-      // Write the make dependency file last, once the build has actually succeeded.
-      if (args.depfile) {
-        await this.writeDepFile(args.depfile, args.outfile);
-      }
+      await this.session.writeOutputs(result, {
+        outfile: args.outfile,
+        dbgfile: args.dbgfile,
+        mapfile: args.mapfile,
+        depfile: args.depfile,
+      });
     } catch (e) {
       this.printerrors(e as Error);
       throw e;
     }
   }
 
+  /**
+   * `js65 build [PROJECT...]` - assemble and link every project in `js65.json`, or just
+   * the named ones.
+   */
+  private async build(argv: string[]) {
+    const rejected = this.rejectOptions(argv, BUILD_OPTIONS, 'build');
+    if (rejected) return this.buildUsage(8, [rejected]);
+    const args = this.parseArgs(argv);
+    if (args.version) {
+      console.log(`js65 ${VERSION}`);
+      return this.callbacks.exit(0);
+    }
+    if (args.help) return this.buildUsage(0);
+
+    // No walking up to find the project file: the frontends have no cwd of their own and
+    // no way to recognize the filesystem root, so `build` runs from the project root or
+    // is pointed at one with -p.
+    const projectFile = args.projectFile || 'js65.json';
+    let config: Js65Config;
+    let selected: Js65Project[];
+    try {
+      config = parseProject(
+          projectFile, await this.callbacks.fsReadString("", projectFile));
+    } catch (e) {
+      this.printerrors(e as Error);
+      return this.callbacks.exit(1);
+    }
+    try {
+      selected = selectProjects(config, args.files);
+    } catch (e) {
+      return this.buildUsage(8, [e as Error]);
+    }
+
+    // These name one file each. Against several projects they would either be
+    // meaningless or let one project clobber another's output, so say so instead.
+    const single = ([['-o', args.outfile], ['--dbgfile', args.dbgfile],
+                     ['-m', args.mapfile], [DEPFILE_FLAGS[0], args.depfile]] as const)
+        .find(([, value]) => value);
+    if (single && selected.length !== 1) {
+      return this.buildUsage(8, [new Error(
+          `${single[0]} names a single file, but ${selected.length} projects are ` +
+          `selected. Name one project, or set the output in ${projectFile}.`)]);
+    }
+
+    const overrides: BuildOverrides = {
+      includePaths: args.options.includePaths,
+      binIncludePaths: args.options.binIncludePaths,
+      defines: args.options.defines,
+      features: args.options.features,
+      lint: args.options.lint,
+      outfile: args.outfile || undefined,
+      dbgfile: args.dbgfile || undefined,
+      mapfile: args.mapfile || undefined,
+      depfile: args.depfile || undefined,
+    };
+    const builder = new Builder(this.session, {
+      messages: messages => this.printMessages(messages),
+      log: line => console.log(line),
+    });
+    const result = await builder.build(config, selected, overrides);
+    // Only on failure: a host whose exit() really does exit would kill a successful run
+    // before its caller could clean up.
+    if (!result.success) this.callbacks.exit(1);
+  }
+
+  /**
+   * `js65 init [NAME]` - write out a project that builds as it stands.
+   */
+  private async init(argv: string[]) {
+    const rejected = this.rejectOptions(argv, INIT_OPTIONS, 'init');
+    if (rejected) return this.initUsage(8, [rejected]);
+    const args = this.parseArgs(argv);
+    if (args.version) {
+      console.log(`js65 ${VERSION}`);
+      return this.callbacks.exit(0);
+    }
+    if (args.help) return this.initUsage(0);
+    if (args.files.length > 1) {
+      return this.initUsage(8, [new Error(
+          `js65 init takes at most one directory name, got ${args.files.length}`)]);
+    }
+
+    try {
+      const result = await scaffoldProject(this.callbacks, {
+        dir: args.files[0],
+        target: args.options.target,
+        force: args.force,
+      });
+      console.log(`js65: created project "${result.name}" in ${result.dir || '.'}`);
+      for (const file of result.files) console.log(`  ${joinDir(result.dir, file)}`);
+      console.log(result.dir ? `Build it with: cd ${result.dir} && js65 build`
+                             : 'Build it with: js65 build');
+    } catch (e) {
+      // A directory that already holds a project, or a target that does not exist.
+      this.printerrors(e as Error);
+      return this.callbacks.exit(1);
+    }
+  }
+
+  /** The first option in `argv` that the named subcommand does not accept. */
+  private rejectOptions(argv: string[], allowed: ReadonlySet<string>,
+                        command: string): Error | undefined {
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === '--') break;
+      const match = this.matchOption(argv[i]);
+      if (!match) continue;
+      // Step over a value given as a separate argument so `-o -m` can't misread `-m`.
+      if (match.option.arity === 1 && match.value === undefined) i++;
+      const name = match.option.names[0];
+      if (!allowed.has(name)) {
+        return new Error(`${name} cannot be used with \`js65 ${command}\``);
+      }
+    }
+    return undefined;
+  }
+
   async smudge(args: Arguments) {
-    if (args.files.length > 1) this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
+    // `usage` reports and asks the host to exit, but it cannot stop this function - a
+    // host whose exit() merely records the code (node sets process.exitCode) keeps
+    // running, so every check has to return rather than fall through to the deref below.
+    if (args.files.length > 1) {
+      return this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
+    }
     const src = await this.callbacks.fsReadString("",args.files[0]);
     // if (err) this.usage(3, [err]);
     let fullRom: Uint8Array|undefined = undefined;
@@ -436,10 +508,11 @@ export class Cli {
       fullRom = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
       // if (err) this.usage(4, [err]);
     } else {
+      // exec() yields null, not undefined, so this has to be a nullish check.
       const match = /smudge sha1 ([0-9a-f]{40})/.exec(src!);
-      if (match === undefined) this.usage(1, [new Error('no sha1 tag, must specify rom')]);
-      const shaTag = match![1];
-      await this.callbacks.fsWalk('.', async(filename) => {
+      if (!match) return this.usage(1, [new Error('no sha1 tag, must specify rom')]);
+      const shaTag = match[1];
+      await walkFiles(this.callbacks, '.', async(filename) => {
         if (/\.nes$/.test(filename)) {
           let inbytes = await this.callbacks.fsReadBytes("",filename);
           inbytes = (typeof inbytes === 'string') ? new Base64().decode(inbytes) : inbytes;
@@ -456,27 +529,15 @@ export class Cli {
         return false;
       }
       );
-      if (!fullRom) this.usage(1, [new Error(`could not find rom with sha ${shaTag}`)]);
+      if (!fullRom) {
+        return this.usage(1, [new Error(`could not find rom with sha ${shaTag}`)]);
+      }
     }
 
     // TODO - read the header properly
-    const prg = fullRom!.subarray(0x10, 0x40010);
+    const prg = (fullRom as Uint8Array).subarray(0x10, 0x40010);
     await this.callbacks.fsWriteString("", args.outfile, args.op!(src!, Cpu.P02, prg));
     // if (err) this.printerrors(err);
-  }
-
-  /**
-   * Write the makefile targets for `--create-dep` which look like this
-   *
-   *     out.nes:	main.s inc/header.inc chr/tiles.chr
-   *
-   *     main.s inc/header.inc chr/tiles.chr:
-   */
-  private async writeDepFile(name: string, target: string) {
-    const prereqs = [...this.deps].map(escapeMakePath).join(' ');
-    const phony = prereqs ? `${prereqs}:\n\n` : '';
-    const text = `${escapeMakePath(joinDir('', target))}:\t${prereqs}\n\n${phony}`;
-    await this.callbacks.fsWriteBytes("", name, new TextEncoder().encode(text));
   }
 
   // Builds the `file:line:col: ` when we know where we are, else the program name
@@ -488,14 +549,7 @@ export class Cli {
   // Load the code around the location for creating the inline snippet in the error message
   private snippet(source?: Tokens.SourceInfo): string[] {
     if (!source || source.line <= 0) return [];
-    let lines = this.sourceLines.get(source.file);
-    if (!lines) {
-      const text = this.sources.get(source.file);
-      if (text === undefined) return [];
-      lines = text.split(/\r\n|\n|\r/);
-      this.sourceLines.set(source.file, lines);
-    }
-    const line = lines[source.line - 1];
+    const line = this.session.sourceLine(source.file, source.line);
     if (line === undefined) return [];
     // We have the target source line that threw the error, so build the
     // ^ caret pointing at the right location in the source line.
@@ -552,11 +606,82 @@ export class Cli {
     if (parts.length) console.log(`${parts.join(', ')} generated.`);
   }
 
+  public buildUsage(code = 1, err: Error[]|undefined = undefined) {
+    if (err) this.printerrors(...err);
+    console.log(`\
+Usage: js65 build [options] [PROJECT...]
+  Assembles and links every project described by a js65.json, or only the named
+  ones. Each project is built in this one process, so nothing round-trips through
+  a .o file on disk. A project that fails does not stop the others.
+
+positional arguments:
+  PROJECT[...]            Name of a project in the file. If none are given, every
+                          project in the file is built.
+
+optional arguments:
+  -p FILE/--project=FILE  The project file to read. Default \`js65.json\` in the
+                          current directory; js65 does not search parent directories.
+  -o FILE/--output=FILE   Write the linked output here, in place of the project's
+                          own \`output\`. Only valid when one project is selected.
+  --dbgfile FILE          Write debug symbols here, in place of the project's \`dbgfile\`.
+                          Only valid when one project is selected.
+  -m FILE/--mapfile=FILE  Write the linker map here, in place of the project's
+                          \`mapfile\`. Only valid when one project is selected.
+  --create-dep FILE       Write a make dependency file for the selected project.
+                          Only valid when one project is selected.
+  -I DIR/--include-dir=DIR
+                          Search DIR for \`.include\` as well, after the project's own
+                          \`includePaths\`. Applies to every selected project. Repeatable.
+  --bin-include-dir=DIR   The same, for \`.incbin\` and \`binIncludePaths\`.
+  -D NAME[=VALUE]/--define=NAME[=VALUE]
+                          Define NAME for every selected project, overriding a
+                          \`defines\` entry of the same name. Repeatable.
+  --feature NAME[,NAME]   Enable a feature for every selected project. Repeatable.
+  --no-lint               Turn off every lint, whatever the project file's \`lint\` says.
+  -Wno-RULE               Turn off a single lint rule. Repeatable.
+  -h/--help               Print this help text and exit.
+
+Exits 0 when every selected project built, 1 when any of them failed, and 8 for a
+bad command line.
+`);
+    this.callbacks.exit(code);
+  }
+
+  public initUsage(code = 1, err: Error[]|undefined = undefined) {
+    if (err) this.printerrors(...err);
+    console.log(`\
+Usage: js65 init [options] [NAME]
+  Writes a project that builds as it stands: a js65.json, a src/main.s holding an
+  iNES header and a reset routine, an inc/ with the hardware registers in it, and
+  an assets/ for tile data. \`js65 build\` in the new directory produces a ROM with
+  no edits.
+
+positional arguments:
+  NAME                    Directory to create, and the name of the project in it.
+                          If none is given, the current directory is scaffolded and
+                          the project is named \`main\`.
+
+optional arguments:
+  -t NAME/--target=NAME   Built-in segment layout the generated project links with.
+                          Default \`${DEFAULT_TARGET}\`.
+  --force                 Scaffold even when the directory already holds files,
+                          overwriting any that collide. Without it, js65 refuses
+                          unless the directory is absent or holds only dot entries
+                          such as \`.git\`.
+  -h/--help               Print this help text and exit.
+`);
+    this.callbacks.exit(code);
+  }
+
   public usage(code = 1, err: Error[]|undefined = undefined) {
     if (err) this.printerrors(...err);
     console.log(`\
 Usage: js65 [options] FILE[...]
   Assembles and links all files into output
+Usage: js65 init [NAME]
+  Creates a project that builds as it stands. See \`js65 init --help\`.
+Usage: js65 build [options] [PROJECT...]
+  Builds the projects described by a js65.json. See \`js65 build --help\`.
 Usage: js65 rehydrate|dehydrate -r|--rom=<rom> FILE
   Remove/Re-add data in an assembly file from the original ROM.
 

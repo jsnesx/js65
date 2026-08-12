@@ -101,6 +101,12 @@ bool readFileInto(const std::filesystem::path &path, std::vector<uint8_t> &out) 
 }
 
 void writeFileBytes(jsi::Runtime &rt, const std::filesystem::path &path, const std::vector<uint8_t> &data) {
+  // Create the parent directories so writing to `build/out.nes` works on a fresh tree.
+  // An existing directory is not an error; a real failure surfaces from the open below.
+  if (path.has_parent_path() && !path.parent_path().empty()) {
+    std::error_code mkec;
+    std::filesystem::create_directories(path.parent_path(), mkec);
+  }
   std::ofstream out(path, std::ios::binary);
   if (!out)
     throwError(rt, "Could not open file for writing: " + path.string());
@@ -187,19 +193,27 @@ void installCommonBindings(jsi::Runtime &rt, HostContext &ctx) {
         return jsi::Value::undefined();
       });
 
-  setFn(rt, "__js65_listFiles", 1,
+  // One directory, not recursive: bare entry names, directories marked with a trailing
+  // '/'. Recursion lives in the TS `walkFiles` so every host agrees on path shape.
+  // Throws when the directory cannot be read, so callers can distinguish a missing
+  // directory from an empty one.
+  setFn(rt, "__js65_listDir", 1,
       [](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
-        if (count < 1 || !args[0].isString()) throwError(rt, "__js65_listFiles: dir expected");
+        if (count < 1 || !args[0].isString()) throwError(rt, "__js65_listDir: dir expected");
         std::string dir = args[0].getString(rt).utf8(rt);
-        std::vector<std::string> files;
         std::error_code ec;
-        for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
-             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-          if (it->is_regular_file(ec)) files.push_back(it->path().string());
+        std::filesystem::directory_iterator it(dir, ec);
+        if (ec) throwError(rt, "Could not list directory: " + dir);
+        std::vector<std::string> entries;
+        for (; it != std::filesystem::directory_iterator(); it.increment(ec)) {
+          if (ec) throwError(rt, "Could not list directory: " + dir);
+          std::error_code dec;
+          std::string name = it->path().filename().string();
+          entries.push_back(it->is_directory(dec) && !dec ? name + "/" : name);
         }
-        auto arr = jsi::Array(rt, files.size());
-        for (size_t i = 0; i < files.size(); ++i)
-          arr.setValueAtIndex(rt, i, jsi::String::createFromUtf8(rt, files[i]));
+        auto arr = jsi::Array(rt, entries.size());
+        for (size_t i = 0; i < entries.size(); ++i)
+          arr.setValueAtIndex(rt, i, jsi::String::createFromUtf8(rt, entries[i]));
         return arr;
       });
 

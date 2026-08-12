@@ -4,6 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {Builder, BuildSession, selectProjects, STDIN,
         type BuildOverrides} from '../src/driver/build.ts';
+import {Cli} from '../src/driver/cli.ts';
 import type {Callbacks} from '../src/driver/fs.ts';
 import {parseProject} from '../src/driver/project.ts';
 import type {CompileResult, OutputFile, OutputType} from '../src/libassembler.ts';
@@ -436,6 +437,123 @@ describe('Builder', function() {
       };
       expect((await runBuild(files)).messages).toEqual([]);
     });
+  });
+});
+
+describe('js65 build', function() {
+  /** Run the CLI over an in-memory tree, capturing its exit code and its output. */
+  async function run(files: Record<string, string|Uint8Array>, args: string[]) {
+    const {callbacks, written} = fakeFs(files);
+    const lines: string[] = [];
+    let exitCode = 0;
+    const log = console.log;
+    console.log = (...parts: unknown[]) => { lines.push(parts.join(' ')); };
+    try {
+      await new Cli({...callbacks, exit: code => { exitCode = code; }}).run(args);
+    } finally {
+      console.log = log;
+    }
+    return {exitCode, written, lines, out: lines.join('\n'),
+            files: [...written.keys()].sort()};
+  }
+
+  it('builds every project in ./js65.json', async function() {
+    const {exitCode, files} = await run(TWO_PROJECTS, ['build']);
+    expect(exitCode).toBe(0);
+    expect(files).toEqual(['build/game.nes', 'build/tools.nes']);
+  });
+
+  it('builds only the projects named on the command line', async function() {
+    expect((await run(TWO_PROJECTS, ['build', 'tools'])).files)
+        .toEqual(['build/tools.nes']);
+  });
+
+  it('reads another project file with -p', async function() {
+    const files = {...TWO_PROJECTS, 'alt/js65.json': JSON.stringify({projects: [
+      {name: 'alt', sources: ['src/a.s'], target: 'sim'},
+    ]}), 'alt/src/a.s': 'lda #1\n'};
+    expect((await run(files, ['build', '-p', 'alt/js65.json'])).files)
+        .toEqual(['alt/build/alt.nes']);
+  });
+
+  it('exits 1 when a project fails', async function() {
+    const files = {...TWO_PROJECTS, 'src/b.s': 'lda #(\n'};
+    const {exitCode, files: written} = await run(files, ['build']);
+    expect(exitCode).toBe(1);
+    expect(written).toEqual(['build/tools.nes']);
+  });
+
+  it('exits 1 when the project file cannot be read', async function() {
+    const {exitCode, out} = await run({}, ['build']);
+    expect(exitCode).toBe(1);
+    expect(out).toContain('no such file: js65.json');
+  });
+
+  it('exits 8 for a project name that is not in the file', async function() {
+    const {exitCode, out} = await run(TWO_PROJECTS, ['build', 'nope']);
+    expect(exitCode).toBe(8);
+    expect(out).toContain('no project named "nope"');
+  });
+
+  // Two projects writing through one -o would clobber each other.
+  it('exits 8 when a single-output flag meets several projects', async function() {
+    const {exitCode, out} = await run(TWO_PROJECTS, ['build', '-o', 'rom.nes']);
+    expect(exitCode).toBe(8);
+    expect(out).toContain('-o names a single file, but 2 projects are selected');
+  });
+
+  it('accepts a single-output flag when one project is selected', async function() {
+    const {exitCode, files} =
+        await run(TWO_PROJECTS, ['build', '-o', 'rom.nes', 'game']);
+    expect(exitCode).toBe(0);
+    expect(files).toEqual(['rom.nes']);
+  });
+
+  it('exits 8 for an option that only makes sense for a single assembly',
+     async function() {
+    for (const flag of [['-c'], ['--ips'], ['--stdin'], ['-C', 'nes.cfg'],
+                        ['-t', 'sim'], ['-r', 'base.nes']]) {
+      const {exitCode, out} = await run(TWO_PROJECTS, ['build', ...flag]);
+      expect(exitCode).toBe(8);
+      expect(out).toContain('cannot be used with `js65 build`');
+    }
+  });
+
+  it('does not mistake an option value for an option', async function() {
+    // `-p` takes the next argument, so the `-c` here is this file's name, not a flag.
+    const {exitCode} = await run({'-c': JSON.stringify({projects: []})},
+                                 ['build', '-p', '-c']);
+    expect(exitCode).toBe(0);
+  });
+
+  it('passes -D and -I through to every selected project', async function() {
+    const files = {
+      'js65.json': JSON.stringify({projects: [
+        {name: 'a', sources: ['a/a.s'], target: 'sim'},
+        {name: 'b', sources: ['b/b.s'], target: 'sim'},
+      ]}),
+      'a/a.s': '.include "defs.inc"\nlda #LEVEL\n',
+      'b/b.s': '.include "defs.inc"\nlda #LEVEL\n',
+      'inc/defs.inc': '; nothing to declare\n',
+    };
+    const {exitCode, written} =
+        await run(files, ['build', '-D', 'LEVEL=7', '-I', 'inc']);
+    expect(exitCode).toBe(0);
+    expect([...written.get('build/a.nes')!].slice(0, 2)).toEqual([0xa9, 7]);
+    expect([...written.get('build/b.nes')!].slice(0, 2)).toEqual([0xa9, 7]);
+  });
+
+  it('prints build usage for `build --help` without building', async function() {
+    const {exitCode, out, files} = await run(TWO_PROJECTS, ['build', '--help']);
+    expect(exitCode).toBe(0);
+    expect(out).toContain('Usage: js65 build [options] [PROJECT...]');
+    expect(files).toEqual([]);
+  });
+
+  it('rejects -p on the plain assembler path', async function() {
+    const {exitCode, out} = await run(TWO_PROJECTS, ['-p', 'js65.json', 'src/a.s']);
+    expect(exitCode).toBe(8);
+    expect(out).toContain('-p/--project only applies to `js65 build`');
   });
 });
 

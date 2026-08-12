@@ -6,7 +6,7 @@
 // functions installed on globalThis by the C++ host (integrations/hermes/hermes_host.cpp).
 // A UTF-8 TextEncoder/TextDecoder polyfill is provided since Hermes ships none.
 
-import { Cli } from '../../src/cli.ts';
+import { Cli } from '../../src/driver/cli.ts';
 import { compileRequest } from '../../src/libassembler.ts';
 
 // Host functions installed by the C++ host (hermes_core.cpp + the active entry).
@@ -17,7 +17,9 @@ declare const __js65_cbReadText: (basePath: string, relPath: string) => string;
 declare const __js65_cbReadBinary: (basePath: string, relPath: string) => Uint8Array;
 declare const __js65_writeText: (fullpath: string, data: string) => void;
 declare const __js65_writeBytes: (fullpath: string, data: Uint8Array) => void;
-declare const __js65_listFiles: (dir: string) => string[];
+// Non-recursive; bare entry names, directories marked with a trailing '/'. Throws if
+// the directory does not exist, so callers can tell "absent" from "empty".
+declare const __js65_listDir: (dir: string) => string[];
 declare const __js65_exit: (code: number) => void;
 // CLI-only I/O.
 declare const __js65_stdinText: () => string;
@@ -125,12 +127,7 @@ const cli = new Cli({
     if (filename === Cli.STDOUT) { __js65_stdoutBytes(data); return; }
     __js65_writeBytes(resolvePath(path, filename), data);
   },
-  fsWalk: async (path: string, action: (filename: string) => Promise<boolean>): Promise<void> => {
-    // The host walks the directory tree natively and returns every file path.
-    for (const file of __js65_listFiles(path)) {
-      if (await action(file)) return;
-    }
-  },
+  fsListDir: async (dir: string): Promise<string[]> => __js65_listDir(dir),
   exit: (code: number) => __js65_exit(code),
 });
 
