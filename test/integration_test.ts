@@ -270,6 +270,47 @@ Bank0Start:
           .toEqual([0x20, 0x00, 0x80, 0x60]);
     });
 
+    it('should resolve a label defined after .popseg in the popped segment',
+       async function() {
+      // `.popseg` rewinds to a chunk that is no longer the newest one, so the
+      // labels after it belong to that older chunk, not the pushed segment's.
+      const source = `
+.segment "A" :size $10 :mem $8000 :off $00 :fill $00
+.segment "B" :size $10 :mem $9000 :off $10 :fill $00
+
+.segment "A"
+  .byte $01
+.pushseg "B"
+  .byte $02
+.popseg
+Label:
+  .byte $03
+  .word Label
+`;
+      const result = await compileSource(source);
+      expect([...result.slice(0, 4)]).toEqual([0x01, 0x03, 0x01, 0x80]);
+      expect(result[0x10]).toBe(0x02);
+    });
+
+    it('should branch within the popped segment after .popseg',
+       async function() {
+      const source = `
+.segment "A" :size $10 :mem $8000 :off $00 :fill $00
+.segment "B" :size $10 :mem $9000 :off $10 :fill $00
+
+.segment "A"
+Loop:
+  nop
+.pushseg "B"
+  .byte $02
+.popseg
+  bne Loop
+`;
+      const result = await compileSource(source);
+      // The branch is relative to the next instruction in segment A.
+      expect([...result.slice(0, 3)]).toEqual([0xea, 0xd0, 0xfd]);
+    });
+
     it('should place two modules of anonymous segments in link order',
        async function() {
       const first: AssemblyInput = {type: 'source', name: 'first.s', code: `
