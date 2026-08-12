@@ -1321,10 +1321,6 @@ export class Assembler {
   }
 
   assign(ident: string, expr: Expr|number, isLabel = false, token?: Token) {
-    if (ident.startsWith('@')) {
-      this.fail(`Cheap locals may only be labels: ${ident}`);
-    }
-    // Now make the assignment.
     if (typeof expr !== 'number') expr = this.resolve(expr);
     this.assignSymbol(ident, false, expr, token, isLabel);
     // TODO - no longer needed?
@@ -1393,8 +1389,9 @@ export class Assembler {
     }
     this.opts.symbolIndex?.recordSymbol(sym, ident);
 
-    // Add cheap locals to debugLabels for MLB output
-    if (isCheapLocal && !mut && this.opts.generateDebugInfo) {
+    // Add cheap locals to debugLabels for MLB output.  Constant assignments
+    // (`@temp = $05`) aren't positions, so they'd only add bogus entries.
+    if (isCheapLocal && isLabel && this.opts.generateDebugInfo) {
       this.debugLabels.push({name: ident, expr});
     }
   }

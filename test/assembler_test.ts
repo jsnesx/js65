@@ -521,10 +521,64 @@ describe('Assembler', function() {
       });
     });
 
-    it('should not allow using a cheap local name for non-labels', function() {
+    it('should allow using a cheap local name for a constant', async function() {
       const a = new Assembler(Cpu.P02);
-      expect(() => a.assign('@foo', 5))
-          .toThrow(/Cheap locals may only be labels: @foo/);
+      a.assign('@temp', 5);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa9, 5),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should clear cheap local constants on a non-cheap label', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('@temp', 5);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.label('bar');
+      a.assign('@temp', 6);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa9, 5, 0xa9, 6),
+        }],
+        symbols: [], segments: []});
+    });
+
+    it('should not allow redefining a cheap local constant', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('@temp', 5);
+      expect(() => a.assign('@temp', 6)).toThrow(/Redefining symbol @temp/);
+    });
+
+    it('should allow redefining a cheap local constant after a label changes', async function() {
+      const a = new Assembler(Cpu.P02);
+      a.reloc();
+      a.label('test1');
+      a.assign('@temp', 5);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.reloc();
+      a.label('test2');
+      a.assign('@temp', 6);
+      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          name: "test1",
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa9, 5),
+        },{
+          name: "test2",
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xa9, 6),
+        }],
+        symbols: [], segments: []});
     });
 
     it('should not allow reusing names in the same cheap scope', function() {
