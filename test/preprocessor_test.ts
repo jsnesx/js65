@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
+import {Base64} from '../src/base64.ts';
 import {Preprocessor} from '../src/preprocessor.ts';
 import * as Tokens from '../src/token.ts';
 import {TokenStream} from '../src/tokenstream.ts';
@@ -696,11 +697,184 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('.incbin', function() {
+    function bytestr(start = 0, end?: number): string {
+      return `.bytestr STR[$${new Base64().encode(BINARY.subarray(start, end))}]`;
+    }
+
+    it('should read the whole file', async function() {
+      expect(await testFiles(['.incbin "data.bin"'])).toEqual([bytestr()]);
+    });
+
+    it('should apply an offset', async function() {
+      expect(await testFiles(['.incbin "data.bin", 3'])).toEqual([bytestr(3)]);
+    });
+
+    it('should apply an offset and length', async function() {
+      expect(await testFiles(['.incbin "data.bin", 3, 4'])).toEqual([bytestr(3, 7)]);
+    });
+
+    it('should resolve constants in the offset and length', async function() {
+      expect(await testFiles(['OFFS = 1 + 2', 'LEN = 4',
+                              '.incbin "data.bin", OFFS, LEN']))
+          .toEqual([await assign('OFFS = 1 + 2'), await assign('LEN = 4'),
+                    bytestr(3, 7)]);
+    });
+
+    it('should keep a label that precedes it on the line', async function() {
+      expect(await testFiles(['Tiles: .incbin "data.bin", 0, 2']))
+          .toEqual([await label('Tiles:'), bytestr(0, 2)]);
+    });
+
+    it('should take its path from a macro parameter', async function() {
+      expect(await testFiles(['.macro ChrFile File',
+                              '  .incbin File, 0, 2',
+                              '.endmacro',
+                              'ChrFile "data.bin"']))
+          .toEqual([bytestr(0, 2)]);
+    });
+
+    it('should reject a non-constant offset', async function() {
+      await expect(testFiles(['.incbin "data.bin", fwd']))
+          .rejects.toThrow(/Expected a constant: symbol fwd/);
+    });
+  });
+
+  describe('.include', function() {
+    it('should splice the file into the stream', async function() {
+      expect(await testFiles(['lda #3', '.include "other.s"', 'sta $4']))
+          .toEqual([await instruction('lda #3'), await instruction('lda #5'),
+                    await instruction('sta $4')]);
+    });
+
+    it('should report a file it cannot find', async function() {
+      await expect(testFiles(['.include "nope.s"']))
+          .rejects.toThrow(/Could not find file nope.s/);
+    });
+  });
+
+  describe('.macpack', function() {
+    it('should splice the package into the stream', async function() {
+      // longbranch defines jeq, which expands to a branch around a jmp.
+      expect(await testFiles(['.macpack longbranch', 'jeq target']))
+          .toEqual([await instruction('bne *+5'), await instruction('jmp target')]);
+    });
+
+    it('should reject an unknown package', async function() {
+      await expect(testFiles(['.macpack nosuchpack']))
+          .rejects.toThrow(/Unknown macpack: nosuchpack/);
+    });
+  });
+
+  // Reading a line is not the same as reaching it: the `.inc` family pulls in
+  // outside source, so it must not run until the line is actually dispatched.
+  describe('deferred source loading', function() {
+    for (const [what, directive] of [['.include', '.include "other.s"'],
+                                     ['.incbin', '.incbin "data.bin"']] as const) {
+      it(`should not run ${what} in an untaken .if branch`, async function() {
+        const reads: string[] = [];
+        expect(await testFiles(['.if 0', directive, '.endif', 'nop'], reads))
+            .toEqual([await instruction('nop')]);
+        expect(reads).toEqual([]);
+      });
+
+      it(`should not run ${what} in an unexpanded macro body`, async function() {
+        const reads: string[] = [];
+        expect(await testFiles(['.macro unused', directive, '.endmacro', 'nop'], reads))
+            .toEqual([await instruction('nop')]);
+        expect(reads).toEqual([]);
+      });
+
+      it(`should not run ${what} in an unrepeated .repeat body`, async function() {
+        const reads: string[] = [];
+        expect(await testFiles(['.repeat 0', directive, '.endrep', 'nop'], reads))
+            .toEqual([await instruction('nop')]);
+        expect(reads).toEqual([]);
+      });
+    }
+
+    // `.macpack` reads no file, so what shows whether it ran is whether the
+    // package's macros ended up defined.
+    for (const [where, guard] of [
+        ['an untaken .if branch', ['.if 0', '.macpack longbranch', '.endif']],
+        ['an unexpanded macro body',
+         ['.macro unused', '.macpack longbranch', '.endmacro']],
+        ['an unrepeated .repeat body',
+         ['.repeat 0', '.macpack longbranch', '.endrep']]] as const) {
+      it(`should not run .macpack in ${where}`, async function() {
+        expect(await testFiles([...guard, 'jeq target']))
+            .toEqual([await instruction('jeq target')]);
+      });
+    }
+
+    it('should still run them in a taken .if branch', async function() {
+      const reads: string[] = [];
+      expect(await testFiles(['.if 1', '.include "other.s"', '.incbin "data.bin"',
+                              '.endif'], reads))
+          .toEqual([await instruction('lda #5'),
+                    `.bytestr STR[$${new Base64().encode(BINARY)}]`]);
+      expect(reads).toEqual(['other.s', 'data.bin']);
+    });
+
+    it('should run .include once the macro is expanded', async function() {
+      const reads: string[] = [];
+      expect(await testFiles(['.macro pull', '.include "other.s"', '.endmacro',
+                              'pull', 'pull'], reads))
+          .toEqual([await instruction('lda #5'), await instruction('lda #5')]);
+      expect(reads).toEqual(['other.s', 'other.s']);
+    });
+
+    it('should run .incbin once the macro is expanded', async function() {
+      const reads: string[] = [];
+      const out = await testFiles(['.macro pull', '.incbin "data.bin"', '.endmacro',
+                                   'pull'], reads);
+      expect(out).toEqual([`.bytestr STR[$${new Base64().encode(BINARY)}]`]);
+      expect(reads).toEqual(['data.bin']);
+    });
+
+    it('should run .macpack once the macro is expanded', async function() {
+      expect(await testFiles(['.macro pull', '.macpack longbranch', '.endmacro',
+                              'pull', 'jeq target']))
+          .toEqual([await instruction('bne *+5'), await instruction('jmp target')]);
+    });
+  });
+
   // TODO - test .local, both for symbols AND for defines.
 
   // TODO - tests for .if, make sure it evaluates numbers, etc...
 
 });
+
+/** The one text file and the one binary file `testFiles` knows about. */
+const TEXT_FILES: Record<string, string> = {'other.s': 'lda #5\n'};
+const BINARY = util.fromByteString('0123456789');
+
+/**
+ * Runs the preprocessor over `lines` against a tiny fake file system, pushing
+ * the name of every file it actually asks for onto `reads`. That list is how
+ * the tests tell "resolved the directive" apart from "merely read past it".
+ */
+async function testFiles(lines: string[], reads: string[] = []): Promise<string[]> {
+  const readText = async (_base: string, name: string) => {
+    reads.push(name);
+    const code = TEXT_FILES[name];
+    if (code == null) throw new Error(`no such file: ${name}`);
+    return await Promise.resolve(code);
+  };
+  const readBinary = async (_base: string, name: string) => {
+    reads.push(name);
+    if (name !== 'data.bin') throw new Error(`no such file: ${name}`);
+    return await Promise.resolve(BINARY);
+  };
+  const toks = new TokenStream(readText, readBinary);
+  toks.enter(new Tokenizer(lines.join('\n'), 'input.s'));
+  const pre = new Preprocessor(toks, new Assembler());
+  const out: string[] = [];
+  for (let line = await pre.next(); line; line = await pre.next()) {
+    out.push(line.map(Tokens.name).join(' '));
+  }
+  return out;
+}
 
 function instruction(line: string) { return parseLine(line); }
 function label(line: string) { return parseLine(line); }

@@ -744,9 +744,46 @@ export class Preprocessor implements Tokens.Source {
     '.ifpc02': ([cs]) => this.parseIf(() => false, cs),
     '.ifpdtv': ([cs]) => this.parseIf(() => false, cs),
     '.ifpsc02': ([cs]) => this.parseIf(() => false, cs),
+    '.incbin': (line) => this.parseIncbin(line),
+    '.include': (line) => this.parseInclude(line),
+    '.macpack': (line) => this.parseMacpack(line),
     '.macro': (line) => this.parseMacro(line),
     '.repeat': (line) => this.parseRepeat(line),
   };
+
+  private async parseInclude(line: Token[]) {
+    const [cs, ...rest] = line;
+    const path = Tokens.expectString(rest[0], cs);
+    Tokens.expectEol(rest[1], 'a single string');
+    await this.stream.include(path, cs);
+  }
+
+  private async parseMacpack(line: Token[]) {
+    const [cs, ident, eol] = line;
+    const pack = Tokens.expectIdentifier(ident, cs).toLowerCase();
+    Tokens.expectEol(eol);
+    this.stream.macpack(pack, cs);
+    return await Promise.resolve();
+  }
+
+  /**
+   * `.incbin "file"[, offset[, length]]` reads the bytes now and hands the
+   * assembler a `.bytestr` line.
+   */
+  private async parseIncbin(line: Token[]) {
+    const cs = line[0];
+    const args = Tokens.parseArgList(line, 1);
+    const [file, ...rest] = args;
+    const path = Tokens.expectString(file[0], cs);
+    Tokens.expectEol(file[1], 'a single string');
+    if (rest.length > 2) Tokens.fail(`Too many arguments for .incbin`, cs);
+    const [offset, length] = rest.map(
+        arg => this.evaluateConst(parseOneExpr(arg, cs, this.env.encodeChar), cs));
+    const bin = await this.stream.incbin(path, offset ?? 0, length, cs);
+    const bytestr: Token = cs.source ? {...Tokens.BYTESTR, source: cs.source}
+                                     : Tokens.BYTESTR;
+    this.outQueue.push([bytestr, {token: 'str', str: bin}]);
+  }
 
   async parseDefine(line: Token[]) {
     const name = Tokens.expectIdentifier(line[1], line[0]);

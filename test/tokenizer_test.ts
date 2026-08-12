@@ -3,12 +3,10 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import { Base64 } from '../src/base64.ts';
 import { type Token } from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import {Tokenizer, type Options} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
-import { TokenStream } from '../src/tokenstream.ts';
 import { ErrorCollector } from '../src/assembler.ts';
 
 const [_] = [util];
@@ -40,24 +38,6 @@ async function tokenize(str: string, opts: Options = {},
   return out;
 }
 
-async function tokenstream(str: string, included: string, opts: Options = {}): Promise<Token[][]> {
-  const out : Token[][] = [];
-  const readfile = async(_path: string, _filename: string) => {
-      return await Promise.resolve(included);
-  }
-  const readfilebin = async(_path: string, _filename: string) => {
-      return await Promise.resolve(new TextEncoder().encode(included));
-  }
-  const tokenstream = new TokenStream(readfile, readfilebin, opts);
-  const tokenizer = new Tokenizer(str, 'input.s', opts);
-  tokenstream.enter(tokenizer);
-  for (let line = await tokenstream.next(); line; line = await tokenstream.next()) {
-    const o = line.map(strip);
-    // console.log(`o: ${JSON.stringify(o)}`);
-    out.push(o);
-  }
-  return out;
-}
 
 function strip(token: Token): Token {
   delete token.source;
@@ -99,44 +79,6 @@ describe('Tokenizer.line', function() {
       [{token: 'ident', str: 'pha'}],
       [{token: 'cs', str: '.endif', rawStr: '.endif'}],
     ]);
-  });
-
-  it('should include a file as part of the stream', async function() {
-    expect(await tokenstream(`
-      lda #3
-      .include "something.s"
-      sta $4
-    `, `
-      lda #5
-    `,)).toEqual([
-      [{token: 'ident', str: 'lda'},
-        {token: 'op', str: '#'}, {token: 'num', num: 0x03, radix: 10}],
-      [{token: 'ident', str: 'lda'},
-        {token: 'op', str: '#'}, {token: 'num', num: 0x05, radix: 10}],
-      [{token: 'ident', str: 'sta'},
-        {token: 'num', num: 0x04, width: 1, radix: 16}],
-    ])
-  });
-
-  describe('.incbin', function() {
-    const dataStr = '0123456789';
-    const data = util.fromByteString(dataStr);
-
-    async function testIncBin(startOffs?: number, length?: number) {
-      let source = ['.incbin "something.bin"', startOffs, length].filter(x => x !== undefined).join(", ");
-      if (startOffs === undefined) startOffs = 0;
-      if (length === undefined) length = dataStr.length - startOffs;
-      
-      expect(await tokenstream(source, dataStr), source).toEqual([
-        [{token: 'cs', str: '.bytestr'}, {token: 'str', str: new Base64().encode(data.subarray(startOffs, startOffs! + length!))}],
-      ]);
-    };
-
-    it('should work with path only', async () => {return await testIncBin()});
-
-    it('should work with path and offset', async () => {return await testIncBin(3)});
-
-    it('should work with path, offset, and length', async () => {return await testIncBin(3, 4)});
   });
 
   it('should tokenize a label', async function() { 
