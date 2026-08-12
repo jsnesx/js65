@@ -233,6 +233,121 @@ describe('CLI', function() {
     });
   });
 
+  describe('printing several lints at once', function() {
+    // A build with a run of lints from more than one rule, and from more than
+    // one file, which is where the per-message code tag and the source snippet
+    // have to keep track of which message they belong to.
+    const tree: Record<string, string> = {
+      'main.s': [
+        '.segment "CODE"',
+        '.include "lib/tails.asm"',
+        'main:',
+        '  jsr helper',
+        '  rts',
+        '  jmp next',
+        'next:',
+        '  rts',
+      ].join('\n') + '\n',
+      'lib/tails.asm': [
+        '.include "helper.inc"',
+        'first:',
+        '  jsr helper',
+        '  rts',
+        'second:',
+        '  jsr helper',
+        '  rts',
+        'third:',
+        '  jmp fourth',
+        'fourth:',
+        '  rts',
+      ].join('\n') + '\n',
+      // Included from lib/tails.asm, so it is resolved against that file's own
+      // directory rather than the one the include names.
+      'lib/helper.inc': [
+        'helper:',
+        '  rts',
+        'nested:',
+        '  jsr helper',
+        '  rts',
+      ].join('\n') + '\n',
+    };
+
+    /** Runs the cli over `tree` and returns everything it printed, by line. */
+    async function lintOutput(): Promise<string[]> {
+      const read = (path: string, filename: string) => {
+        const key = joinDir(path, filename);
+        if (!(key in tree)) throw new Error(`ENOENT ${key}`);
+        return tree[key];
+      };
+      const cli = new Cli({
+        fsReadString: async (path, filename) => read(path, filename),
+        fsReadBytes: async (path, filename) =>
+            new TextEncoder().encode(read(path, filename)),
+        fsWriteString: async () => {},
+        fsWriteBytes: async () => {},
+        fsListDir: async () => [],
+        exit: (code: number) => { if (code !== 0) throw new Error(`exit ${code}`); },
+      });
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      try {
+        await cli.run(['--target', 'sim', '-o', 'out.nes', 'main.s']);
+      } finally {
+        console.log = log;
+      }
+      return lines;
+    }
+
+    /** Just the `file:line:col: level: message [code]` lines. */
+    function diagnostics(lines: string[]): string[] {
+      return lines.filter(l => /^\S+:\d+:\d+: (note|warning|error): /.test(l));
+    }
+
+    it('should tag each message with the rule that reported it',
+       async function() {
+      const notes = diagnostics(await lintOutput());
+      // Four tail calls and two fall-throughs, all in one run.
+      expect(notes.filter(l => l.includes('followed by `rts`')).length).toBe(4);
+      expect(notes.filter(l => l.includes('jumps to the next instruction')).length)
+          .toBe(2);
+      for (const note of notes) {
+        const code = /\[([a-z-]+)\]$/.exec(note)?.[1];
+        if (note.includes('followed by `rts`')) {
+          expect(code, note).toBe('jsr-rts-tail-call');
+        } else {
+          expect(code, note).toBe('jmp-fallthrough');
+        }
+      }
+    });
+
+    it('should print the messages in source order', async function() {
+      // Not the order the rules fired in: the tail calls are only decided at
+      // the end of the module, well after the fall-throughs are reported.
+      const notes = diagnostics(await lintOutput());
+      expect(notes.map(l => /^(\S+?:\d+):\d+:/.exec(l)![1])).toEqual([
+        'lib/helper.inc:4',
+        'lib/tails.asm:3',
+        'lib/tails.asm:6',
+        'lib/tails.asm:9',
+        'main.s:4',
+        'main.s:6',
+      ]);
+    });
+
+    it('should print the source line under every message', async function() {
+      const lines = await lintOutput();
+      // Each diagnostic is followed by its ` NN |  <source>` snippet and the
+      // caret line under it, whichever file the lint came from.
+      for (let i = 0; i < lines.length; i++) {
+        if (!diagnostics([lines[i]]).length) continue;
+        const line = /^.+?:(\d+):\d+: /.exec(lines[i])![1];
+        expect(lines[i + 1], lines[i]).toMatch(new RegExp(`^ *${line} \\| `));
+        expect(lines[i + 2], lines[i]).toContain('^');
+      }
+    });
+  });
+
   describe('--create-dep', function() {
     const cli = new Cli({
       fsReadString: async () => '',

@@ -61,7 +61,9 @@ export class BuildSession {
   async readSource(path: string, filename: string): Promise<string> {
     const code = await this.callbacks.fsReadString(path, filename);
     this.trackDep(path, filename);
-    this.cacheSource(filename, code);
+    // An include is recorded under the path it resolved to, not the one it was
+    // written as, so cache it that way or a diagnostic in it finds nothing.
+    this.cacheSource(joinDir(path, filename), code);
     return code;
   }
 
@@ -93,8 +95,9 @@ export class BuildSession {
   }
 
   private cacheSource(filename: string, code: string) {
-    this.sources.set(filename, code);
-    this.sourceLines.delete(filename);
+    const key = joinDir('', filename);
+    this.sources.set(key, code);
+    this.sourceLines.delete(key);
   }
 
   /**
@@ -103,12 +106,13 @@ export class BuildSession {
    * diagnostic actually asks, since most builds never print one.
    */
   sourceLine(file: string, line: number): string | undefined {
-    let lines = this.sourceLines.get(file);
+    const key = joinDir('', file);
+    let lines = this.sourceLines.get(key);
     if (!lines) {
-      const text = this.sources.get(file);
+      const text = this.sources.get(key);
       if (text === undefined) return undefined;
       lines = text.split(/\r\n|\n|\r/);
-      this.sourceLines.set(file, lines);
+      this.sourceLines.set(key, lines);
     }
     return lines[line - 1];
   }
