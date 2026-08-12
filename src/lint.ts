@@ -344,8 +344,8 @@ class JsrRtsTailCall extends AdjacentInstructions {
     for (const {jsr, rts, index} of this.tailCalls) {
       if (this.referencedRts.has(index)) continue;
       const target = render(...jsr.tokens.slice(1));
-      this.report(`\`jsr ${target}\` followed by \`rts\` is a tail call. ` +
-                  `\`jmp ${target}\` is usually a free optimization.`+
+      this.report(`\`jsr ${target}\` followed by \`rts\` can usually ` +
+                  `be replaced with \`jmp ${target}\`. `+
                   `Label the \`rts\` to silence this warning or add \`; js65-lint-disable-next-line ` +
                 `jsr-rts-tail-call\`.`,
                   jsr.tokens[0].source,
@@ -381,6 +381,21 @@ class JmpFallthrough extends AdjacentInstructions {
   }
 }
 
+/**
+ * The `Report` for one rule, binding its id and level in. This has to be its
+ * own function: Hermes gives a loop one binding for all of its iterations, so a
+ * callback built inline in the loop below would close over whichever rule came
+ * last and tag every message with that rule's id and level.
+ */
+function reporter(errorCollector: ErrorCollector, pragmas: LintPragmas|undefined,
+                  id: string, level: Exclude<LintLevel, 'off'>): Report {
+  return (message, source, fix) => {
+    if (pragmas?.suppressed(id, source)) return;
+    errorCollector.add(level, message, source,
+                       fix ? {code: id, fix} : {code: id});
+  };
+}
+
 /** Every rule js65 knows, in the order they are dispatched and reported. */
 const RULES: readonly LintRuleClass[] = [
   BareNumberOperand,
@@ -409,11 +424,7 @@ export class Linter {
       for (const [id, rule] of LINT_RULES) {
         const level = opts.rules?.[id] ?? rule.level;
         if (level === 'off') continue;
-        rules.push(new rule((message, source, fix) => {
-          if (pragmas?.suppressed(id, source)) return;
-          errorCollector.add(level, message, source,
-                             fix ? {code: id, fix} : {code: id});
-        }));
+        rules.push(new rule(reporter(errorCollector, pragmas, id, level)));
       }
     }
     this.rules = rules;

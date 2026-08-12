@@ -72,12 +72,14 @@ describe('parseProject', function() {
   });
 
   it('turns the defines object into SymbolDefines, stringifying values', function() {
-    const p = parse({projects: [{sources: ['a.s'], defines: {DEBUG: 1, NAME: 'x', ON: true}}]})
+    const p = parse({projects: [{sources: ['a.s'],
+                                 defines: {DEBUG: 1, NAME: 'x', ON: true, OFF: false}}]})
         .projects[0];
     expect(p.defines).toEqual([
       {name: 'DEBUG', value: '1'},
       {name: 'NAME', value: 'x'},
-      {name: 'ON', value: 'true'},
+      {name: 'ON', value: '1'},
+      {name: 'OFF', value: '0'},
     ]);
   });
 

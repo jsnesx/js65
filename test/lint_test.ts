@@ -543,7 +543,8 @@ describe('jsr-rts-tail-call', function() {
     expect(msg.level).toBe('info');
     expect(msg.code).toBe('jsr-rts-tail-call');
     expect(msg.source).toMatchObject({file: 'test.s', line: 3, column: 2});
-    expect(msg.message).toContain('`jsr foo` followed by `rts` is a tail call');
+    expect(msg.message)
+        .toContain('`jsr foo` followed by `rts` can usually be replaced');
     expect(msg.message).toContain('`jmp foo`');
   });
 

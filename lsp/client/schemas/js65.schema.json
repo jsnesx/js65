@@ -73,7 +73,7 @@
 					},
 					"defines": {
 						"type": "object",
-						"description": "Symbols defined before assembly, as if passed with `-D`. Numbers and booleans are stringified.",
+						"description": "Symbols defined before assembly, as if passed with `-D NAME=VALUE`.",
 						"additionalProperties": {
 							"type": ["string", "number", "boolean"]
 						}

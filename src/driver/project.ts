@@ -201,8 +201,9 @@ function parseDefines(
       fail(`${where}.${name} must be a string, number or boolean`);
     }
     // Values cross into the assembler as text either way, so a JSON number is just a
-    // friendlier spelling of the `-D NAME=value` string.
-    out.push({name, value: String(value)});
+    // friendlier spelling of the `-D NAME=value` string. Booleans become 1/0 rather
+    // than "true"/"false", which would define a macro expanding to an unknown symbol.
+    out.push({name, value: typeof value === 'boolean' ? (value ? '1' : '0') : String(value)});
   }
   return out;
 }

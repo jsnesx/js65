@@ -44,7 +44,7 @@ Without a `js65.json`, files are analyzed standalone  syntax errors, navigation,
 
 This extension contributes the language id `js65` (shown as "js65 Assembly") with grammar scope `source.js65`, for files with the extensions `.s`, `.asm`, `.inc`, and `.mac`.
 
-If you have a different language extension that takes the `.s`, then you can associate them with js65 using the following 
+If you have a different language extension that takes the `.s`, then you can associate them with js65 using the following
 
 ```json
 { "files.associations": { "*.s": "js65", "*.inc": "js65" } }

@@ -592,7 +592,7 @@ export class Cli {
   }
 
   printMessages(messages: Tokens.AssemblerMessage[]) {
-    for (const msg of messages) {
+    for (const msg of Tokens.sortByLocation(messages)) {
       this.printDiagnostic(msg.level, msg.message, msg.source, msg.code);
     }
     this.printSummary(messages.filter(m => m.level === 'error').length,

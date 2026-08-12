@@ -45,6 +45,23 @@ export interface AssemblerMessage {
   fix?: MessageFix;
 }
 
+function compareLocation(a?: SourceInfo, b?: SourceInfo): number {
+  // A message with no location at all belongs after the ones that have one:
+  // it is about the run rather than about a place in the source.
+  if (!a || !b) return !a && !b ? 0 : a ? -1 : 1;
+  if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+  return a.line - b.line || a.column - b.column;
+}
+
+export function sortByLocation(
+    messages: readonly AssemblerMessage[]): AssemblerMessage[] {
+  return messages
+      .map((message, index) => ({message, index}))
+      .sort((a, b) => compareLocation(a.message.source, b.message.source) ||
+                      a.index - b.index)
+      .map(entry => entry.message);
+}
+
 export function at(arg: {source?: SourceInfo}): string {
   const s = arg.source;
   if (!s) return '';
