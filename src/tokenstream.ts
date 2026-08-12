@@ -1,7 +1,6 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import * as Exprs from './expr.ts';
 import { Base64 } from './base64.ts'
 import {type Token} from './token.ts'
 import {Tokenizer, type Options} from './tokenizer.ts'
@@ -99,89 +98,63 @@ export class TokenStream implements Tokens.Source {
     return searchList(this.currentDir(), this.opts?.includePaths ?? ['./']);
   }
 
-  /** Search list for a `.incbin`. Including file's dir first, then --bin-include-dir. */
   private binIncludeSearch(): string[] {
-    return searchList(this.currentDir(),
-                      this.opts?.binIncludePaths ?? this.opts?.includePaths ?? ['./']);
+    const paths = this.opts?.binIncludePaths?.length ? this.opts.binIncludePaths :
+        this.opts?.includePaths?.length ? this.opts.includePaths : [];
+    return searchList(this.currentDir(), [...paths, './']);
   }
 
   async next(): Promise<Token[]|undefined> {
     while (this.stack.length) {
       const frame = this.stack[this.stack.length - 1];
-      const tok = frame.source;
       const front = frame.queue;
       if (front.length) return front.pop()!;
-      const line = await tok?.next();
-      if (line) {
-        if (line?.[0].token !== 'cs') return line;
-        switch (line[0].str) {
-          case '.include': {
-            const path = this.str(line);
-            if (!this.readFile) this.err(line);
-            // TODO - options?
-            const {value: code, base} = await this.loadFile<string>(
-                path, this.includeSearch(), this.readFile, line[0]);
-            // Dont use the name of the file for the include, use the resolved
-            // path so that two "header.inc" files in different dirs have the correct path.
-            const resolved = joinDir(base, path);
-            // Nested includes resolve relative to this file's own directory.
-            this.enter(new Tokenizer(code, resolved, this.opts, this.sourceContents,
-                                     this.errorCollector),
-                       joinDir(base, dirOf(path)));
-            continue;
-          }
-          case '.macpack': {
-            const pack = Tokens.expectIdentifier(line[1])?.toLowerCase();
-            const code = MACPACK.get(pack) ?? this.err(line);
-            this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts, this.sourceContents,
-                                     this.errorCollector));
-            continue;
-          }
-          case '.incbin': {
-            // TODO: consider moving this to an assembler directive so it can just put the
-            // whole chunk of bytes into the module and skip tokenizing it.
-            if (!this.readFileBinary) this.err(line);
-            if (line.length < 1) {
-              this.err(line);
-            }
-            const path = Tokens.expectString(line[1], line[0]);
-            let offset = 0;
-            let length = undefined;
-            if (line.length > 2) {
-              const args = Tokens.parseArgList(line, 2);
-              if (args[1]) {
-                const expr = Exprs.evaluate(Exprs.parseOnly(args[1]));
-                offset = expr.num ?? 0;
-              }
-              if (args[2]) {
-                const expr = Exprs.evaluate(Exprs.parseOnly(args[2]));
-                length = expr.num ?? -1;
-              }
-            }
-            // TODO this is a little jank, but we base64 encode the binary file for now
-            // so it can be loaded faster without parsing later.
-            // The data passed in from the call back can either be base64 encoded or a u8 array
-            // but because the user can slice the input, its easier to decode to bytes, then slice
-            // then reencode for now.
-            const loaded = await this.loadFile<Uint8Array|string>(
-                path, this.binIncludeSearch(), this.readFileBinary, line[0]);
-            let inbytes = (typeof loaded.value === 'string') ? new Base64().decode(loaded.value) : loaded.value;
-  
-            const end = length !== undefined ? offset + length : undefined;
-            const bin = new Base64().encode(inbytes.slice(offset, end));
-            const out : Token[] = [
-              Tokens.BYTESTR,
-              {token: 'str', str: bin}
-            ];
-            return out;
-          }
-          default:
-            return line;
-        }
-      }
+      const line = await frame.source?.next();
+      if (line) return line;
       this.stack.pop();
     }
     return undefined;
+  }
+
+  async include(path: string, at?: Token): Promise<void> {
+    if (!this.readFile) {
+      Tokens.fail(`Cannot read file, no reader available: ${path}`, at);
+    }
+    // TODO - options?
+    const {value: code, base} = await this.loadFile<string>(
+        path, this.includeSearch(), this.readFile, at);
+    // Dont use the name of the file for the include, use the resolved
+    // path so that two "header.inc" files in different dirs have the correct path.
+    const resolved = joinDir(base, path);
+    // Nested includes resolve relative to this file's own directory.
+    this.enter(new Tokenizer(code, resolved, this.opts, this.sourceContents,
+                             this.errorCollector),
+               joinDir(base, dirOf(path)));
+  }
+
+  /** Pushes one of the built-in macro packages onto the stack. */
+  macpack(pack: string, at?: Token): void {
+    const code = MACPACK.get(pack);
+    if (code == null) Tokens.fail(`Unknown macpack: ${pack}`, at);
+    this.enter(new Tokenizer(code, `${pack}.macpack`, this.opts, this.sourceContents,
+                             this.errorCollector));
+  }
+
+  async incbin(path: string, offset: number, length: number|undefined,
+               at?: Token): Promise<string> {
+    if (!this.readFileBinary) {
+      Tokens.fail(`Cannot read binary file, no reader available: ${path}`, at);
+    }
+    const loaded = await this.loadFile<Uint8Array|string>(
+        path, this.binIncludeSearch(), this.readFileBinary, at);
+    // The callback hands back either base64 or bytes, and the caller may slice
+    // it, so decode to bytes, slice, then re-encode.
+    // TODO this is a little jank, but we base64 encode the binary file for now
+    // so it can be loaded faster without parsing later.
+    const bytes = typeof loaded.value === 'string' ?
+        new Base64().decode(loaded.value) : loaded.value;
+    const end = length !== undefined ? offset + length : undefined;
+    return new Base64().encode(bytes.slice(offset, end));
   }
 
   unshift(...lines: Token[][]) {
@@ -192,10 +165,6 @@ export class TokenStream implements Tokens.Source {
     }
   }
 
-  // async include(file: string) {
-  //   const code = await this.task.parent.readFile(file);
-  //   this.stack.push([new Tokenizer(code, file, this.task.opts),  []]);
-  // }
   // Enter a macro scope, an included file, or the top-level source.
   // dir parameter is the base level include directory for the file,
   // used when dealing with expanding included macros in files (it should inherit
@@ -222,15 +191,4 @@ export class TokenStream implements Tokens.Source {
   // options(): Tokenizer.Options {
   //   return this.task.opts;
   // }
-  
-  err(line: Token[]): never {
-    Tokens.fail(this.str(line), line[0]);
-  }
-
-  str(line: Token[]): string {
-    const str = Tokens.expectString(line[1], line[0]);
-    Tokens.expectEol(line[2], 'a single string');
-    return str;
-  }
-
 }
