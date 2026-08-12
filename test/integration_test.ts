@@ -1445,7 +1445,100 @@ Target = $42
 `, 'Unknown segment attr');
     });
   });
+  describe('leading_dot_in_identifiers', function() {
+    it('defines and calls a macro whose name starts with a dot',
+        async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.feature leading_dot_in_identifiers
+.macro .t This
+.addr This-1
+.endmacro
+.macro .b InpA, InpB
+.byt ( InpA<<4 ) | InpB
+.endmacro
+Target = $8123
+.t Target
+.B 3, 7
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x22, 0x81, 0x37]);
+    });
 
+    it('takes a dotted name anywhere a symbol goes', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.feature leading_dot_in_identifiers
+.foo = $11
+.scope Sc
+.bar = $22
+.endscope
+.define .baz $33
+.proc .pr
+.byte $44
+.endproc
+.byte .foo, Sc::.bar, .baz, .pr - $8000
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x44, 0x11, 0x22, 0x33, 0x00]);
+    });
+
+    it('keeps a dotted name distinct from the undotted one',
+        async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.feature leading_dot_in_identifiers
+.foo = $11
+foo = $22
+.byte .foo, foo
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x11, 0x22]);
+    });
+
+    it('never lets a dotted name shadow a control command', async function() {
+      await expectCompileError(`
+.feature leading_dot_in_identifiers
+.macro .byt Value
+.byte Value
+.endmacro
+`, 'Expected identifier');
+    });
+    it('keeps a dotted name distinct from the undotted one',
+        async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.feature leading_dot_in_identifiers
+.foo = $11
+foo = $22
+.byte .foo, foo
+`;
+      const result = await compileSource(source);
+      expect(Array.from(result)).toEqual([0x11, 0x22]);
+    });
+
+    it('never lets a dotted name shadow a control command', async function() {
+      await expectCompileError(`
+.feature leading_dot_in_identifiers
+.macro .byt Value
+.byte Value
+.endmacro
+`, 'Expected identifier');
+    });
+
+    it('reports an unknown dot word again once the feature is off',
+        async function() {
+      await expectCompileError(`
+.feature leading_dot_in_identifiers
+.feature leading_dot_in_identifiers off
+.test $1234
+`, 'Unknown directive: .test');
+    });
+  });
   describe('Directive recognition', function() {
     it('.code / .rodata / .bss switch to the named segment', async function() {
       const source = `

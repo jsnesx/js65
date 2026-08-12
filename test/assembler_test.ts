@@ -2455,8 +2455,7 @@ Ptr: .res 2
 
     // Names js65 doesn't implement yet. Delete a line here when one lands - the
     // "everything else is accepted" test below then covers it automatically.
-    const UNSUPPORTED = ['leading_dot_in_identifiers', 'dollar_in_identifiers',
-                         'dollar_is_pc'];
+    const UNSUPPORTED = ['dollar_in_identifiers', 'dollar_is_pc'];
 
     it('should accept every ca65 feature name it implements', function() {
       for (const name of FEATURE_NAMES) {
@@ -3463,7 +3462,7 @@ lda #.sizeof(Point)
 
     it('requires a single string argument', async function() {
       expect(await assembleErrors(`  .fatal\n`))
-          .toEqual(['Expected constant string after .FATAL']);
+          .toEqual(['Expected constant string after .fatal']);
     });
   });
 

@@ -106,6 +106,7 @@ export interface AssemblerOptions {
   labelsWithoutColons?: boolean;
   pcAssignment?: boolean;
   forceRange?: boolean;
+  leadingDotInIdentifiers?: boolean;
   /** If true, then gather all the sym refs and defines for the LSP */
   collectReferences?: boolean;
   /** Cache of all symbols for the LSP. not used unless collectReferences is on */
@@ -162,6 +163,7 @@ export interface Js65Options {
   labelsWithoutColons?: boolean;
   pcAssignment?: boolean;
   forceRange?: boolean;
+  leadingDotInIdentifiers?: boolean;
   debugLevel?: number;
   target?: string;
   baseRomOffset?: number;
@@ -286,6 +288,7 @@ export async function assemble(
     lineContinuations: options?.lineContinuations ?? true,
     numberSeparators: options?.numberSeparators,
     cComments: options?.cComments,
+    leadingDotInIdentifiers: options?.leadingDotInIdentifiers,
     // One shared instance: pragmas are keyed by file, and every module's
     // tokenizer records into the same table the linter later consults.
     lintPragmas: options?.lint?.enabled === false ? undefined : new LintPragmas(),
@@ -796,6 +799,7 @@ export async function compile(
       cComments: options.cComments,
       lineContinuations: options.lineContinuations,
       numberSeparators: options.numberSeparators,
+      leadingDotInIdentifiers: options.leadingDotInIdentifiers,
       lint: options.lint,
     };
     const linkerOpts: LinkerOptions = {
