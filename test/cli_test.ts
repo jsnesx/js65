@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect, spyOn} from 'bun:test';
-import {Cli} from '../src/cli.ts'
+import {Cli} from '../src/driver/cli.ts'
 import { fromHexString, fromByteString, joinDir } from "../src/util.ts";
 import { VERSION } from '../src/version.ts';
+import { createHash } from "sha1-uint8array";
 
 describe('CLI', function() {
   // disable the usage message to keep the test output clean
@@ -55,7 +56,7 @@ describe('CLI', function() {
       fsReadBytes: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsWalk: async () => {},
+      fsListDir: async () => [],
       exit: () => {},
     });
 
@@ -132,7 +133,7 @@ describe('CLI', function() {
             new TextEncoder().encode(read(path, filename)),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(args);
@@ -147,7 +148,7 @@ describe('CLI', function() {
       fsReadBytes: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsWalk: async () => {},
+      fsListDir: async () => [],
       exit: () => {},
     });
     const paths = (...args: string[]) => cli.parseArgs(args).options.includePaths;
@@ -204,7 +205,7 @@ describe('CLI', function() {
         },
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { if (code !== 0) throw new Error(`exit ${code}`); },
       });
       await cli.run(args);
@@ -238,7 +239,7 @@ describe('CLI', function() {
       fsReadBytes: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsWalk: async () => {},
+      fsListDir: async () => [],
       exit: () => {},
     });
 
@@ -262,7 +263,7 @@ describe('CLI', function() {
         fsReadBytes: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exits.push(code); },
       });
       const log = console.log;
@@ -385,7 +386,7 @@ describe('CLI', function() {
             new TextEncoder().encode(read(path, filename)),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await dep.run(args);
@@ -403,7 +404,7 @@ describe('CLI', function() {
       fsReadBytes: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsWalk: async () => {},
+      fsListDir: async () => [],
       exit: () => {},
     });
 
@@ -415,7 +416,7 @@ describe('CLI', function() {
         fsReadBytes: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exits.push(code); },
       });
       return {
@@ -766,7 +767,7 @@ describe('CLI', function() {
         fsReadBytes: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exits.push(code); },
       });
       const log = console.log;
@@ -924,7 +925,7 @@ describe('CLI', function() {
         fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(['--target', 'sim', '-DFOO=BAR', '-o', 'out.bin', 'a.s', 'b.s']);
@@ -947,7 +948,7 @@ describe('CLI', function() {
         fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(['--target', 'sim', '-DFOO=5', '-o', 'out.bin', 'a.s', 'b.s']);
@@ -975,7 +976,7 @@ describe('CLI', function() {
             new TextEncoder().encode(read(path, filename)),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(args);
@@ -1175,13 +1176,88 @@ describe('CLI', function() {
         fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(['--target', 'sim', '--feature', 'underline_in_numbers',
                      '-o', 'out.bin', 'a.s', 'b.s']);
       expect(exitCode).toBe(0);
       expect([...written.get('out.bin')!]).toEqual([10, 20]);
+    });
+  });
+
+  // The ROM search walks the tree through the shared walkFiles helper rather than a
+  // per-frontend recursive listing, so cover that it still finds a nested match.
+  describe('rehydrate ROM search', function() {
+    const prg = new Uint8Array(0x40000);
+    prg.set([0xa9, 0x05, 0x60]);
+    const rom = new Uint8Array(0x40010);
+    rom.set(prg, 0x10);
+    const sha = Array.from(new Uint8Array(createHash().update(rom).digest()),
+                           x => x.toString(16).padStart(2, '0')).join('');
+
+    /** Runs `rehydrate` over a tree, returning what got written and which dirs were listed. */
+    async function search(tree: Record<string, string[]>, roms: Record<string, Uint8Array>,
+                          src = `; smudge sha1 ${sha}\nlda #$05\n`) {
+      const listed: string[] = [];
+      let written = '';
+      let exitCode = 0;
+      const cli = new Cli({
+        fsReadString: async (_p, f) => {
+          if (f === 'in.s') return src;
+          throw new Error(`no such file: ${f}`);
+        },
+        fsReadBytes: async (_p, f) => {
+          const r = roms[f];
+          if (!r) throw new Error(`no such file: ${f}`);
+          return r;
+        },
+        fsWriteString: async (_p, _f, data) => { written = data; },
+        fsWriteBytes: async () => {},
+        fsListDir: async (dir: string) => {
+          listed.push(dir);
+          const entries = tree[dir];
+          if (!entries) throw new Error(`Could not list directory: ${dir}`);
+          return entries;
+        },
+        exit: (code: number) => { exitCode = code; },
+      });
+      await cli.run(['rehydrate', '-o', 'out.s', 'in.s']);
+      return {written, exitCode, listed};
+    }
+
+    it('finds a matching rom nested under the working directory', async function() {
+      const {written, exitCode} = await search(
+          {'.': ['in.s', 'roms/'], 'roms': ['game.nes']},
+          {'roms/game.nes': rom});
+      expect(exitCode).toBe(0);
+      expect(written.length).toBeGreaterThan(0);
+    });
+
+    it('ignores roms whose hash does not match', async function() {
+      const other = new Uint8Array(0x40010);
+      other.set([1, 2, 3]);
+      const {exitCode} = await search(
+          {'.': ['in.s', 'roms/'], 'roms': ['wrong.nes']},
+          {'roms/wrong.nes': other});
+      // usage(1) fires when no rom matches the sha1 tag.
+      expect(exitCode).toBe(1);
+    });
+
+    it('does not fail when a subdirectory cannot be listed', async function() {
+      const {exitCode} = await search(
+          {'.': ['in.s', 'denied/', 'roms/'], 'roms': ['game.nes']},
+          {'roms/game.nes': rom});
+      expect(exitCode).toBe(0);
+    });
+
+    // exec() returns null rather than undefined, so the original `=== undefined` guard
+    // never fired and this fell through to a TypeError instead of the usage message.
+    it('reports a missing sha1 tag instead of crashing', async function() {
+      const {exitCode, written} = await search(
+          {'.': ['in.s']}, {}, 'lda #$05\n');
+      expect(exitCode).toBe(1);
+      expect(written).toBe('');
     });
   });
 
@@ -1235,7 +1311,7 @@ Start:
         },
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsWalk: async () => {},
+        fsListDir: async () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(args);
@@ -1264,9 +1340,9 @@ async function make(args: string[], input: string, bytes: Uint8Array|null = null
       dataParts.push(data)
       return await Promise.resolve(undefined);
     },
-    fsWalk: async (_path: string, _action: (filename: string) => Promise<boolean>) => {
+    fsListDir: async (_dir: string) => {
       // unused for now
-      return await Promise.resolve(undefined);
+      return await Promise.resolve([]);
     },
     exit: (code: number) => process.exit(code),
   });
@@ -1297,8 +1373,8 @@ async function makeFiles(args: string[], input: string, bytes: Uint8Array|null =
       files.set(filename, data);
       return await Promise.resolve(undefined);
     },
-    fsWalk: async (_path: string, _action: (filename: string) => Promise<boolean>) => {
-      return await Promise.resolve(undefined);
+    fsListDir: async (_dir: string) => {
+      return await Promise.resolve([]);
     },
     exit: (code: number) => { exitCode = code; },
   });

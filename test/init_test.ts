@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
+import {Builder, BuildSession, selectProjects} from '../src/driver/build.ts';
+import {Cli} from '../src/driver/cli.ts';
 import {DEFAULT_TARGET, init, scaffold} from '../src/driver/init.ts';
+import {parseProject} from '../src/driver/project.ts';
 import {fakeFs} from './fakefs.ts';
 
 /** Scaffold over an in-memory tree and report what landed in it. */
@@ -107,5 +110,182 @@ describe('init', function() {
   it('rejects a target that does not exist', async function() {
     await expect(runInit({}, {dir: 'demo', target: 'nes-mmc3'}))
         .rejects.toThrow(/unknown target "nes-mmc3" \(js65 has sim, nes-nrom\)/);
+  });
+});
+
+/**
+ * The onboarding guarantee: whatever `js65 init` writes has to assemble and link as it
+ * stands, with no edits and no Makefile.
+ */
+describe('the generated project', function() {
+  async function initThenBuild(args: string[]) {
+    const {callbacks, written} = fakeFs();
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...parts: unknown[]) => { lines.push(parts.join(' ')); };
+    let exitCode = 0;
+    try {
+      const cli = new Cli({...callbacks, exit: code => { exitCode = code; }});
+      await cli.run(['init', ...args]);
+      await cli.run(['build', ...(args[0] ? ['-p', `${args[0]}/js65.json`] : [])]);
+    } finally {
+      console.log = log;
+    }
+    return {exitCode, written, lines, out: lines.join('\n'),
+            files: [...written.keys()].sort()};
+  }
+
+  it('builds an iNES ROM straight out of init', async function() {
+    const {exitCode, written, out} = await initThenBuild(['demo']);
+    expect(exitCode).toBe(0);
+    const rom = written.get('demo/build/demo.nes')!;
+    expect(rom).toBeDefined();
+    // `NES\x1a`, then two 16KB PRG banks and one 8KB CHR bank.
+    expect([...rom.slice(0, 6)]).toEqual([0x4e, 0x45, 0x53, 0x1a, 2, 1]);
+    // 16-byte header + 32KB PRG + 8KB CHR, the canonical NROM-256 size.
+    expect(rom.length).toBe(0x10 + 0x8000 + 0x2000);
+    expect(out).not.toContain('error');
+  });
+
+  // A lint firing on the code js65 itself wrote would teach the wrong lesson.
+  it('builds without a single diagnostic', async function() {
+    const {out, lines} = await initThenBuild(['demo']);
+    expect(out).not.toMatch(/error|warning|note/);
+    expect(lines.at(-1)).toMatch(/^\[1\/1\] demo {2}ok {6}build\/demo\.nes \(\d+ bytes\)$/);
+  });
+
+  it('points its reset and nmi vectors into the code it assembled', async function() {
+    const {written} = await initThenBuild(['demo']);
+    const rom = written.get('demo/build/demo.nes')!;
+    // The vectors sit at $fffa-$ffff, i.e. the last six bytes of the PRG image.
+    const vectors = rom.subarray(0x8010 - 6, 0x8010);
+    const at = (i: number) => vectors[i] | (vectors[i + 1] << 8);
+    for (const vector of [at(0), at(2), at(4)]) {
+      expect(vector).toBeGreaterThanOrEqual(0x8000);
+      expect(vector).toBeLessThan(0x10000);
+    }
+    // reset is the entry point, and the scaffold puts it first.
+    expect(at(2)).toBe(0x8000);
+  });
+
+  it('builds in the current directory too', async function() {
+    const {exitCode, files} = await initThenBuild([]);
+    expect(exitCode).toBe(0);
+    expect(files).toContain('build/main.nes');
+  });
+
+  // The scaffold declares inc/ and assets/ so that a header and a binary dropped into
+  // them are found with no further configuration.
+  it('finds a new header and a new binary through the declared search paths',
+     async function() {
+    const {callbacks, written} = fakeFs();
+    await init(callbacks, {dir: 'demo'});
+    await callbacks.fsWriteString('demo/inc', 'tiles.inc', 'TILE_COUNT = 3\n');
+    await callbacks.fsWriteBytes('demo/assets', 'tiles.chr', new Uint8Array([1, 2, 3]));
+    await callbacks.fsWriteString('demo/src', 'extra.s',
+        '.include "tiles.inc"\n.byte TILE_COUNT\n.incbin "tiles.chr"\n');
+
+    const config = parseProject(
+        'demo/js65.json', await callbacks.fsReadString('', 'demo/js65.json'));
+    const messages: string[] = [];
+    const builder = new Builder(new BuildSession(callbacks),
+                                {messages: msgs => { for (const m of msgs) messages.push(m.message); }});
+    const result = await builder.build(config, selectProjects(config, []));
+    expect(messages).toEqual([]);
+    expect(result.success).toBe(true);
+    // extra.s links after main.s, so its bytes follow the reset routine.
+    expect([...written.get('demo/build/demo.nes')!]).toContain(3);
+  });
+});
+
+describe('js65 init', function() {
+  async function run(files: Record<string, string|Uint8Array>, args: string[]) {
+    const {callbacks, written, text} = fakeFs(files);
+    const lines: string[] = [];
+    let exitCode = 0;
+    const log = console.log;
+    console.log = (...parts: unknown[]) => { lines.push(parts.join(' ')); };
+    try {
+      await new Cli({...callbacks, exit: code => { exitCode = code; }}).run(args);
+    } finally {
+      console.log = log;
+    }
+    return {exitCode, written, text, lines, out: lines.join('\n'),
+            files: [...written.keys()].sort()};
+  }
+
+  it('scaffolds the named directory and says how to build it', async function() {
+    const {exitCode, files, out} = await run({}, ['init', 'demo']);
+    expect(exitCode).toBe(0);
+    expect(files).toEqual(SCAFFOLD_FILES.map(f => `demo/${f}`));
+    expect(out).toContain('js65: created project "demo" in demo');
+    expect(out).toContain('  demo/src/main.s');
+    expect(out).toContain('cd demo && js65 build');
+  });
+
+  it('scaffolds the current directory when no name is given', async function() {
+    const {exitCode, files, out} = await run({}, ['init']);
+    expect(exitCode).toBe(0);
+    expect(files).toEqual(SCAFFOLD_FILES);
+    expect(out).toContain('Build it with: js65 build');
+  });
+
+  it('takes the target from -t', async function() {
+    const {text} = await run({}, ['init', '-t', 'sim', 'demo']);
+    expect(JSON.parse(text('demo/js65.json')).projects[0].target).toBe('sim');
+  });
+
+  it('exits 1 for an unknown target, having written nothing', async function() {
+    const {exitCode, out, files} = await run({}, ['init', '-t', 'nes-mmc1', 'demo']);
+    expect(exitCode).toBe(1);
+    expect(out).toContain('unknown target "nes-mmc1"');
+    expect(files).toEqual([]);
+  });
+
+  it('exits 1 over a directory that holds real content', async function() {
+    const {exitCode, out, files} = await run({'notes.txt': 'hi'}, ['init']);
+    expect(exitCode).toBe(1);
+    expect(out).toContain('is not empty');
+    expect(files).toEqual([]);
+  });
+
+  it('scaffolds anyway with --force', async function() {
+    const {exitCode, files} = await run({'notes.txt': 'hi'}, ['init', '--force']);
+    expect(exitCode).toBe(0);
+    expect(files).toEqual(SCAFFOLD_FILES);
+  });
+
+  it('exits 8 for more than one name', async function() {
+    const {exitCode, out, files} = await run({}, ['init', 'one', 'two']);
+    expect(exitCode).toBe(8);
+    expect(out).toContain('js65 init takes at most one directory name, got 2');
+    expect(files).toEqual([]);
+  });
+
+  it('exits 8 for an option that has nothing to do with scaffolding', async function() {
+    for (const flag of [['-o', 'rom.nes'], ['-c'], ['--ips'], ['-p', 'js65.json'],
+                        ['-I', 'inc'], ['-D', 'LEVEL=1']]) {
+      const {exitCode, out} = await run({}, ['init', ...flag]);
+      expect(exitCode).toBe(8);
+      expect(out).toContain('cannot be used with `js65 init`');
+    }
+  });
+
+  it('prints init usage for `init --help` without writing anything', async function() {
+    const {exitCode, out, files} = await run({}, ['init', '--help']);
+    expect(exitCode).toBe(0);
+    expect(out).toContain('Usage: js65 init [options] [NAME]');
+    expect(files).toEqual([]);
+  });
+
+  it('rejects --force outside of init', async function() {
+    const {exitCode, out} = await run({'main.s': 'lda #1\n'}, ['--force', 'main.s']);
+    expect(exitCode).toBe(8);
+    expect(out).toContain('--force only applies to `js65 init`');
+  });
+
+  it('mentions init in the top-level usage', async function() {
+    const {out} = await run({}, ['--help']);
+    expect(out).toContain('Usage: js65 init [NAME]');
   });
 });

@@ -3,9 +3,15 @@
 
 // Compiler frontend for the Node.js CLI (npm package)
 
-import { Cli } from '../src/cli.ts';
-import { resolve } from 'node:path';
-import { readFile, writeFile, readdir } from 'node:fs/promises';
+import { Cli } from '../src/driver/cli.ts';
+import { dirname, resolve } from 'node:path';
+import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
+
+async function writeAt(path: string, filename: string, data: Uint8Array): Promise<void> {
+  const full = resolve(path, filename);
+  await mkdir(dirname(full), { recursive: true });
+  await writeFile(full, data);
+}
 
 async function readStdin(): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
@@ -32,17 +38,17 @@ const cli = new Cli({
   fsWriteString: async (path: string, filename: string, data: string) => {
     const d = new TextEncoder().encode(data);
     if (filename === Cli.STDOUT) await writeStdout(d);
-    else await writeFile(resolve(path, filename), d);
+    else await writeAt(path, filename, d);
   },
   fsWriteBytes: async (path: string, filename: string, data: Uint8Array) => {
     if (filename === Cli.STDOUT) await writeStdout(data);
-    else await writeFile(resolve(path, filename), data);
+    else await writeAt(path, filename, data);
   },
-  fsWalk: async (path: string, action: (filename: string) => Promise<boolean>) => {
-    const entries = await readdir(path, { recursive: true });
-    for (const entry of entries) {
-      if (await action(entry)) break;
-    }
+  fsListDir: async (dir: string) => {
+    // withFileTypes so directories can be marked; readdir rejects on a missing dir,
+    // which is exactly the contract callers rely on.
+    const entries = await readdir(resolve(dir), { withFileTypes: true });
+    return entries.map(e => e.isDirectory() ? `${e.name}/` : e.name);
   },
   exit: (code: number) => { process.exitCode = code; },
 });

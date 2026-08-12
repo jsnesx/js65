@@ -11,8 +11,8 @@
       "default": "./dist/src/libassembler.js"
     },
     "./cli": {
-      "types": "./dist/src/cli.d.ts",
-      "default": "./dist/src/cli.js"
+      "types": "./dist/src/driver/cli.d.ts",
+      "default": "./dist/src/driver/cli.js"
     },
     "./node": {
       "types": "./dist/integrations/node.d.ts",

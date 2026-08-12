@@ -3,7 +3,7 @@
 // This is a quickjs based frontend which pretty much only exists for
 // benchmarks and showing why we aren't using it for anything serious.
 
-import { Cli } from '../src/cli.ts';
+import { Cli } from '../src/driver/cli.ts';
 // @ts-expect-error quickjs builtin module
 import * as std from 'qjs:std';
 // @ts-expect-error quickjs builtin module
@@ -60,21 +60,21 @@ function readAllStdinBytes(): Uint8Array {
   return out;
 }
 
-async function walk(dir: string, action: (filename: string) => Promise<boolean>): Promise<boolean> {
-  const [names, err] = os.readdir(dir);
-  if (err) return false;
-  for (const name of names) {
-    if (name === '.' || name === '..') continue;
-    const full = resolvePath(dir, name);
-    const [st, serr] = os.stat(full);
-    if (serr) continue;
-    if ((st.mode & os.S_IFMT) === os.S_IFDIR) {
-      if (await walk(full, action)) return true;
-    } else if (await action(full)) {
-      return true;
-    }
+/** Create every missing directory along `dir`, so writes can target a fresh tree. */
+function mkdirp(dir: string): void {
+  if (!dir || dir === '.' || dir === '/') return;
+  const parts = dir.split(/[\\/]/);
+  let sofar = dir.startsWith('/') ? '/' : '';
+  for (const part of parts) {
+    if (!part) continue;
+    sofar = sofar && sofar !== '/' ? `${sofar}/${part}` : `${sofar}${part}`;
+    os.mkdir(sofar, 0o777); // already-exists is reported as an errno we ignore
   }
-  return false;
+}
+
+function parentDir(fullpath: string): string {
+  const i = Math.max(fullpath.lastIndexOf('/'), fullpath.lastIndexOf('\\'));
+  return i < 0 ? '' : fullpath.substring(0, i);
 }
 
 const cli = new Cli({
@@ -89,14 +89,26 @@ const cli = new Cli({
   },
   fsWriteString: async (path: string, filename: string, data: string): Promise<void> => {
     if (filename === Cli.STDOUT) { std.out.puts(data); std.out.flush(); return; }
-    writeFileBytes(resolvePath(path, filename), new TextEncoder().encode(data));
+    const full = resolvePath(path, filename);
+    mkdirp(parentDir(full));
+    writeFileBytes(full, new TextEncoder().encode(data));
   },
   fsWriteBytes: async (path: string, filename: string, data: Uint8Array): Promise<void> => {
     if (filename === Cli.STDOUT) { std.out.write(data.buffer, data.byteOffset, data.byteLength); std.out.flush(); return; }
-    writeFileBytes(resolvePath(path, filename), data);
+    const full = resolvePath(path, filename);
+    mkdirp(parentDir(full));
+    writeFileBytes(full, data);
   },
-  fsWalk: async (path: string, action: (filename: string) => Promise<boolean>): Promise<void> => {
-    await walk(path, action);
+  fsListDir: async (dir: string): Promise<string[]> => {
+    const [names, err] = os.readdir(dir);
+    if (err) throw new Error(`Could not list directory: ${dir}`);
+    const out: string[] = [];
+    for (const name of names) {
+      if (name === '.' || name === '..') continue;
+      const [st, serr] = os.stat(resolvePath(dir, name));
+      out.push(!serr && (st.mode & os.S_IFMT) === os.S_IFDIR ? `${name}/` : name);
+    }
+    return out;
   },
   exit: (code: number) => std.exit(code),
 });
