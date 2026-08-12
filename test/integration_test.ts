@@ -1213,6 +1213,74 @@ ValidLabel:
     });
   });
 
+  // A constant assigned from a label that hasn't been reached yet holds a
+  // reference to the label's symbol table slot. Once the label lands the slot
+  // has a value, and a difference of two such constants is a constant again.
+  describe('Forward-referenced labels in a constant expression', function() {
+    it('should fold a difference of constants built from a forward-referenced label',
+       async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+low = base + 1
+high = base + 3
+base:
+.if high - low > 0
+  .byte $ee
+.else
+  .byte $dd
+.endif
+`;
+      expect(Array.from(await compileSource(source))).toEqual([0xee]);
+    });
+
+    it('should fold the same difference the other way round', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+low = base + 3
+high = base + 1
+base:
+.if high - low > 0
+  .byte $ee
+.else
+  .byte $dd
+.endif
+`;
+      expect(Array.from(await compileSource(source))).toEqual([0xdd]);
+    });
+
+    it('should fold a difference of two forward-referenced labels', async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+first:
+  .byte $01, $02
+second:
+.if second - first = 2
+  .byte $ee
+.else
+  .byte $dd
+.endif
+`;
+      expect(Array.from(await compileSource(source))).toEqual([0x01, 0x02, 0xee]);
+    });
+
+    it('should still reject a difference whose label is never defined',
+       async function() {
+      const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+low = missing + 1
+high = missing + 3
+.if high - low > 0
+  .byte $ee
+.endif
+`;
+      await expectCompileError(source, /Expected a constant/);
+    });
+  });
+
   describe('Data & storage directives', function() {
     it('.charmap remaps .byte-emitted string characters', async function() {
       const source = `
