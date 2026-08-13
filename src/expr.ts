@@ -536,6 +536,10 @@ const SIGN_RUN = /^([-+])\1+$/;
  * handling these cases. For instance a -- b turns into a - (-b) which is a + b
  */
 function collapseSigns(str: string, unary: boolean): string {
+  // Fast path, skip the regex if we don't have a string of +++ or ---
+  if (str.length < 2) return str;
+  const c = str.charCodeAt(0);
+  if (c !== 0x2d /* - */ && c !== 0x2b /* + */) return str;
   if (!SIGN_RUN.test(str)) return str;
   const negations = str[0] === '-' ? (unary ? str.length : str.length - 1) : 0;
   if (negations % 2) return '-';
