@@ -53,7 +53,7 @@ export class Tokenizer implements Tokens.Source {
     this.sourceContents?.data?.set(file, str);
   }
 
-  async next(): Promise<Token[]|undefined> {
+  next(): Token[]|undefined {
     return this.nextSync();
   }
 

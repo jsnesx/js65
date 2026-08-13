@@ -18,22 +18,27 @@ export class Macro {
                       /** Token of the `.macro` name used for the go-to-definition target. */
                       readonly definition?: Token) {}
 
-  static async from(line: Token[], source: Tokens.Source) {
+  static from(line: Token[], source: Tokens.Source): Tokens.MaybePromise<Macro> {
     // First line must start with .macro <name> [args]
     // Last line is the line BEFORE the .endmacro
     // Nested macro definitions are not allowed!
     if (!Tokens.eq(line[0], Tokens.MACRO)) throw new Error(`invalid`);
     if (line[1]?.token !== 'ident') throw new Error(`invalid`);
     const params = Tokens.identsFromCList(line.slice(2));
-    const lines = [];
-    let next: Token[]|undefined;
-    while ((next = await source.next())) {
+    const lines: Token[][] = [];
+    let macro: Macro|undefined;
+    const scan = Tokens.pullLines(source, next => {
+      if (!next) {
+        Tokens.fail(`EOF looking for .endmacro: ${Tokens.nameOf(line[1])}`, line[1]);
+      }
       if (Tokens.eq(next[0], Tokens.ENDMACRO)) {
-        return new Macro(params, lines, line[1]);
+        macro = new Macro(params, lines, line[1]);
+        return false;
       }
       lines.push(next);
-    }
-    Tokens.fail(`EOF looking for .endmacro: ${Tokens.nameOf(line[1])}`, line[1]);
+      return true;
+    });
+    return scan instanceof Promise ? scan.then(() => macro!) : macro!;
   }
 
   expand(tokens: Token[], idGen: Source<number>): Token[][] {
