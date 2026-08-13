@@ -48,6 +48,7 @@
     "bench": "bun run build && bun run bench/bench.ts",
     "profile": "bun run bench/profile.ts",
     "cpuprof": "bun run bench/cpuprof.ts",
+    "verify": "bun run bench/verify.ts",
     "build:npm": "tsc -p tsconfig.build.json",
     "prepack": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json"
