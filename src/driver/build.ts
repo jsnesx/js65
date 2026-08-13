@@ -279,7 +279,7 @@ export class Builder {
       for (const source of sources) {
         inputs.push(await this.session.readInput(source));
       }
-      const options = await this.options(config, project, overrides, sources);
+      const options = await projectOptions(this.session, config, project, overrides, sources);
       let baseRom: Uint8Array | undefined;
       if (project.baseRom) {
         const data = await this.session.readBinary("", project.baseRom);
@@ -317,47 +317,53 @@ export class Builder {
     return matches.map(s => resolveProjectPath(config.rootDir, s));
   }
 
-  private async options(config: Js65Config, project: Js65Project,
-                        overrides: BuildOverrides,
-                        sources: readonly string[]): Promise<Js65Options> {
-    const debugLevel = project.debug ?? 0;
-    const options: Js65Options = {
-      // Seeded with each source's own directory, exactly like the flag path, so a
-      // sibling `.include` resolves without listing every directory in the project file.
-      includePaths: [
-        ...sources.map(dirOf),
-        ...project.includePaths,
-        ...(overrides.includePaths ?? []),
-      ],
-      binIncludePaths: [
-        ...project.binIncludePaths,
-        ...(overrides.binIncludePaths ?? []),
-      ],
-      defines: [...project.defines, ...(overrides.defines ?? [])],
-      features: [...project.features, ...(overrides.features ?? [])],
-      target: project.target,
-      outputFormat: project.format,
-      lineContinuations: true,
-      debugLevel,
-      generateDebugInfo: debugLevel >= 0,
-      generateMapFile: Boolean(overrides.mapfile ?? project.mapfile),
-      lint: mergeLint(config.lint, overrides.lint),
-    };
-    // Read through the session so a config parse error gets a source snippet like any
-    // other file would.
-    if (project.linkerConfig !== undefined) {
-      options.linkerConfig = project.linkerConfig;
-      options.linkerConfigName = project.linkerConfigPath;
-    } else if (project.linkerConfigPath) {
-      options.linkerConfig = await this.session.readSource("", project.linkerConfigPath);
-      options.linkerConfigName = project.linkerConfigPath;
-    }
-    return options;
-  }
-
   private log(line: string) {
     this.reporter.log?.(line);
   }
+}
+
+/**
+ * The `Js65Options` one project compiles with: the project file's settings with the
+ * command line's overrides on top. Exported so the benchmarks can drive the pipeline
+ * phase by phase with exactly the options a real build would use.
+ */
+export async function projectOptions(
+    session: BuildSession, config: Js65Config, project: Js65Project,
+    overrides: BuildOverrides,
+    sources: readonly string[]): Promise<Js65Options> {
+  const debugLevel = project.debug ?? 0;
+  const options: Js65Options = {
+    // Seeded with each source's own directory, exactly like the flag path, so a
+    // sibling `.include` resolves without listing every directory in the project file.
+    includePaths: [
+      ...sources.map(dirOf),
+      ...project.includePaths,
+      ...(overrides.includePaths ?? []),
+    ],
+    binIncludePaths: [
+      ...project.binIncludePaths,
+      ...(overrides.binIncludePaths ?? []),
+    ],
+    defines: [...project.defines, ...(overrides.defines ?? [])],
+    features: [...project.features, ...(overrides.features ?? [])],
+    target: project.target,
+    outputFormat: project.format,
+    lineContinuations: true,
+    debugLevel,
+    generateDebugInfo: debugLevel >= 0,
+    generateMapFile: Boolean(overrides.mapfile ?? project.mapfile),
+    lint: mergeLint(config.lint, overrides.lint),
+  };
+  // Read through the session so a config parse error gets a source snippet like any
+  // other file would.
+  if (project.linkerConfig !== undefined) {
+    options.linkerConfig = project.linkerConfig;
+    options.linkerConfigName = project.linkerConfigPath;
+  } else if (project.linkerConfigPath) {
+    options.linkerConfig = await session.readSource("", project.linkerConfigPath);
+    options.linkerConfigName = project.linkerConfigPath;
+  }
+  return options;
 }
 
 /** `js65.json`'s lint block, with the command line's `--no-lint` / `-Wno-` on top. */

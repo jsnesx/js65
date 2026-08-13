@@ -46,6 +46,8 @@
     "hermes-exe": "bun run integrations/hermes/hermes-build.ts",
     "build": "bun run --no-exit-on-error --parallel exe hermes-exe quickjs-exe",
     "bench": "bun run build && bun run bench/bench.ts",
+    "profile": "bun run bench/profile.ts",
+    "cpuprof": "bun run bench/cpuprof.ts",
     "build:npm": "tsc -p tsconfig.build.json",
     "prepack": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json"
