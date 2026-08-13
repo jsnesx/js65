@@ -104,16 +104,26 @@ export class TokenStream implements Tokens.Source {
     return searchList(this.currentDir(), [...paths, './']);
   }
 
-  async next(): Promise<Token[]|undefined> {
+  next(): Tokens.MaybePromise<Token[]|undefined> {
     while (this.stack.length) {
       const frame = this.stack[this.stack.length - 1];
       const front = frame.queue;
       if (front.length) return front.pop()!;
-      const line = await frame.source?.next();
+      const line = frame.source?.next();
+      if (line instanceof Promise) return this.nextAsync(line);
       if (line) return line;
       this.stack.pop();
     }
     return undefined;
+  }
+
+  /** Continuation of `next()` for a source that actually suspended. */
+  private async nextAsync(pending: Promise<Token[]|undefined>):
+      Promise<Token[]|undefined> {
+    const line = await pending;
+    if (line) return line;
+    this.stack.pop();
+    return this.next();
   }
 
   async include(path: string, at?: Token): Promise<void> {

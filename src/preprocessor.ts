@@ -132,39 +132,68 @@ export class Preprocessor implements Tokens.Source {
     return tokens;
   }
 
-  async next(): Promise<Token[] | undefined> {
+  next(): Tokens.MaybePromise<Token[] | undefined> {
     while (true) {
       // Drain any output already produced for a previous source line.
       if (this.outQueue.length) return this.outQueue.shift();
+      let more: Tokens.MaybePromise<boolean>;
       try {
-        const more = await this.pump();
-        if (!more) return undefined; // EOF
+        more = this.pump();
       } catch (err) {
-        if (err instanceof RecoverableError) {
-          // Error already recorded; abandon the rest of the current line but
-          // keep any output it produced before the error, then continue.
-          continue;
-        }
-        // `.fatal`, cancellation and the error cap stop the whole run.
-        if (err instanceof FatalError) throw err;
-        // Try to recover if we have an error collector by skipping the rest of the line
-        if (err instanceof SourceError && this.errorCollector) {
-          if (!err.recorded) {
-            err.recorded = true;
-            this.errorCollector.addFromException(err);
-          }
-          continue;
-        }
-        throw err;
+        this.recover(err);
+        continue;
       }
+      if (more instanceof Promise) return this.nextAsync(more);
+      if (!more) return undefined; // EOF
     }
+  }
+
+  /** Continuation of `next()` for a line that actually suspended. */
+  private async nextAsync(pending: Promise<boolean>):
+      Promise<Token[] | undefined> {
+    try {
+      if (!await pending) return undefined; // EOF
+    } catch (err) {
+      this.recover(err);
+    }
+    return this.next();
+  }
+
+  /**
+   * Decide what to do with an error thrown while processing a line: return to
+   * abandon the rest of that line and keep going, throw to stop the run.
+   */
+  private recover(err: unknown): void {
+    if (err instanceof RecoverableError) {
+      // Error already recorded; abandon the rest of the current line but
+      // keep any output it produced before the error, then continue.
+      return;
+    }
+    // `.fatal`, cancellation and the error cap stop the whole run.
+    if (err instanceof FatalError) throw err;
+    // Try to recover if we have an error collector by skipping the rest of the line
+    if (err instanceof SourceError && this.errorCollector) {
+      if (!err.recorded) {
+        err.recorded = true;
+        this.errorCollector.addFromException(err);
+      }
+      return;
+    }
+    throw err;
   }
 
   // Read and process the next source line, pushing zero or more output lines
   // onto `outQueue`. Returns false at EOF, true otherwise.
-  private async pump(): Promise<boolean> {
-    const line = await this.readLine();
+  private pump(): Tokens.MaybePromise<boolean> {
+    const line = this.readLine();
+    if (line instanceof Promise) {
+      return line.then(l => l == null ? false : this.pumpLine(l));
+    }
     if (line == null) return false; // EOF
+    return this.pumpLine(line);
+  }
+
+  private pumpLine(line: Token[]): Tokens.MaybePromise<boolean> {
     while (line.length) {
       const front = line[0];
       switch (front.token) {
@@ -197,9 +226,17 @@ export class Preprocessor implements Tokens.Source {
           if (!this.tryExpandMacro(line)) this.outQueue.push(line);
           return true;
 
-        case 'cs':
-          if (!(await this.tryRunDirective(line))) this.outQueue.push(line);
+        case 'cs': {
+          const ran = this.tryRunDirective(line);
+          if (ran instanceof Promise) {
+            return ran.then(r => {
+              if (!r) this.outQueue.push(line);
+              return true;
+            });
+          }
+          if (!ran) this.outQueue.push(line);
           return true;
+        }
 
         case 'op':
           // `* = $8000`, which is just another spelling of `.org $8000`.
@@ -238,9 +275,12 @@ export class Preprocessor implements Tokens.Source {
   }
 
   // Expand a single line of tokens from the front of toks.
-  private async readLine(): Promise<Token[]|undefined> {
+  private readLine(): Tokens.MaybePromise<Token[]|undefined> {
     // Apply .define expansions as necessary.
-    const line = await this.stream.next();
+    const line = this.stream.next();
+    if (line instanceof Promise) {
+      return line.then(l => l == null ? l : this.expandLine(l));
+    }
     if (line == null) return line;
     return this.expandLine(line);
   }
@@ -657,12 +697,13 @@ export class Preprocessor implements Tokens.Source {
   ////////////////////////////////////////////////////////////////
   // RUN DIRECTIVES
 
-  async tryRunDirective(line: Token[]): Promise<boolean> {
+  tryRunDirective(line: Token[]): Tokens.MaybePromise<boolean> {
     const first = line[0];
     if (first.token !== 'cs') throw new Error(`impossible`);
     const handler = this.runDirectives[first.str];
     if (!handler) return false;
-    await handler(line);
+    const ran = handler(line);
+    if (ran instanceof Promise) return ran.then(() => true);
     return true;
   }
 
@@ -705,7 +746,8 @@ export class Preprocessor implements Tokens.Source {
     Tokens.fail(`Expected a constant: ${desc}`, reduced.source ?? source);
   }
 
-  private readonly runDirectives: Record<string, (ts: Token[]) => Promise<void>> = {
+  private readonly runDirectives:
+      Record<string, (ts: Token[]) => Tokens.MaybePromise<void>> = {
     '.define': (line) => this.parseDefine(line),
     '.delmacro': (line) => this.parseDelMacro(line),
     '.undefine': (line) => this.parseUndefine(line),
@@ -714,8 +756,7 @@ export class Preprocessor implements Tokens.Source {
     '.endif': ([cs]) => badClose('.if', cs),
     '.endmacro': ([cs]) => badClose('.macro', cs),
     '.endrepeat': (line) => this.parseEndRepeat(line),
-    '.exitmacro': async ([, a]) => { noGarbage(a); this.stream.exit(); 
-      return await Promise.resolve(); },
+    '.exitmacro': ([, a]) => { noGarbage(a); this.stream.exit(); },
     '.if': ([cs, ...args]) =>
         this.parseIf(() => !!this.evaluateConst(
             parseOneExpr(args, cs, this.env.encodeChar), cs), cs),
@@ -758,12 +799,11 @@ export class Preprocessor implements Tokens.Source {
     await this.stream.include(path, cs);
   }
 
-  private async parseMacpack(line: Token[]) {
+  private parseMacpack(line: Token[]) {
     const [cs, ident, eol] = line;
     const pack = Tokens.expectIdentifier(ident, cs).toLowerCase();
     Tokens.expectEol(eol);
     this.stream.macpack(pack, cs);
-    return await Promise.resolve();
   }
 
   /**
@@ -785,7 +825,7 @@ export class Preprocessor implements Tokens.Source {
     this.outQueue.push([bytestr, {token: 'str', str: bin}]);
   }
 
-  async parseDefine(line: Token[]) {
+  parseDefine(line: Token[]) {
     const name = Tokens.expectIdentifier(line[1], line[0]);
     const define = Define.from(line);
     const prev = this.macros.get(name);
@@ -801,10 +841,9 @@ export class Preprocessor implements Tokens.Source {
     if (recorded instanceof Define) {
       this.macroIndex?.record(name, 'define', recorded, recorded.definition?.source);
     }
-    return await Promise.resolve();
   }
 
-  private async parseUndefine(line: Token[]) {
+  private parseUndefine(line: Token[]) {
     const [cs, ident, eol] = line;
     const name = Tokens.expectIdentifier(ident, cs);
     Tokens.expectEol(eol);
@@ -819,11 +858,10 @@ export class Preprocessor implements Tokens.Source {
     }
     this.macros.delete(name);
     this.macroIndex?.remove(name);
-    return await Promise.resolve();
   }
 
   /** `.delmacro` deletes a classic `.macro` the counterpart of `.undefine`. */
-  private async parseDelMacro(line: Token[]) {
+  private parseDelMacro(line: Token[]) {
     const [cs, ident, eol] = line;
     const name = Tokens.expectIdentifier(ident, cs);
     Tokens.expectEol(eol);
@@ -836,19 +874,21 @@ export class Preprocessor implements Tokens.Source {
     }
     this.macros.delete(name);
     this.macroIndex?.remove(name);
-    return await Promise.resolve();
   }
 
-  private async parseMacro(line: Token[]) {
+  private parseMacro(line: Token[]): Tokens.MaybePromise<void> {
     const name = Tokens.expectIdentifier(line[1], line[0]);
-    const macro = await Macro.from(line, this.stream);
-    const prev = this.macros.get(name);
-    if (prev) Tokens.fail(`Already defined: ${name}`, line[1]);
-    this.macros.set(name, macro);
-    this.macroIndex?.record(name, 'macro', macro, macro.definition?.source);
+    const macro = Macro.from(line, this.stream);
+    const define = (m: Macro) => {
+      const prev = this.macros.get(name);
+      if (prev) Tokens.fail(`Already defined: ${name}`, line[1]);
+      this.macros.set(name, m);
+      this.macroIndex?.record(name, 'macro', m, m.definition?.source);
+    };
+    return macro instanceof Promise ? macro.then(define) : define(macro);
   }
 
-  private async parseRepeat(line: Token[]) {
+  private parseRepeat(line: Token[]): Tokens.MaybePromise<void> {
     const [expr, end] = Exprs.parse(line, 1, undefined, this.env.encodeChar);
     const at = line[1] || line[0];
     if (!expr) Tokens.fail(`Expected expression: ${Tokens.nameOf(at)}`, at);
@@ -865,22 +905,26 @@ export class Preprocessor implements Tokens.Source {
     const lines: Token[][] = [];
     let depth = 1;
     const start = line[0];
-    while (depth > 0) {
-      line = await this.stream.next() ??
-          Tokens.fail(`.repeat with no .endrep`, start);
-      if (Tokens.eq(line[0], Tokens.REPEAT)) depth++;
-      if (Tokens.eq(line[0], Tokens.ENDREPEAT)) depth--;
-      lines.push(line);
-    }
-    this.repeats.push([lines, times, -1, ident]);
-    this.parseEndRepeat(line);
+    let last = line;
+    const scan = Tokens.pullLines(this.stream, next => {
+      last = next ?? Tokens.fail(`.repeat with no .endrep`, start);
+      if (Tokens.eq(last[0], Tokens.REPEAT)) depth++;
+      if (Tokens.eq(last[0], Tokens.ENDREPEAT)) depth--;
+      lines.push(last);
+      return depth > 0;
+    });
+    const finish = () => {
+      this.repeats.push([lines, times, -1, ident]);
+      this.parseEndRepeat(last);
+    };
+    return scan instanceof Promise ? scan.then(finish) : finish();
   }
 
-  private async parseEndRepeat(line: Token[]) {
+  private parseEndRepeat(line: Token[]) {
     Tokens.expectEol(line[1]);
     const top = this.repeats.pop();
     if (!top) Tokens.fail(`.endrep with no .repeat`, line[0]);
-    if (++top[2] >= top[1]) return await Promise.resolve();
+    if (++top[2] >= top[1]) return;
     this.repeats.push(top);
     this.stream.unshift(...top[0].map(line => line.map(token => {
       if (token.token !== 'ident' || token.str !== top[3]) return token;
@@ -888,7 +932,6 @@ export class Preprocessor implements Tokens.Source {
       if (token.source) t.source = token.source;
       return t;
     })));
-    return await Promise.resolve();
   }
 
   /**
@@ -913,19 +956,18 @@ export class Preprocessor implements Tokens.Source {
     }
   }
 
-  private async parseIf(test: () => boolean, at?: Token) {
+  private parseIf(test: () => boolean, at?: Token): Tokens.MaybePromise<void> {
     let cond = this.condition(test, at);
     let depth = 1;
     let done = false;
     const result: Token[][] = [];
-    while (depth > 0) {
-      const line = await this.stream.next();
+    const scan = Tokens.pullLines(this.stream, line => {
       // Report missing endif at the site of the starting .if
       if (!line) Tokens.fail(`EOF looking for .endif`, at);
       const front = line[0];
       if (Tokens.eq(front, Tokens.ENDIF)) {
         depth--;
-        if (!depth) break;
+        if (!depth) return false;
       } else if (front.token === 'cs' && front.str.startsWith('.if')) {
         depth++;
       } else if (depth === 1 && !done) {
@@ -934,24 +976,26 @@ export class Preprocessor implements Tokens.Source {
           // if true ... else .....
           cond = false;
           done = true;
-          continue;
+          return true;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
           cond = this.condition(() => !!this.evaluateConst(
               parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
               front), front);
-          continue;
+          return true;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
           cond = true;
-          continue;
+          return true;
         }
       }
       // anything else on the line
       if (cond) result.push(line);
-    }
+      return true;
+    });
     // result has the expansion: unshift it
-    this.stream.unshift(...result);
+    const finish = () => this.stream.unshift(...result);
+    return scan instanceof Promise ? scan.then(finish) : finish();
   }
 
   private parseIfDef(args: Token[], cs: Token) {

@@ -1081,7 +1081,7 @@ export class Assembler {
   }
 
   // Assemble from a list of tokens
-  async line(tokens: Token[]) {
+  line(tokens: Token[]) {
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
@@ -1103,7 +1103,7 @@ export class Assembler {
       } else if (tokens[0].token === 'cs') {
         this.directive(tokens);
       } else {
-        await this.instruction(tokens);
+        this.instruction(tokens);
       }
     } catch (err) {
       // `.fatal`, cancellation and the error cap stop the whole run.
@@ -1132,11 +1132,14 @@ export class Assembler {
   // assembly can be cancelled cooperatively; an aborted signal throws, which the caller
   // (compile) turns into an ordinary failure result.
   async tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }) {
-    let line;
     // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
-    while (!this.ended && (line = await source.next())) {
+    while (!this.ended) {
+      // Pulling a line only suspends when it crosses an `.include`/`.incbin`.
+      const pending = source.next();
+      const line = pending instanceof Promise ? await pending : pending;
+      if (!line) break;
       if (signal?.aborted) throw new FatalError('Compilation cancelled');
-      await this.line(line);
+      this.line(line);
     }
   }
 
@@ -1438,9 +1441,9 @@ export class Assembler {
     }
   }
 
-  async instruction(mnemonic: string, arg?: Arg|string): Promise<void>;
-  async instruction(tokens: Token[]): Promise<void>;
-  async instruction(...args: [Token[]]|[string, (Arg|string)?]): Promise<void> {
+  instruction(mnemonic: string, arg?: Arg|string): void;
+  instruction(tokens: Token[]): void;
+  instruction(...args: [Token[]]|[string, (Arg|string)?]): void {
     let mnemonic: string;
     let arg: Arg;
     // The token the mnemonic came from, so an unknown one can be reported
@@ -1459,7 +1462,7 @@ export class Assembler {
       // parse the tokens first
       mnemonic = args[0] as string;
       const tokenizer = new Tokenizer(args[1]);
-      arg = this.parseArg((await tokenizer.next())!, 0);
+      arg = this.parseArg(tokenizer.next()!, 0);
     } else {
       [mnemonic, arg] = args as [string, Arg];
       if (!arg) arg = ['imp'];
