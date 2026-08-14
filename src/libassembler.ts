@@ -225,8 +225,8 @@ export interface OutputFile {
  * File system callbacks for .include/.incbin directives
  */
 export interface FileCallbacks {
-  readText: (path: string, filename: string) => Promise<string>;
-  readBinary: (path: string, filename: string) => Promise<Uint8Array | string>;
+  readText: (path: string, filename: string) => string;
+  readBinary: (path: string, filename: string) => Uint8Array | string;
 }
 
 /** Result type for assemble that includes collected messages */
@@ -249,11 +249,11 @@ function toValueExpr(v: number | { op: 'sym', sym: string }): Expr {
   return typeof v === 'number' ? { op: 'num', num: v } : v;
 }
 
-async function applyDefines(asm: Assembler, pre: Preprocessor,
-                            defines: SymbolDefine[] | undefined,
-                            opts: TokenizerOptions) {
+function applyDefines(asm: Assembler, pre: Preprocessor,
+                      defines: SymbolDefine[] | undefined,
+                      opts: TokenizerOptions) {
   for (const {name, value} of defines ?? []) {
-    const toks = await new Tokenizer(value, '<command line>', opts).next() ?? [];
+    const toks = new Tokenizer(value, '<command line>', opts).next() ?? [];
     // Drop the trailing EOL the tokenizer appends so a lone number is length 1.
     const body = toks.length && Tokens.eq(toks[toks.length - 1], Tokens.EOL)
         ? toks.slice(0, -1) : toks;
@@ -263,10 +263,10 @@ async function applyDefines(asm: Assembler, pre: Preprocessor,
     }
     if (!body.length) {
       // `-D FOO=` with an empty value expands to nothing like CPP would do
-      await pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}]);
+      pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}]);
       continue;
     }
-    await pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}, ...body]);
+    pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}, ...body]);
   }
 }
 
@@ -280,13 +280,13 @@ async function applyDefines(asm: Assembler, pre: Preprocessor,
  * @param sourceContents - Optional SourceContents to store source for debug info
  * @returns Array of compiled Module objects and any messages
  */
-export async function assemble(
+export function assemble(
   inputs: AssemblyInput[],
   options?: AssemblerOptions,
   callbacks?: FileCallbacks,
   sourceContents?: SourceContents,
   signal?: CancelSignal
-): Promise<AssembleResult> {
+): AssembleResult {
   const modules: Module[] = [];
   const allMessages: AssemblerMessage[] = [];
 
@@ -373,8 +373,8 @@ export async function assemble(
               toks.enter(tokenizer);
               const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
                                            options?.macroIndex);
-              await applyDefines(asm, pre, options?.defines, opts);
-              await asm.tokens(pre, signal);
+              applyDefines(asm, pre, options?.defines, opts);
+              asm.tokens(pre, signal);
               break;
             }
 
@@ -511,8 +511,8 @@ export async function assemble(
       toks.enter(tokenizer);
       const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
                                    options?.macroIndex);
-      await applyDefines(asm, pre, options?.defines, opts);
-      await asm.tokens(pre, signal);
+      applyDefines(asm, pre, options?.defines, opts);
+      asm.tokens(pre, signal);
 
       const module = asm.module();
       module.name = input.name;
@@ -776,13 +776,13 @@ export function deserializeRequest(requestJson: string): Js65Request {
  * @param callbacks - .include / .incbin readers (required only if a directive needs one)
  * @param baseRom - Optional base ROM the linker patches into
  */
-export async function compile(
+export function compile(
   inputs: AssemblyInput[],
   options: Js65Options = {},
   callbacks?: FileCallbacks,
   baseRom?: Uint8Array,
   signal?: CancelSignal,
-): Promise<CompileResult> {
+): CompileResult {
   const base64 = new Base64();
   // Diagnostics produced so far, so a throw later in the pipeline (serializing, linking)
   // still reports the warnings/errors assembly already found.
@@ -822,18 +822,18 @@ export async function compile(
     // one only fails if a directive actually needs it. readBinary may hand back base64
     // (some hosts can only marshal binary as a string), so decode it to bytes here.
     const fileCallbacks: FileCallbacks = {
-      readText: async (basePath, relPath) => {
+      readText: (basePath, relPath) => {
         if (!callbacks?.readText) throw new Error(`No readText callback provided (reading ${basePath}/${relPath})`);
-        return await callbacks.readText(basePath, relPath);
+        return callbacks.readText(basePath, relPath);
       },
-      readBinary: async (basePath, relPath) => {
+      readBinary: (basePath, relPath) => {
         if (!callbacks?.readBinary) throw new Error(`No readBinary callback provided (reading ${basePath}/${relPath})`);
-        const data = await callbacks.readBinary(basePath, relPath);
+        const data = callbacks.readBinary(basePath, relPath);
         return typeof data === 'string' ? base64.decode(data) : data;
       },
     };
 
-    const asm = await assemble(inputs, asmOpts, fileCallbacks, sourceContents, signal);
+    const asm = assemble(inputs, asmOpts, fileCallbacks, sourceContents, signal);
     collected = [...asm.messages];
     if (!asm.success) {
       return { success: false, outputs: [], messages: asm.messages };
@@ -877,15 +877,15 @@ export async function compile(
  * Like `compile` but accepts all the compile data passed as a string, so you can use JSON
  * serialization to pass it in without needing to deal with creating real JS Objects.
  */
-export async function compileRequest(
+export function compileRequest(
   requestJson: string,
   callbacks?: FileCallbacks,
   baseRom?: Uint8Array,
   signal?: CancelSignal,
-): Promise<CompileResult> {
+): CompileResult {
   try {
     const { inputs, options } = deserializeRequest(requestJson);
-    return await compile(inputs, options, callbacks, baseRom, signal);
+    return compile(inputs, options, callbacks, baseRom, signal);
   } catch (err) {
     return failureFromException(err);
   }
@@ -895,17 +895,17 @@ export async function compileRequest(
  * Adapter for the .NET WASM browser engine (JSImport). We have to work around limitations
  * in JS interop and we do that by stringify-ing pretty much all the things.
  */
-export async function compileBrowser(
+export function compileBrowser(
   requestJson: string,
-  readText: (basePath: string, relPath: string) => string | Promise<string>,
-  readBinaryBase64: (basePath: string, relPath: string) => string | Promise<string>,
+  readText: (basePath: string, relPath: string) => string,
+  readBinaryBase64: (basePath: string, relPath: string) => string,
   baseRom: ArrayLike<number> | undefined,
   shouldCancel?: () => boolean,
-): Promise<string> {
+): string {
   const base64 = new Base64();
   const callbacks: FileCallbacks = {
-    readText: async (basePath, relPath) => readText(basePath, relPath),
-    readBinary: async (basePath, relPath) => base64.decode(await readBinaryBase64(basePath, relPath)),
+    readText: (basePath, relPath) => readText(basePath, relPath),
+    readBinary: (basePath, relPath) => base64.decode(readBinaryBase64(basePath, relPath)),
   };
   // The marshaller hands the byte[] param across as a JS number array; normalize to a
   // real Uint8Array for the linker.
@@ -914,13 +914,11 @@ export async function compileBrowser(
     : undefined;
 
   // JSImport can't marshal an AbortSignal, so the host passes a polling predicate; adapt it to
-  // work with CancelSignal. 
-  // This doesn't work well in WASM, the .NET token only flips while host code
-  // runs, i.e. cancellation is observed at the file-callback await boundaries, not mid-compute.
-  // Someday we'll get the async worker thread approach and it should work better for this.
+  // work with CancelSignal. With a sync core, cancellation is now observed per-line rather than
+  // only at await boundaries.
   const signal: CancelSignal | undefined = shouldCancel ? { get aborted() { return shouldCancel(); } } : undefined;
 
-  const result = await compileRequest(requestJson, callbacks, rom, signal);
+  const result = compileRequest(requestJson, callbacks, rom, signal);
   const resultJson = JSON.stringify({
     success: result.success,
     outputs: result.outputs.map(o => ({ name: o.name, data: base64.encode(o.data), type: o.type })),

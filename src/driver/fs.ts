@@ -6,8 +6,10 @@ import { joinDir } from '../util.ts';
 
 /** Integration specific filesystem access callbacks. */
 export interface Callbacks {
-  fsReadString: (path: string, filename: string) => Promise<string>,
-  fsReadBytes: (path: string, filename: string) => Promise<Uint8Array|string>,
+  fsReadString: (path: string, filename: string) => string,
+  fsReadBytes: (path: string, filename: string) => Uint8Array|string,
+  /** Reads all of stdin. Only ever called for a top-level input, never `.include`/`.incbin`. */
+  fsReadStdin: () => Promise<Uint8Array>,
   /** Creates any missing parent directories before writing. */
   fsWriteString: (path: string, filename: string, data: string) => Promise<void>,
   /** Creates any missing parent directories before writing. */

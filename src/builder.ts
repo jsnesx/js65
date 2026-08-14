@@ -179,7 +179,7 @@ export class AsmEngine {
     return this.add(new AsmModule(name));
   }
 
-  compile(baseRom?: Uint8Array, signal?: CancelSignal): Promise<CompileResult> {
+  compile(baseRom?: Uint8Array, signal?: CancelSignal): CompileResult {
     const inputs: AssemblyInput[] = this.modules.map(m => ({ type: 'actions', actions: m.actions, name: m.name }));
     return compile(inputs, this.options, this.callbacks, baseRom, signal);
   }

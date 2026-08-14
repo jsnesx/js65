@@ -11,20 +11,24 @@ setGzipCodec(bunCodec);
 
 const { dirname, resolve } = require('path');
 const { mkdir, readdir } = require('fs').promises;
+const { readFileSync } = require('fs');
 
 async function mkdirFor(fullpath: string): Promise<void> {
   await mkdir(dirname(fullpath), { recursive: true });
 }
 
+async function readStdin(): Promise<Uint8Array> {
+  return await Bun.stdin.bytes();
+}
+
 const cli = new Cli({
-  fsReadString: async (path: string, filename: string) => {
-    const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
-    return new TextDecoder().decode((filename === Cli.STDIN) ? await Bun.stdin.bytes() : await Bun.file(fullpath).bytes());
+  fsReadString: (path: string, filename: string) => {
+    return new TextDecoder().decode(readFileSync(resolve(path, filename)));
   },
-  fsReadBytes: async (path: string, filename: string) => {
-    const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
-    return (filename === Cli.STDIN) ? await Bun.stdin.bytes() : await Bun.file(fullpath).bytes();
+  fsReadBytes: (path: string, filename: string) => {
+    return new Uint8Array(readFileSync(resolve(path, filename)));
   },
+  fsReadStdin: readStdin,
   fsWriteString: async (path: string, filename: string, data: string) => {
     const fullpath = resolve(path, (filename === Cli.STDIN) ? '.' : filename);
     const d = new TextEncoder().encode(data);
@@ -52,13 +56,7 @@ export async function main(args: string[]) {
   await cli.run(args);
 }
 
-// Jank workaround for a bun problem. With the original async await, bun will terminate
-// when a missing include happened because that promise failed, and it would exit 0
-// So instead of that, we try to gracefully exit as best we can. But to do that we need
-// to keep it alive by setting some timer so there's "something" running
-const keepAlive = setInterval(() => {}, 1 << 30);
 main(Bun.argv.slice(2))
   .then(() => process.exit(process.exitCode ?? 0),
         // run() already printed the diagnostic before rethrowing.
-        () => process.exit(1))
-  .finally(() => clearInterval(keepAlive));
+        () => process.exit(1));

@@ -5,7 +5,8 @@
 
 import { Cli } from '../src/driver/cli.ts';
 import { dirname, resolve } from 'node:path';
-import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { mkdir, writeFile, readdir } from 'node:fs/promises';
 import { setGzipCodec } from '../src/driver/codec/codec.ts';
 import { nodeZlibCodec } from '../src/driver/codec/node.ts';
 
@@ -32,13 +33,13 @@ function writeStdout(data: Uint8Array): Promise<void> {
 }
 
 const cli = new Cli({
-  fsReadString: async (path: string, filename: string) => {
-    const bytes = (filename === Cli.STDIN) ? await readStdin() : await readFile(resolve(path, filename));
-    return new TextDecoder().decode(bytes);
+  fsReadString: (path: string, filename: string) => {
+    return new TextDecoder().decode(readFileSync(resolve(path, filename)));
   },
-  fsReadBytes: async (path: string, filename: string) => {
-    return (filename === Cli.STDIN) ? await readStdin() : new Uint8Array(await readFile(resolve(path, filename)));
+  fsReadBytes: (path: string, filename: string) => {
+    return new Uint8Array(readFileSync(resolve(path, filename)));
   },
+  fsReadStdin: readStdin,
   fsWriteString: async (path: string, filename: string, data: string) => {
     const d = new TextEncoder().encode(data);
     if (filename === Cli.STDOUT) await writeStdout(d);

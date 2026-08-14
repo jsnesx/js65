@@ -18,7 +18,7 @@ export class Macro {
                       /** Token of the `.macro` name used for the go-to-definition target. */
                       readonly definition?: Token) {}
 
-  static from(line: Token[], source: Tokens.Source): Tokens.MaybePromise<Macro> {
+  static from(line: Token[], source: Tokens.Source): Macro {
     // First line must start with .macro <name> [args]
     // Last line is the line BEFORE the .endmacro
     // Nested macro definitions are not allowed!
@@ -27,7 +27,7 @@ export class Macro {
     const params = Tokens.identsFromCList(line.slice(2));
     const lines: Token[][] = [];
     let macro: Macro|undefined;
-    const scan = Tokens.pullLines(source, next => {
+    Tokens.pullLines(source, next => {
       if (!next) {
         Tokens.fail(`EOF looking for .endmacro: ${Tokens.nameOf(line[1])}`, line[1]);
       }
@@ -38,7 +38,7 @@ export class Macro {
       lines.push(next);
       return true;
     });
-    return scan instanceof Promise ? scan.then(() => macro!) : macro!;
+    return macro!;
   }
 
   expand(tokens: Token[], idGen: Source<number>): Token[][] {

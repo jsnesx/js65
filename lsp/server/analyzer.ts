@@ -8,7 +8,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {promises as fsp} from 'node:fs';
 
 import {assemble, link, type AssemblyInput, type AssemblerOptions, type CancelSignal} from '../../src/libassembler.ts';
 import type {AssemblerMessage, SourceInfo} from '../../src/error.ts';
@@ -67,7 +66,6 @@ export interface AnalyzerOptions {
   /** Project root fallback when no `js65.json` is found. */
   workspaceRoot: string;
   fsImpl?: typeof fs;
-  fsImplPromises?: typeof fsp;
   /** Sink for analyzer log output. */
   onLog?: (msg: string) => void;
   /** Cap on messages a single project's assemble may report. */
@@ -222,15 +220,15 @@ export class Analyzer {
    * successful read is tracked into `touched` for include-graph invalidation.
    */
   private makeCallbacks(touched: Set<string>): {
-    readText: (base: string, rel: string) => Promise<string>,
-    readBinary: (base: string, rel: string) => Promise<Uint8Array>,
+    readText: (base: string, rel: string) => string,
+    readBinary: (base: string, rel: string) => Uint8Array,
   } {
-    const fspImpl = this.opts.fsImplPromises ?? fsp;
+    const fsImpl = this.opts.fsImpl ?? fs;
     const openDocs = this.openDocs;
     // Only *successful* reads are recorded. The include path search involves
     // lots of unsuccessful reads trying to find the right path so skip those.
     return {
-      readText: async (base, rel) => {
+      readText: (base, rel) => {
         const posix = joinDir(toPosix(base), toPosix(rel));
         const open = openDocs.get(posix);
         if (open) {
@@ -238,14 +236,14 @@ export class Analyzer {
           return open.text;
         }
         const osPath = pathFromPosix(posix);
-        const text = await fspImpl.readFile(osPath, 'utf8');
+        const text = fsImpl.readFileSync(osPath, 'utf8');
         touched.add(posix);
         return text;
       },
-      readBinary: async (base, rel) => {
+      readBinary: (base, rel) => {
         const posix = joinDir(toPosix(base), toPosix(rel));
         const osPath = pathFromPosix(posix);
-        const buf = await fspImpl.readFile(osPath);
+        const buf = fsImpl.readFileSync(osPath);
         touched.add(posix);
         return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
       },
@@ -408,7 +406,7 @@ export class Analyzer {
           // Hand the assembler a POSIX path so the index/diagnostics line up
           // with what `touched` and `openDocs` already keyed on.
           name: posix,
-          code: await callbacks.readText('', posix),
+          code: callbacks.readText('', posix),
         });
       }
       const result = await assemble(inputs, asmOpts, callbacks, undefined, token.signal);

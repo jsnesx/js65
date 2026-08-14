@@ -18,16 +18,17 @@ export function fakeFs(files: Record<string, string|Uint8Array> = {}): FakeFs {
   const find = (full: string) => files[full] ?? written.get(full);
   const names = () => [...Object.keys(files), ...written.keys()];
   const callbacks: Callbacks = {
-    fsReadString: async (dir, name) => {
+    fsReadString: (dir, name) => {
       const data = find(join(dir, name));
       if (data === undefined) throw new Error(`no such file: ${join(dir, name)}`);
       return typeof data === 'string' ? data : new TextDecoder().decode(data);
     },
-    fsReadBytes: async (dir, name) => {
+    fsReadBytes: (dir, name) => {
       const data = find(join(dir, name));
       if (data === undefined) throw new Error(`no such file: ${join(dir, name)}`);
       return typeof data === 'string' ? new TextEncoder().encode(data) : data;
     },
+    fsReadStdin: async () => new Uint8Array(0),
     fsWriteString: async (dir, name, data) => {
       written.set(join(dir, name), new TextEncoder().encode(data));
     },

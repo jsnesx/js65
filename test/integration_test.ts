@@ -72,12 +72,12 @@ function resolve(base: string, rel: string): string {
 
 function makeFs(text: Record<string, string>, bin: Record<string, number[]> = {}): FileCallbacks {
   return {
-    readText: async (base, rel) => {
+    readText: (base, rel) => {
       const key = resolve(base, rel);
       if (!(key in text)) throw new Error(`ENOENT ${key}`);
       return text[key];
     },
-    readBinary: async (base, rel) => {
+    readBinary: (base, rel) => {
       const key = resolve(base, rel);
       if (!(key in bin)) throw new Error(`ENOENT ${key}`);
       return new Uint8Array(bin[key]);
@@ -601,11 +601,11 @@ TestLabel:
   describe('.include resolution', function() {
     // Only 'inc/' has the file; 'missing/' is searched first so the loop has to fall through.
     const callbacks = {
-      readText: async (base: string, file: string) => {
+      readText: (base: string, file: string) => {
         if (base !== 'inc') throw new Error(`ENOENT ${base}/${file}`);
         return '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n';
       },
-      readBinary: async () => { throw new Error('no binaries in this test'); },
+      readBinary: (): never => { throw new Error('no binaries in this test'); },
     };
 
     it('reports a missing include as an error rather than succeeding silently', async function() {

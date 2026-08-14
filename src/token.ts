@@ -8,53 +8,16 @@ import {at, fail, type SourceInfo} from './error.ts';
 // it all just reexport it until i decide if its important.
 export * from './error.ts';
 
-/**
- * Pulling a line of tokens is synchronous except when it crosses an `.include`/`.incbin`
- * It would be nice to make the whole backend sync and have a worker version with an async
- * frontend if thats required. Removing async cut the runtime for various projects by around 25%
- * so it was a worthwhile stop gap to make this weird half sync version.
- */
-export type MaybePromise<T> = T | Promise<T>;
-
 export interface Source {
-  next(): MaybePromise<Token[]|undefined>;
+  next(): Token[]|undefined;
 }
 
 export function pullLines(source: Source,
-                          step: (line: Token[]|undefined) => boolean):
-    MaybePromise<void> {
+                          step: (line: Token[]|undefined) => boolean): void {
   for (;;) {
     const line = source.next();
-    if (line instanceof Promise) return pullLinesAsync(source, step, line);
     if (!step(line)) return;
   }
-}
-
-async function pullLinesAsync(source: Source,
-                              step: (line: Token[]|undefined) => boolean,
-                              pending: Promise<Token[]|undefined>):
-    Promise<void> {
-  let line = await pending;
-  while (step(line)) {
-    const next = source.next();
-    line = next instanceof Promise ? await next : next;
-  }
-}
-
-// TODO - consider moving into a namespace?
-export function concat(...sources: Source[]): Source {
-  let source: Source|undefined;
-  return {
-    next: async (): Promise<Token[]|undefined> => {
-      while (true) {
-        if (!source) source = sources.shift();
-        if (!source) return undefined;
-        const line = await source.next();
-        if (line) return line;
-        source = undefined;
-      }
-    },
-  };
 }
 
 export type GroupTok = 'grp';

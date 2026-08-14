@@ -11,7 +11,7 @@ async function analyzerWith(path: string, text: string): Promise<Analyzer> {
   const fs = new MemFs();
   const analyzer = new Analyzer({
     workspaceRoot: '/proj', debounceMs: 0,
-    fsImpl: fs.sync as any, fsImplPromises: fs.promises as any,
+    fsImpl: fs.sync as any,
   });
   analyzer.onDiagnostics = () => {};
   analyzer.open(pathToUri(path), text, 1);

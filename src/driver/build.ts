@@ -58,8 +58,8 @@ export class BuildSession {
   }
 
   // Load the file and keep the source code in our local cache for later.
-  async readSource(path: string, filename: string): Promise<string> {
-    const code = await this.callbacks.fsReadString(path, filename);
+  readSource(path: string, filename: string): string {
+    const code = this.callbacks.fsReadString(path, filename);
     this.trackDep(path, filename);
     // An include is recorded under the path it resolved to, not the one it was
     // written as, so cache it that way or a diagnostic in it finds nothing.
@@ -67,8 +67,8 @@ export class BuildSession {
     return code;
   }
 
-  async readBinary(path: string, filename: string): Promise<Uint8Array|string> {
-    const data = await this.callbacks.fsReadBytes(path, filename);
+  readBinary(path: string, filename: string): Uint8Array|string {
+    const data = this.callbacks.fsReadBytes(path, filename);
     this.trackDep(path, filename);
     return data;
   }
@@ -78,7 +78,9 @@ export class BuildSession {
    * a text file (skipping over the BOM if its there)
    */
   async readInput(filename: string): Promise<AssemblyInput> {
-    let bytes = await this.readBinary("", filename);
+    let bytes: Uint8Array|string = filename === STDIN
+        ? await this.callbacks.fsReadStdin()
+        : this.readBinary("", filename);
     if (typeof bytes === "string") bytes = new Base64().decode(bytes);
     if (isGzip(bytes)) {
       return { type: 'module', module: deserializeObjectFile(bytes, filename) };
@@ -282,11 +284,11 @@ export class Builder {
       const options = await projectOptions(this.session, config, project, overrides, sources);
       let baseRom: Uint8Array | undefined;
       if (project.baseRom) {
-        const data = await this.session.readBinary("", project.baseRom);
+        const data = this.session.readBinary("", project.baseRom);
         baseRom = typeof data === 'string' ? new Base64().decode(data) : data;
       }
 
-      const result = await compile(inputs, options, this.session.fileCallbacks, baseRom);
+      const result = compile(inputs, options, this.session.fileCallbacks, baseRom);
       const errors = result.messages.filter(m => m.level === 'error').length;
       const warnings = result.messages.filter(m => m.level === 'warning').length;
       if (result.messages.length) this.reporter.messages?.(result.messages);
@@ -360,7 +362,7 @@ export async function projectOptions(
     options.linkerConfig = project.linkerConfig;
     options.linkerConfigName = project.linkerConfigPath;
   } else if (project.linkerConfigPath) {
-    options.linkerConfig = await session.readSource("", project.linkerConfigPath);
+    options.linkerConfig = session.readSource("", project.linkerConfigPath);
     options.linkerConfigName = project.linkerConfigPath;
   }
   return options;

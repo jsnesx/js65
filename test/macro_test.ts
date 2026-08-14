@@ -15,7 +15,7 @@ describe('Macro', function() {
 
   async function testExpand(macro: string, input: string, output: string) {
     const toks = await tok(macro);
-    const mac = await Macro.from(...source(toks));
+    const mac = Macro.from(...source(toks));
     const code = (await tok(input))[0];
     expect(mac.expand(code, nullId).map(ts => ts.map(strip)))
         .toEqual(await tok(output));
@@ -88,7 +88,7 @@ async function tok(str: string): Promise<Token[][]> {
   return out;
 }
 
-function source<T>(ts: T[][]): [T[], {next(): Promise<T[]>}] {
+function source<T>(ts: T[][]): [T[], {next(): T[]}] {
   let i = 1;
-  return [ts[0], {async next() { return await Promise.resolve(ts[i++] || []); }}];
+  return [ts[0], {next() { return ts[i++] || []; }}];
 }
