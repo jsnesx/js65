@@ -1,8 +1,22 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-// We use the browser build here since this file is intended to be used from both the cli and browser
-// environments
+/**
+ * Lib assembler is the entry point for the general "compile" tasks for your project.
+ * If you are wanting to use js65 like a library, this is where you can look.
+ * 
+ * Typically if you want to build something, and you have the ability to write generic
+ * javascript objects, you can use the `compile` function. If you need to pass in a whole
+ * list of commands as data to process, then the `AssemblyAction` approach is what you want.
+ * Using the `AssemblyAction` tree, you can build a data oriented list of commands to run,
+ * which programtically drives the internal assemble/link options for you. Then you don't
+ * need to figure out how to get your data into the object format that js65 needs, you can
+ * just serialize basic JSON objects. (This is the approach the C# desktop integration uses)
+ * 
+ * The CLI and Language Server all go through the entrypoints in this file, so its a bit
+ * crowded, but you have free reign to do what you need.
+ */
+
 import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
@@ -24,6 +38,7 @@ import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
 import type { MacroIndex, SymbolIndex } from './lspindex.ts';
+import { gzipCodec } from './driver/codec/codec.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
@@ -32,9 +47,7 @@ export type { Expr, Module, Segment, SymbolDefine, SymbolIndex };
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
 export { AsmEngine, AsmModule, sym } from './builder.ts';
 
-/**
- * Source location for an action (from the caller's code)
- */
+/** Source location for an action (from the caller's code) */
 export interface ActionSource {
   file: string;
   line: number;
@@ -90,7 +103,8 @@ function throwIfCancelled(signal?: CancelSignal): void {
 }
 
 /**
- * Options for assembly phase
+ * Options specifically for assembly phase.
+ * This is usually built by `compile` for you unless you want to compile to module directly. 
  */
 export interface AssemblerOptions {
   includePaths?: string[];
@@ -119,7 +133,8 @@ export interface AssemblerOptions {
 }
 
 /**
- * Options for linking phase
+ * Options specifically for linking phase.
+ * This is usually built by `compile` for you unless you want link separately.
  */
 export interface LinkerOptions {
   target?: string;
@@ -142,14 +157,12 @@ export interface LinkerOptions {
   generateMapFile?: boolean;
 }
 
-/**
- * Output format control
- */
+/** Output format control */
 export type OutputFormat = 'binary' | 'ips' | 'object';
 
 /**
- * The flat options bag every frontend speaks. The textual fields cross the JSON
- * boundary as part of a Js65Request.
+ * All of the options that the internal tasks like assemble and link support.
+ * Each option matches with a similarly named CLI option, so check there for docs.
  */
 export interface Js65Options {
   includePaths?: string[];
@@ -183,6 +196,7 @@ export interface Js65Options {
 
 /**
  * Contains the post-validated data used for compilation.
+ * This is a validated list of processing commands, you don't need to use this usualy.
  */
 export interface Js65Request {
   inputs: AssemblyInput[];
@@ -190,8 +204,8 @@ export interface Js65Request {
 }
 
 /**
- * The kind of artifact an OutputFile holds. Kept open-ended (a plain string union)
- * so new kinds - e.g. 'listing' - can be added without churning every transport:
+ * The kind of artifact an OutputFile holds.
+ * If more output types are created, we'll add them to the end here
  *   - 'binary' : a linked ROM image or IPS patch
  *   - 'object' : a serialized .o module
  *   - 'debug'  : debug info (currently MLB labels)
@@ -200,10 +214,7 @@ export interface Js65Request {
  */
 export type OutputType = 'source' | 'binary' | 'object' | 'debug' | 'map';
 
-/**
- * One named output produced by a compile. `type` distinguishes the binary ROM/IPS
- * from sidecar artifacts (debug info, .o modules) that travel in the same list.
- */
+/** One named output produced by a compile. */
 export interface OutputFile {
   name: string;
   data: Uint8Array;
@@ -218,9 +229,7 @@ export interface FileCallbacks {
   readBinary: (path: string, filename: string) => Promise<Uint8Array | string>;
 }
 
-/**
- * Result type for assemble that includes collected messages
- */
+/** Result type for assemble that includes collected messages */
 export interface AssembleResult {
   /** Whether assembly succeeded (no errors) */
   success: boolean;
@@ -262,8 +271,8 @@ async function applyDefines(asm: Assembler, pre: Preprocessor,
 }
 
 /**
- * Assemble source files, pre-compiled modules, and/or action lists into
- * Module objects.
+ * Assembles source files, pre-compiled modules, and/or action lists into
+ * Module objects. This is like running with `-c` to compile only
  *
  * @param inputs - Array of source code, modules, or action lists to assemble
  * @param options - Assembler configuration
@@ -525,10 +534,6 @@ export async function assemble(
   return { success: !hasErrors, modules, messages: allMessages };
 }
 
-/**
- * Result of a link() call - the low-level binary/IPS output for one set of
- * already-assembled modules.
- */
 export interface LinkResult {
   /** Whether linking succeeded (no errors) */
   success: boolean;
@@ -720,22 +725,20 @@ export function isGzip(data: Uint8Array): boolean {
  * The source info added to the output json is hilariously bad for disk size, so we
  * compress the object files to save a lotta space. In my testing its around 10x just
  * from gzip + another 2.5x saved just from cutting indents outta the json file.
+ * The gzipCodec needs to be setup before calling libassembler, and you can use the included
+ * `pako` gzip library if you don't care.
  */
-export async function serializeObjectFile(
-    m: Module, keepDebugInfo = true): Promise<Uint8Array> {
-  const { gzipSync, strToU8 } = await import('fflate/browser');
-  return gzipSync(strToU8(serializeModule(m, keepDebugInfo)),
-                  { level: 1, mtime: 0, filename: m.name });
+export function serializeObjectFile(m: Module, keepDebugInfo = true): Uint8Array {
+  return gzipCodec().gzip(new TextEncoder().encode(serializeModule(m, keepDebugInfo)));
 }
 
 /**
  * Decode a `.o` file produced by serializeObjectFile back into a Module.
  */
-export async function deserializeObjectFile(data: Uint8Array, name = 'object file'): Promise<Module> {
-  const { gunzipSync, strFromU8 } = await import('fflate/browser');
+export function deserializeObjectFile(data: Uint8Array, name = 'object file'): Module {
   let json: string;
   try {
-    json = strFromU8(gunzipSync(data));
+    json = new TextDecoder().decode(gzipCodec().gunzip(data));
   } catch (err) {
     throw new Error(`${name}: could not decompress: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -765,13 +768,13 @@ export function deserializeRequest(requestJson: string): Js65Request {
 }
 
 /**
- * Canonical compile entrypoint: assembles and (unless outputFormat is 'object') links
- * the given typed inputs, returning the structured result. 
+ * The main entrypoint which does all the compile steps (assembly + link)
+ * Builds everything end to end into one amalgamated output.
  *
  * @param inputs - sources / modules / action lists to assemble and link
- * @param options - flat options bag (text fields only; baseRom is the separate arg)
+ * @param options - compile options for assembler and linker, similar to the CLI options
  * @param callbacks - .include / .incbin readers (required only if a directive needs one)
- * @param baseRom - Optional base ROM the linker patches into (raw bytes, not base64)
+ * @param baseRom - Optional base ROM the linker patches into
  */
 export async function compile(
   inputs: AssemblyInput[],
@@ -837,11 +840,11 @@ export async function compile(
     }
 
     if (outputFormat === 'object') {
-      const outputs: OutputFile[] = await Promise.all(asm.modules.map(async m => ({
+      const outputs: OutputFile[] = asm.modules.map(m => ({
         name: `${m.name || 'module'}.o`,
-        data: await serializeObjectFile(m, !!options.generateDebugInfo),
+        data: serializeObjectFile(m, !!options.generateDebugInfo),
         type: 'object',
-      })));
+      }));
       return { success: true, outputs, messages: asm.messages };
     }
 
@@ -871,9 +874,8 @@ export async function compile(
 }
 
 /**
- * String-transport entry for the frontends so they don't need to validate everything. Deserializes
- * a Js65RequestData into the components and then compiles it, if the input fails validation, this
- * catches the error and returns a `CompileResult` with the error message
+ * Like `compile` but accepts all the compile data passed as a string, so you can use JSON
+ * serialization to pass it in without needing to deal with creating real JS Objects.
  */
 export async function compileRequest(
   requestJson: string,
@@ -912,9 +914,10 @@ export async function compileBrowser(
     : undefined;
 
   // JSImport can't marshal an AbortSignal, so the host passes a polling predicate; adapt it to
-  // the CancelSignal shape. 
+  // work with CancelSignal. 
   // This doesn't work well in WASM, the .NET token only flips while host code
   // runs, i.e. cancellation is observed at the file-callback await boundaries, not mid-compute.
+  // Someday we'll get the async worker thread approach and it should work better for this.
   const signal: CancelSignal | undefined = shouldCancel ? { get aborted() { return shouldCancel(); } } : undefined;
 
   const result = await compileRequest(requestJson, callbacks, rom, signal);

@@ -4,7 +4,6 @@
 import { describe, it, expect } from 'bun:test';
 import { parseModule, parseActionModules } from '../src/validate_modules.ts';
 import { Base64 } from '../src/base64.ts';
-import { gzipSync, strToU8 } from 'fflate/browser';
 import { assemble, compile, deserializeObjectFile, isGzip, link, serializeObjectFile, type Module } from '../src/libassembler.ts';
 
 const b64 = (bytes: number[]) => new Base64().encode(new Uint8Array(bytes));
@@ -246,18 +245,18 @@ start:
     expect(chunk.sourceMap!.get(0)).toEqual({ file: 'a.s', line: 1, column: 0 });
   });
 
-  it('reports a useful error for a corrupt .o', async () => {
-    const truncated = (await serializeObjectFile({ name: 'm' })).slice(0, 8);
-    expect(async () => await deserializeObjectFile(truncated, 'bad.o')).toThrow(/bad\.o: could not decompress/);
+  it('reports a useful error for a corrupt .o', () => {
+    const truncated = serializeObjectFile({ name: 'm' }).slice(0, 8);
+    expect(() => deserializeObjectFile(truncated, 'bad.o')).toThrow(/bad\.o: could not decompress/);
 
     // Well-formed gzip, but the payload is not a module.
-    const notAModule = gzipSync(strToU8('{"chunks":[{}]}'));
-    expect(async () => await deserializeObjectFile(notAModule, 'bad.o'))
+    const notAModule = Bun.gzipSync(new TextEncoder().encode('{"chunks":[{}]}'));
+    expect(() => deserializeObjectFile(notAModule, 'bad.o'))
       .toThrow(/bad\.o: not a valid object file: module\.chunks\[0\]\.data/);
 
     // Plain JSON is no longer an accepted object file.
     expect(isGzip(new TextEncoder().encode('{"name":"m"}'))).toBe(false);
-    expect(async () => await deserializeObjectFile(new TextEncoder().encode('{"name":"m"}'), 'plain.o'))
+    expect(() => deserializeObjectFile(new TextEncoder().encode('{"name":"m"}'), 'plain.o'))
       .toThrow(/plain\.o: could not decompress/);
   });
 

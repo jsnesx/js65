@@ -4,6 +4,10 @@
 
 import { Cli } from '../../src/driver/cli.ts';
 import { compileRequest } from '../../src/libassembler.ts';
+import { setGzipCodec } from '../../src/driver/codec/codec.ts';
+import { hermesCodec } from '../../src/driver/codec/hermes.ts';
+
+setGzipCodec(hermesCodec);
 
 // Host functions installed by the C++ host (hermes_core.cpp + the active entry).
 declare const __js65_args: () => string[];

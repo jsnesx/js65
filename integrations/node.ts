@@ -6,6 +6,10 @@
 import { Cli } from '../src/driver/cli.ts';
 import { dirname, resolve } from 'node:path';
 import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
+import { setGzipCodec } from '../src/driver/codec/codec.ts';
+import { nodeZlibCodec } from '../src/driver/codec/node.ts';
+
+setGzipCodec(nodeZlibCodec);
 
 async function writeAt(path: string, filename: string, data: Uint8Array): Promise<void> {
   const full = resolve(path, filename);

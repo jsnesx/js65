@@ -30,8 +30,9 @@ const HERMES_BUILD = env('HERMES_BUILD', `${HERMES_SRC}/build`);
 const CONFIG = env('HERMES_CONFIG', isWin ? 'Release' : '');
 const cfg = (p: string) => (CONFIG ? `${p}/${CONFIG}` : p);
 
-// Compilers: plain `clang`/`clang++` from PATH unless LLVM_BIN or CLANG/CLANGXX
-// are given. shermes needs a GNU-style driver, so its CC is clang too.
+// Compilers: plain `clang`/`clang++` from PATH unless LLVM_BIN or CLANG/CLANGXX are
+// given. shermes needs a GNU-style driver, so its CC is clang too. miniz.c is plain C, so
+// it's built with clang (CLANG), not clang++ (CLANGXX).
 const LLVM_BIN = env('LLVM_BIN', '');
 const bin = (name: string) => (LLVM_BIN ? `${LLVM_BIN}/${name}${exe}` : name);
 const CLANG = env('CLANG', bin('clang'));
@@ -158,11 +159,23 @@ compile('hermes_core.cpp', 'hermes_core.o');
 compile('hermes_host.cpp', 'hermes_host.o');
 compile('hermes_lib.cpp', 'hermes_lib.o');
 
+// miniz (vendored third-party C, not one of our host sources) gzip-compresses .o files
+// for the Hermes build; see src/codec/hermes.ts. Only the raw-deflate/zlib/crc32 APIs are
+// used (hermes_core.cpp hand-rolls the gzip framing), so the archive/stdio/time APIs are
+// compiled out.
+const compileC = (src: string, obj: string) =>
+  run(`clang ${src}`, CLANG, [
+    '-c', '-std=c11', '-O2', ...CRT, ...LTO, ...PIC, ...VISIBILITY,
+    '-DMINIZ_NO_ARCHIVE_APIS', '-DMINIZ_NO_STDIO', '-DMINIZ_NO_TIME',
+    `${src}`, '-o', `build/${obj}`,
+  ]);
+compileC('integrations/hermes/third_party/miniz/miniz.c', 'miniz.o');
+
 // 4. link the unit + core + an entry object against the static Hermes VM libs.
 const link = (out: string, entryObj: string, extra: string[]) =>
   run(`link ${out}`, CLANGXX, [
     ...CRT, ...LTO, ...LINKER, ...extra,
-    'build/hermes.unit.o', 'build/hermes_core.o', `build/${entryObj}`, '-o', out,
+    'build/hermes.unit.o', 'build/hermes_core.o', 'build/miniz.o', `build/${entryObj}`, '-o', out,
     ...LIBDIRS.map((d) => `-L${d}`),
     ...LIBS.map((l) => `-l${l}`),
     ...MAC_FRAMEWORKS,

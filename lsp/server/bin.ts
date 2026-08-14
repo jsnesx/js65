@@ -8,6 +8,10 @@
  */
 
 import {main} from './server.ts';
+import {setGzipCodec} from '../../src/driver/codec/codec.ts';
+import {nodeZlibCodec} from '../../src/driver/codec/node.ts';
+
+setGzipCodec(nodeZlibCodec);
 
 void main().catch((err) => {
   console.error('js65-lsp: fatal error', err);

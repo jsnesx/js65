@@ -4,4 +4,6 @@
 # hermes/ is the Static Hermes checkout the github actions clones into the workspace
 # its own suite has files bun's scanner treats as tests (*_test.js).
 pathIgnorePatterns  = ["lsp/client/**", "hermes/**"]
+# We need to configure the gzip handler before tests
+preload = ["./test/setup.ts"]
 

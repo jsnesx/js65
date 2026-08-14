@@ -6,8 +6,11 @@
 
 #include "hermes/VM/static_h.h"
 
+#include "third_party/miniz/miniz.h"
+
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -124,6 +127,74 @@ std::filesystem::path resolvePath(std::string_view base, std::string_view file) 
   return std::filesystem::path(base) / filePath;
 }
 
+// --- gzip -----------------------------------------------------------------
+// miniz has no gzip framing, only raw deflate (tdefl) and zlib streams, so the 10-byte
+// gzip header and the 8-byte CRC32+ISIZE trailer (RFC 1952) are hand-rolled here around
+// miniz's raw-deflate calls. mtime is always 0 and FNAME is never written, matching the
+// other three codec implementations (bun/node/pako all drop the filename field too).
+
+std::vector<uint8_t> gzipCompress(jsi::Runtime &rt, const std::vector<uint8_t> &data) {
+  size_t compLen = 0;
+  mz_uint flags = tdefl_create_comp_flags_from_zip_params(1, -15, MZ_DEFAULT_STRATEGY);
+  void *comp = tdefl_compress_mem_to_heap(data.data(), data.size(), &compLen, flags);
+  if (!comp) throwError(rt, "gzip: compression failed");
+
+  std::vector<uint8_t> out;
+  out.reserve(10 + compLen + 8);
+  // Header: magic (1f 8b), CM=8 (deflate), FLG=0, MTIME=0 (4 bytes), XFL=0, OS=ff (unknown).
+  static const uint8_t header[10] = {0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff};
+  out.insert(out.end(), header, header + 10);
+  out.insert(out.end(), static_cast<uint8_t *>(comp), static_cast<uint8_t *>(comp) + compLen);
+  mz_free(comp);
+
+  mz_ulong crc = mz_crc32(MZ_CRC32_INIT, data.data(), data.size());
+  uint32_t isize = static_cast<uint32_t>(data.size());
+  for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>((crc >> (8 * i)) & 0xff));
+  for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>((isize >> (8 * i)) & 0xff));
+  return out;
+}
+
+std::vector<uint8_t> gzipDecompress(jsi::Runtime &rt, const std::vector<uint8_t> &data) {
+  if (data.size() < 18 || data[0] != 0x1f || data[1] != 0x8b || data[2] != 0x08)
+    throwError(rt, "gzip: bad magic");
+
+  uint8_t flg = data[3];
+  size_t pos = 10;
+  if (flg & 0x04) { // FEXTRA
+    if (pos + 2 > data.size()) throwError(rt, "gzip: truncated FEXTRA");
+    uint16_t xlen = static_cast<uint16_t>(data[pos] | (data[pos + 1] << 8));
+    pos += 2 + xlen;
+  }
+  if (flg & 0x08) { // FNAME
+    while (pos < data.size() && data[pos] != 0) ++pos;
+    ++pos;
+  }
+  if (flg & 0x10) { // FCOMMENT
+    while (pos < data.size() && data[pos] != 0) ++pos;
+    ++pos;
+  }
+  if (flg & 0x02) pos += 2; // FHCRC
+  if (pos + 8 > data.size()) throwError(rt, "gzip: truncated header");
+
+  size_t payloadLen = data.size() - pos - 8;
+  size_t decompLen = 0;
+  void *decomp = tinfl_decompress_mem_to_heap(data.data() + pos, payloadLen, &decompLen, 0);
+  if (!decomp) throwError(rt, "gzip: decompression failed");
+
+  std::vector<uint8_t> out(static_cast<uint8_t *>(decomp), static_cast<uint8_t *>(decomp) + decompLen);
+  mz_free(decomp);
+
+  const uint8_t *trailer = data.data() + data.size() - 8;
+  uint32_t expectedCrc = 0, expectedSize = 0;
+  for (int i = 0; i < 4; ++i) expectedCrc |= static_cast<uint32_t>(trailer[i]) << (8 * i);
+  for (int i = 0; i < 4; ++i) expectedSize |= static_cast<uint32_t>(trailer[4 + i]) << (8 * i);
+
+  mz_ulong actualCrc = mz_crc32(MZ_CRC32_INIT, out.data(), out.size());
+  if (actualCrc != expectedCrc) throwError(rt, "gzip: CRC32 mismatch");
+  if (out.size() != expectedSize) throwError(rt, "gzip: size mismatch");
+  return out;
+}
+
 int32_t fsReadText(void *, const char *basePath, const char *relPath,
                    const uint8_t **outData, int32_t *outLen) {
   if (!readFileInto(resolvePath(basePath ? basePath : "", relPath ? relPath : ""), g_fsScratch))
@@ -221,6 +292,18 @@ void installCommonBindings(jsi::Runtime &rt, HostContext &ctx) {
       [](jsi::Runtime &, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
         std::fflush(stdout);
         std::exit(count >= 1 && args[0].isNumber() ? (int)args[0].getNumber() : 0);
+      });
+
+  setFn(rt, "__js65_gzip", 1,
+      [](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
+        if (count < 1) throwError(rt, "__js65_gzip: bytes expected");
+        return makeUint8Array(rt, gzipCompress(rt, getBytes(rt, args[0])));
+      });
+
+  setFn(rt, "__js65_gunzip", 1,
+      [](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
+        if (count < 1) throwError(rt, "__js65_gunzip: bytes expected");
+        return makeUint8Array(rt, gzipDecompress(rt, getBytes(rt, args[0])));
       });
 }
 
