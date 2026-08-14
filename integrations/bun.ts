@@ -4,6 +4,10 @@
 // Compiler frontend for using the bun single file exe
 
 import { Cli } from '../src/driver/cli.ts';
+import { setGzipCodec } from '../src/driver/codec/codec.ts';
+import { bunCodec } from '../src/driver/codec/bun.ts';
+
+setGzipCodec(bunCodec);
 
 const { dirname, resolve } = require('path');
 const { mkdir, readdir } = require('fs').promises;

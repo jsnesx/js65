@@ -81,7 +81,7 @@ export class BuildSession {
     let bytes = await this.readBinary("", filename);
     if (typeof bytes === "string") bytes = new Base64().decode(bytes);
     if (isGzip(bytes)) {
-      return { type: 'module', module: await deserializeObjectFile(bytes, filename) };
+      return { type: 'module', module: deserializeObjectFile(bytes, filename) };
     }
     // Frontends also strip the BOM, but it doesn't hurt to check it in this path too.
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);

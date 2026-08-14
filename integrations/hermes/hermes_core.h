@@ -73,7 +73,7 @@ int32_t fsReadBinary(void *ctx, const char *basePath, const char *relPath,
 
 // Install the bindings both entries share: __js65_args, the read callbacks
 // (__js65_cbReadText / __js65_cbReadBinary), __js65_writeText / __js65_writeBytes,
-// __js65_listDir, and __js65_exit.
+// __js65_listDir, __js65_exit, and __js65_gzip / __js65_gunzip.
 void installCommonBindings(jsi::Runtime &rt, HostContext &ctx);
 
 // Init the runtime + console bindings, install the common bindings plus the entry's own
