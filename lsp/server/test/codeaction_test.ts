@@ -13,7 +13,7 @@ import {pathToUri} from '../convert.ts';
 async function analyzeOne(fs: MemFs, path: string, text: string): Promise<AnalysisResult> {
   const analyzer = new Analyzer({
     workspaceRoot: '/proj', debounceMs: 0,
-    fsImpl: fs.sync as any, fsImplPromises: fs.promises as any,
+    fsImpl: fs.sync as any,
   });
   let resolve!: (r: AnalysisResult) => void;
   const promise = new Promise<AnalysisResult>(r => { resolve = r; });

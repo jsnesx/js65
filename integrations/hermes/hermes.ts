@@ -112,13 +112,13 @@ function resolvePath(base: string, file: string): string {
 }
 
 const cli = new Cli({
-  fsReadString: async (path: string, filename: string): Promise<string> => {
-    if (filename === Cli.STDIN) return __js65_stdinText();
+  fsReadString: (path: string, filename: string): string => {
     return stripBom(__js65_cbReadText(path, filename));
   },
-  fsReadBytes: async (path: string, filename: string): Promise<Uint8Array> => {
-    return (filename === Cli.STDIN) ? __js65_stdinBytes() : __js65_cbReadBinary(path, filename);
+  fsReadBytes: (path: string, filename: string): Uint8Array => {
+    return __js65_cbReadBinary(path, filename);
   },
+  fsReadStdin: async (): Promise<Uint8Array> => __js65_stdinBytes(),
   fsWriteString: async (path: string, filename: string, data: string): Promise<void> => {
     if (filename === Cli.STDOUT) { __js65_stdoutText(data); return; }
     __js65_writeText(resolvePath(path, filename), data);
@@ -134,11 +134,11 @@ const cli = new Cli({
 // `--lib` mode: backs the in-process .NET js65.hermes engine. The result is handed to the
 // host as a typed struct (built via the __js65_result* calls) rather than a serialized
 // string, so the ABI in js65.h stays explicit.
-async function runLibraryMode(): Promise<void> {
+function runLibraryMode(): void {
   const callbacks = {
-    readText: async (basePath: string, filePath: string): Promise<string> =>
+    readText: (basePath: string, filePath: string): string =>
       stripBom(__js65_cbReadText(basePath, filePath)),
-    readBinary: async (basePath: string, filePath: string): Promise<Uint8Array> =>
+    readBinary: (basePath: string, filePath: string): Uint8Array =>
       __js65_cbReadBinary(basePath, filePath),
   };
 
@@ -147,7 +147,7 @@ async function runLibraryMode(): Promise<void> {
   const signal = { get aborted() { return __js65_cancelled(); } };
 
   const baseRom = __js65_baseRom();
-  const result = await compileRequest(__js65_request(), callbacks, baseRom.length ? baseRom : undefined, signal);
+  const result = compileRequest(__js65_request(), callbacks, baseRom.length ? baseRom : undefined, signal);
 
   __js65_resultBegin(result.success);
   for (const output of result.outputs) {
@@ -163,7 +163,7 @@ async function runLibraryMode(): Promise<void> {
 
 async function main(args: string[]) {
   if (args.includes('--lib')) {
-    await runLibraryMode();
+    runLibraryMode();
     return;
   }
   await cli.run(args);

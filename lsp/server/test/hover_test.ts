@@ -17,7 +17,6 @@ async function analyzerWith(docs: Array<{path: string, text: string}>,
     workspaceRoot: project?.rootDir ?? '/proj',
     debounceMs: 0,
     fsImpl: fs.sync as any,
-    fsImplPromises: fs.promises as any,
   });
   analyzer.onDiagnostics = () => {};
   if (project) {

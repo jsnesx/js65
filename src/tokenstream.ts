@@ -53,8 +53,8 @@ const MACPACK: Map<string, string> = new Map(
   ]
 );
 
-export interface ReadFileCallback { (path: string, filename: string) : Promise<string> }
-export interface ReadFileBinaryCallback { (path: string, filename: string) : Promise<Uint8Array|string> }
+export interface ReadFileCallback { (path: string, filename: string) : string }
+export interface ReadFileBinaryCallback { (path: string, filename: string) : Uint8Array|string }
 
 export class SourceContents {
   data: Map<string, string> = new Map<string, string>();
@@ -77,12 +77,12 @@ export class TokenStream implements Tokens.Source {
 
   // Try each search directory in turn, returning the first that loads along with
   // the base it loaded from.
-  async loadFile<T>(path: string, bases: string[],
-                    action: (path: string, filename: string) => Promise<T>,
-                    at?: Token): Promise<{value: T, base: string}> {
+  loadFile<T>(path: string, bases: string[],
+             action: (path: string, filename: string) => T,
+             at?: Token): {value: T, base: string} {
     for (const base of bases) {
       try {
-        return {value: await action(base, path), base};
+        return {value: action(base, path), base};
       } catch (_e) {
         // unable to load the file at that path, try the next include directory.
       }
@@ -104,34 +104,24 @@ export class TokenStream implements Tokens.Source {
     return searchList(this.currentDir(), [...paths, './']);
   }
 
-  next(): Tokens.MaybePromise<Token[]|undefined> {
+  next(): Token[]|undefined {
     while (this.stack.length) {
       const frame = this.stack[this.stack.length - 1];
       const front = frame.queue;
       if (front.length) return front.pop()!;
       const line = frame.source?.next();
-      if (line instanceof Promise) return this.nextAsync(line);
       if (line) return line;
       this.stack.pop();
     }
     return undefined;
   }
 
-  /** Continuation of `next()` for a source that actually suspended. */
-  private async nextAsync(pending: Promise<Token[]|undefined>):
-      Promise<Token[]|undefined> {
-    const line = await pending;
-    if (line) return line;
-    this.stack.pop();
-    return this.next();
-  }
-
-  async include(path: string, at?: Token): Promise<void> {
+  include(path: string, at?: Token): void {
     if (!this.readFile) {
       Tokens.fail(`Cannot read file, no reader available: ${path}`, at);
     }
     // TODO - options?
-    const {value: code, base} = await this.loadFile<string>(
+    const {value: code, base} = this.loadFile<string>(
         path, this.includeSearch(), this.readFile, at);
     // Dont use the name of the file for the include, use the resolved
     // path so that two "header.inc" files in different dirs have the correct path.
@@ -150,12 +140,12 @@ export class TokenStream implements Tokens.Source {
                              this.errorCollector));
   }
 
-  async incbin(path: string, offset: number, length: number|undefined,
-               at?: Token): Promise<string> {
+  incbin(path: string, offset: number, length: number|undefined,
+         at?: Token): string {
     if (!this.readFileBinary) {
       Tokens.fail(`Cannot read binary file, no reader available: ${path}`, at);
     }
-    const loaded = await this.loadFile<Uint8Array|string>(
+    const loaded = this.loadFile<Uint8Array|string>(
         path, this.binIncludeSearch(), this.readFileBinary, at);
     // The callback hands back either base64 or bytes, and the caller may slice
     // it, so decode to bytes, slice, then re-encode.

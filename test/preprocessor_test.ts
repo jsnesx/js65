@@ -855,22 +855,22 @@ const BINARY = util.fromByteString('0123456789');
  * the tests tell "resolved the directive" apart from "merely read past it".
  */
 async function testFiles(lines: string[], reads: string[] = []): Promise<string[]> {
-  const readText = async (_base: string, name: string) => {
+  const readText = (_base: string, name: string) => {
     reads.push(name);
     const code = TEXT_FILES[name];
     if (code == null) throw new Error(`no such file: ${name}`);
-    return await Promise.resolve(code);
+    return code;
   };
-  const readBinary = async (_base: string, name: string) => {
+  const readBinary = (_base: string, name: string) => {
     reads.push(name);
     if (name !== 'data.bin') throw new Error(`no such file: ${name}`);
-    return await Promise.resolve(BINARY);
+    return BINARY;
   };
   const toks = new TokenStream(readText, readBinary);
   toks.enter(new Tokenizer(lines.join('\n'), 'input.s'));
   const pre = new Preprocessor(toks, new Assembler());
   const out: string[] = [];
-  for (let line = await pre.next(); line; line = await pre.next()) {
+  for (let line = pre.next(); line; line = pre.next()) {
     out.push(line.map(Tokens.name).join(' '));
   }
   return out;

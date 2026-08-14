@@ -1143,25 +1143,15 @@ export class Assembler {
   // Assemble from a token source. The optional signal is polled once per line so a long
   // assembly can be cancelled cooperatively; an aborted signal throws, which the caller
   // (compile) turns into an ordinary failure result.
-  async tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }) {
+  tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }): void {
     // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
     while (!this.ended) {
-      // Pulling a line only suspends when it crosses an `.include`/`.incbin`.
-      const pending = source.next();
-      const line = pending instanceof Promise ? await pending : pending;
+      const line = source.next();
       if (!line) break;
       if (signal?.aborted) throw new FatalError('Compilation cancelled');
       this.line(line);
     }
   }
-
-  // Assemble from an async token source
-  // async tokensAsync(source: Tokens.Async): Promise<void> {
-  //   let line;
-  //   while ((line = await source.nextAsync())) {
-  //     this.line(line);
-  //   }
-  // }
 
   directive(tokens: Token[]) {
     // TODO - record line information, rewrap error messages?

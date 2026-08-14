@@ -93,15 +93,12 @@ const callbacks = {
 // .aborted at per-line / per-chunk boundaries so a long compile cancels cooperatively.
 const signal = { get aborted() { return hostCancel.IsCancellationRequested; } };
 // compileRequest deserializes the request, and catches any errors to return a proper CompileResult
-(async () => {
-    await compileRequest(requestJson, callbacks, baseRom.length ? baseRom : undefined, signal).then(result => {
-        // Hand the whole outputs list (each { name, data:Uint8Array, type }) to the host;
-        // the debug sidecar is just a 'debug'-typed entry, no separate field.
-        compileOutputs = result.outputs;
-        compileSuccess = result.success;
-        compileMessages = JSON.stringify(result.messages || []);
-    });
-})();
+const result = compileRequest(requestJson, callbacks, baseRom.length ? baseRom : undefined, signal);
+// Hand the whole outputs list (each { name, data:Uint8Array, type }) to the host;
+// the debug sidecar is just a 'debug'-typed entry, no separate field.
+compileOutputs = result.outputs;
+compileSuccess = result.success;
+compileMessages = JSON.stringify(result.messages || []);
 """);
         }, ct).ConfigureAwait(true);
         // A cancelled compile returns a clean failure result; surface the .NET cancellation

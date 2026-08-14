@@ -110,8 +110,7 @@ public partial class BrowserJsEngine : Assembler
     // restrictions which prevent us from marshalling a raw list of bytes, so we work around it
     // by stringifying pretty much everything.
     [JSImport("compileBrowser", "js65.interop.libassembler.js")]
-    [return: JSMarshalAs<JSType.Promise<JSType.String>>]
-    private static partial Task<string> CompileBrowser(
+    private static partial string CompileBrowser(
         string requestJson,
         [JSMarshalAs<JSType.Function<JSType.String,JSType.String,JSType.String>>]
         Func<string, string, string> textCallback,
@@ -173,7 +172,7 @@ public partial class BrowserJsEngine : Assembler
 
         // The base ROM crosses as a proper binary byte[] param; the result returns as a
         // base64-encoded JSON string (see CompileBrowser for why these two differ).
-        var output = await CompileBrowser(
+        var output = CompileBrowser(
             requestJson,
             LoadTextFileCallback,
             LoadBinaryFileCallback,

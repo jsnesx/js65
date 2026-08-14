@@ -14,12 +14,16 @@ import {fakeFs} from './fakefs.ts';
 function session(files: Record<string, string|Uint8Array> = {}) {
   const written = new Map<string, Uint8Array>();
   const callbacks: Callbacks = {
-    fsReadString: async (path, filename) => {
+    fsReadString: (path, filename) => {
       const data = read(path, filename);
       return typeof data === 'string' ? data : new TextDecoder().decode(data);
     },
-    fsReadBytes: async (path, filename) => {
+    fsReadBytes: (path, filename) => {
       const data = read(path, filename);
+      return typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    },
+    fsReadStdin: async () => {
+      const data = read('', STDIN);
       return typeof data === 'string' ? new TextEncoder().encode(data) : data;
     },
     fsWriteString: async (path, filename, data) => {

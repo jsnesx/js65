@@ -52,8 +52,9 @@ describe('CLI', function() {
 
   describe('linker config', function() {
     const cli = new Cli({
-      fsReadString: async () => '',
-      fsReadBytes: async () => new Uint8Array(0),
+      fsReadString: () => '',
+      fsReadBytes: () => new Uint8Array(0),
+      fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
       fsListDir: async () => [],
@@ -128,9 +129,10 @@ describe('CLI', function() {
         return files[key];
       };
       const cli = new Cli({
-        fsReadString: async (path, filename) => read(path, filename),
-        fsReadBytes: async (path, filename) =>
+        fsReadString: (path, filename) => read(path, filename),
+        fsReadBytes: (path, filename) =>
             new TextEncoder().encode(read(path, filename)),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
         fsListDir: async () => [],
@@ -144,8 +146,9 @@ describe('CLI', function() {
 
   describe('include directories', function() {
     const cli = new Cli({
-      fsReadString: async () => '',
-      fsReadBytes: async () => new Uint8Array(0),
+      fsReadString: () => '',
+      fsReadBytes: () => new Uint8Array(0),
+      fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
       fsListDir: async () => [],
@@ -192,17 +195,18 @@ describe('CLI', function() {
       const files = {...tree, ...extra};
       const opened: string[] = [];
       const cli = new Cli({
-        fsReadString: async (path: string, filename: string) => {
+        fsReadString: (path: string, filename: string) => {
           const key = joinDir(path, filename);
           opened.push(key);
           if (!(key in files)) throw new Error(`ENOENT ${key}`);
           return files[key];
         },
-        fsReadBytes: async (path: string, filename: string) => {
+        fsReadBytes: (path: string, filename: string) => {
           const key = joinDir(path, filename);
           if (!(key in files)) throw new Error(`ENOENT ${key}`);
           return new TextEncoder().encode(files[key]);
         },
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
         fsListDir: async () => [],
@@ -280,9 +284,10 @@ describe('CLI', function() {
         return tree[key];
       };
       const cli = new Cli({
-        fsReadString: async (path, filename) => read(path, filename),
-        fsReadBytes: async (path, filename) =>
+        fsReadString: (path, filename) => read(path, filename),
+        fsReadBytes: (path, filename) =>
             new TextEncoder().encode(read(path, filename)),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
         fsListDir: async () => [],
@@ -350,8 +355,9 @@ describe('CLI', function() {
 
   describe('--create-dep', function() {
     const cli = new Cli({
-      fsReadString: async () => '',
-      fsReadBytes: async () => new Uint8Array(0),
+      fsReadString: () => '',
+      fsReadBytes: () => new Uint8Array(0),
+      fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
       fsListDir: async () => [],
@@ -374,8 +380,9 @@ describe('CLI', function() {
     it('rejects a repeated dependency flag', function() {
       const exits: number[] = [];
       const strict = new Cli({
-        fsReadString: async () => '',
-        fsReadBytes: async () => new Uint8Array(0),
+        fsReadString: () => '',
+        fsReadBytes: () => new Uint8Array(0),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
         fsListDir: async () => [],
@@ -496,9 +503,10 @@ describe('CLI', function() {
         return files[key];
       };
       const dep = new Cli({
-        fsReadString: async (path, filename) => read(path, filename),
-        fsReadBytes: async (path, filename) =>
+        fsReadString: (path, filename) => read(path, filename),
+        fsReadBytes: (path, filename) =>
             new TextEncoder().encode(read(path, filename)),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
         fsListDir: async () => [],
@@ -515,8 +523,9 @@ describe('CLI', function() {
   // are the regression net for the table refactor.
   describe('argument parsing', function() {
     const cli = new Cli({
-      fsReadString: async () => '',
-      fsReadBytes: async () => new Uint8Array(0),
+      fsReadString: () => '',
+      fsReadBytes: () => new Uint8Array(0),
+      fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
       fsListDir: async () => [],
@@ -527,8 +536,9 @@ describe('CLI', function() {
     function strict() {
       const exits: number[] = [];
       const c = new Cli({
-        fsReadString: async () => '',
-        fsReadBytes: async () => new Uint8Array(0),
+        fsReadString: () => '',
+        fsReadBytes: () => new Uint8Array(0),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
         fsListDir: async () => [],
@@ -878,8 +888,9 @@ describe('CLI', function() {
       const exits: number[] = [];
       const lines: string[] = [];
       const cli = new Cli({
-        fsReadString: async () => '',
-        fsReadBytes: async () => new Uint8Array(0),
+        fsReadString: () => '',
+        fsReadBytes: () => new Uint8Array(0),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
         fsListDir: async () => [],
@@ -1036,8 +1047,9 @@ describe('CLI', function() {
       };
       let exitCode = 0;
       const cli = new Cli({
-        fsReadString: async (_p, f) => src[f],
-        fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
+        fsReadString: (_p, f) => src[f],
+        fsReadBytes: (_p, f) => new TextEncoder().encode(src[f]),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
         fsListDir: async () => [],
@@ -1059,8 +1071,9 @@ describe('CLI', function() {
       };
       let exitCode = 0;
       const cli = new Cli({
-        fsReadString: async (_p, f) => src[f],
-        fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
+        fsReadString: (_p, f) => src[f],
+        fsReadBytes: (_p, f) => new TextEncoder().encode(src[f]),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
         fsListDir: async () => [],
@@ -1086,9 +1099,10 @@ describe('CLI', function() {
         return files[key];
       };
       const cli = new Cli({
-        fsReadString: async (path, filename) => read(path, filename),
-        fsReadBytes: async (path, filename) =>
+        fsReadString: (path, filename) => read(path, filename),
+        fsReadBytes: (path, filename) =>
             new TextEncoder().encode(read(path, filename)),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
         fsListDir: async () => [],
@@ -1287,8 +1301,9 @@ describe('CLI', function() {
       };
       let exitCode = 0;
       const cli = new Cli({
-        fsReadString: async (_p, f) => src[f],
-        fsReadBytes: async (_p, f) => new TextEncoder().encode(src[f]),
+        fsReadString: (_p, f) => src[f],
+        fsReadBytes: (_p, f) => new TextEncoder().encode(src[f]),
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
         fsListDir: async () => [],
@@ -1318,15 +1333,16 @@ describe('CLI', function() {
       let written = '';
       let exitCode = 0;
       const cli = new Cli({
-        fsReadString: async (_p, f) => {
+        fsReadString: (_p, f) => {
           if (f === 'in.s') return src;
           throw new Error(`no such file: ${f}`);
         },
-        fsReadBytes: async (_p, f) => {
+        fsReadBytes: (_p, f) => {
           const r = roms[f];
           if (!r) throw new Error(`no such file: ${f}`);
           return r;
         },
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async (_p, _f, data) => { written = data; },
         fsWriteBytes: async () => {},
         fsListDir: async (dir: string) => {
@@ -1416,14 +1432,15 @@ Start:
         return f;
       };
       const cli = new Cli({
-        fsReadString: async (_path, filename) => {
+        fsReadString: (_path, filename) => {
           const f = get(filename);
           return typeof f === 'string' ? f : new TextDecoder().decode(f);
         },
-        fsReadBytes: async (_path, filename) => {
+        fsReadBytes: (_path, filename) => {
           const f = get(filename);
           return typeof f === 'string' ? new TextEncoder().encode(f) : f;
         },
+        fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
         fsListDir: async () => [],
@@ -1440,13 +1457,9 @@ async function make(args: string[], input: string, bytes: Uint8Array|null = null
   const outParts: string[] = [];
   const dataParts: Uint8Array[] = [];
   const cli = new Cli({
-    fsReadString: async (_path: string, _filename: string) => {
-      return await Promise.resolve(input);
-    },
-    fsReadBytes: async (_path: string, filename: string) => {
-      if (filename === Cli.STDIN) return await Promise.resolve(new TextEncoder().encode(input));
-      return await Promise.resolve(bytes ?? new Uint8Array(0));
-    },
+    fsReadString: (_path: string, _filename: string) => input,
+    fsReadBytes: (_path: string, _filename: string) => bytes ?? new Uint8Array(0),
+    fsReadStdin: async () => new TextEncoder().encode(input),
     fsWriteString: async (_path: string, _filename: string, data: string) => {
       outParts.push(data);
       return await Promise.resolve(undefined);
@@ -1474,13 +1487,9 @@ async function makeFiles(args: string[], input: string, bytes: Uint8Array|null =
   const files = new Map<string, Uint8Array>();
   let exitCode = 0;
   const cli = new Cli({
-    fsReadString: async (_path: string, _filename: string) => {
-      return await Promise.resolve(input);
-    },
-    fsReadBytes: async (_path: string, filename: string) => {
-      if (filename === Cli.STDIN) return await Promise.resolve(new TextEncoder().encode(input));
-      return await Promise.resolve(bytes ?? new Uint8Array(0));
-    },
+    fsReadString: (_path: string, _filename: string) => input,
+    fsReadBytes: (_path: string, _filename: string) => bytes ?? new Uint8Array(0),
+    fsReadStdin: async () => new TextEncoder().encode(input),
     fsWriteString: async (_path: string, _filename: string, _data: string) => {
       return await Promise.resolve(undefined);
     },
