@@ -107,7 +107,7 @@ describe('CLI', function() {
       };
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      console.log = (...args: unknown[]) => { lines.push(...args.join(' ').split('\n')); };
       try {
         await expect(build(files, ['-C', 'nes.cfg', 'main.s'])).rejects.toThrow();
       } finally {
@@ -290,7 +290,7 @@ describe('CLI', function() {
       });
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      console.log = (...args: unknown[]) => { lines.push(...args.join(' ').split('\n')); };
       try {
         await cli.run(['--target', 'sim', '-o', 'out.nes', 'main.s']);
       } finally {
@@ -706,7 +706,7 @@ describe('CLI', function() {
       it('names the offending flag in the error', function() {
         const lines: string[] = [];
         const log = console.log;
-        console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+        console.log = (...args: unknown[]) => { lines.push(...args.join(' ').split('\n')); };
         try {
           cli.parseArgs(['--nonsense', 'main.s']);
         } finally {
@@ -886,7 +886,7 @@ describe('CLI', function() {
         exit: (code: number) => { exits.push(code); },
       });
       const log = console.log;
-      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      console.log = (...a: unknown[]) => { lines.push(...a.join(' ').split('\n')); };
       try {
         await cli.run(args);
       } finally {
@@ -921,7 +921,7 @@ describe('CLI', function() {
     it('rejects a ca65 target name', async function() {
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      console.log = (...a: unknown[]) => { lines.push(...a.join(' ').split('\n')); };
       try {
         await expect(makeFiles(['-t', 'nes', '--stdin', '-o', 'out.bin'], 'lda #3'))
             .rejects.toThrow();
@@ -1142,7 +1142,7 @@ describe('CLI', function() {
         SEGMENTS { CODE: load = PRG; }`;
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      console.log = (...args: unknown[]) => { lines.push(...args.join(' ').split('\n')); };
       try {
         await expect(bytes(cfg, IMPORT_SRC, ['-DFOO=$34'])).rejects.toThrow();
       } finally {
@@ -1182,7 +1182,7 @@ describe('CLI', function() {
       // exactly as `ca65 -D FOO=1` on a file containing `FOO = $78` does.
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+      console.log = (...args: unknown[]) => { lines.push(...args.join(' ').split('\n')); };
       try {
         await expect(bytes(IMPORT_CFG, '.segment "CODE"\nFOO = $78\nlda #FOO\n',
                            ['-DFOO=$34'])).rejects.toThrow();
@@ -1207,7 +1207,7 @@ describe('CLI', function() {
     async function failure(args: string[], src: string) {
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      console.log = (...a: unknown[]) => { lines.push(...a.join(' ').split('\n')); };
       try {
         await expect(bytes(args, src)).rejects.toThrow();
       } finally {
@@ -1267,7 +1267,7 @@ describe('CLI', function() {
        async function() {
       const lines: string[] = [];
       const log = console.log;
-      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      console.log = (...a: unknown[]) => { lines.push(...a.join(' ').split('\n')); };
       try {
         expect(await bytes(['--feature', 'string_escapes'], 'lda #1\n'))
             .toEqual([0xa9, 1]);

@@ -89,8 +89,17 @@ type Traverser = (expr: Expr, rec: Rec, parent?: Expr) => Expr;
 /** Performs a post-order traversal. */
 export function traverse(expr: Expr, f: Traverser) {
   function rec(e: Expr) {
-    if (!e.args) return e;
-    return {...e, args: e.args.map(c => t(c, e))};
+    const args = e.args;
+    if (!args) return e;
+    // Most of the nodes will be unchanged when calling t on it,
+    // so skip the spread object clone if we didn't change anything
+    let out: Expr[]|undefined;
+    for (let i = 0; i < args.length; i++) {
+      const arg = t(args[i], e);
+      if (!out && arg !== args[i]) out = args.slice(0, i);
+      if (out) out.push(arg);
+    }
+    return out ? {...e, args: out} : e;
   }
   function t(e: Expr, p?: Expr) {
     const source = e.source;
@@ -786,7 +795,13 @@ const SIZE_TRANSFORMS = new Map<string, (...args: number[]) => number>([
   
 function fixSize(expr: Expr): Expr {
   const xform = SIZE_TRANSFORMS.get(expr.op);
-  const size = xform?.(...expr.args!.map(e => Number(e.meta?.size)));
+  // perf: only use the spread operator when handling an unknown num of args
+  const args = expr.args!;
+  const size = !xform ? undefined :
+      args.length === 1 ? xform(Number(args[0].meta?.size)) :
+      args.length === 2 ? xform(Number(args[0].meta?.size),
+                                Number(args[1].meta?.size)) :
+      xform(...args.map(e => Number(e.meta?.size)));
   if (size) (expr.meta || (expr.meta = {})).size = size;
   if ((expr.op === '+' || expr.op === '-') && isZeropage(expr.op, expr.args!)) {
     (expr.meta || (expr.meta = {})).zeropage = true;

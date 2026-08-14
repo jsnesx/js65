@@ -574,13 +574,22 @@ export class Cli {
                           source?: Tokens.SourceInfo, code?: string) {
     const label = level === 'info' ? 'note' : level;
     const tag = code ? ` [${code}]` : '';
-    console.log(`${this.locationPrefix(source)}${label}: ${message}${tag}`);
-    for (const line of this.snippet(source)) console.log(line);
+    const out = this.diagnosticLines;
+    out.push(`${this.locationPrefix(source)}${label}: ${message}${tag}`);
+    out.push(...this.snippet(source));
     // Walk the include / macro-expansion stack outwards.
     for (let p = source?.parent; p; p = p.parent) {
-      console.log(`${this.locationPrefix(p)}note: expanded from here`);
-      for (const line of this.snippet(p)) console.log(line);
+      out.push(`${this.locationPrefix(p)}note: expanded from here`);
+      out.push(...this.snippet(p));
     }
+  }
+
+  private readonly diagnosticLines: string[] = [];
+
+  private flushDiagnostics() {
+    if (!this.diagnosticLines.length) return;
+    console.log(this.diagnosticLines.join('\n'));
+    this.diagnosticLines.length = 0;
   }
 
   printerrors(...err: Error[]) {
@@ -589,6 +598,7 @@ export class Cli {
                            e instanceof Tokens.SourceError ? e.source : undefined);
     }
     this.printSummary(err.length, 0);
+    this.flushDiagnostics();
   }
 
   printMessages(messages: Tokens.AssemblerMessage[]) {
@@ -597,13 +607,14 @@ export class Cli {
     }
     this.printSummary(messages.filter(m => m.level === 'error').length,
                       messages.filter(m => m.level === 'warning').length);
+    this.flushDiagnostics();
   }
 
   private printSummary(errorCount: number, warningCount: number) {
     const parts = [];
     if (errorCount > 0) parts.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
     if (warningCount > 0) parts.push(`${warningCount} warning${warningCount !== 1 ? 's' : ''}`);
-    if (parts.length) console.log(`${parts.join(', ')} generated.`);
+    if (parts.length) this.diagnosticLines.push(`${parts.join(', ')} generated.`);
   }
 
   public buildUsage(code = 1, err: Error[]|undefined = undefined) {

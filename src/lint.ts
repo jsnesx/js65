@@ -147,14 +147,16 @@ class BareNumberOperand extends LintRule {
       'a lone decimal/binary literal used as an address, e.g. `lda 5`';
 
   override instruction(inst: LintInstruction): void {
+    // Speed up the check for lda 5 bare operands by counting the number of tokens
+    // on the line and if its just that one, then return it, or undefined otherwise.
+    const num = soleOperandToken(inst);
+    if (!num || num.token !== 'num' ||
+        (num.radix !== 10 && num.radix !== 2)) {
+      return;
+    }
     const site = inst.tokens?.[0].source;
     const operand = addressOperand(inst);
     if (!operand) return;
-    // Strip the operand down to just the number value
-    const bare = operand.filter(t => !isSyntax(t));
-    if (bare.length !== 1) return;
-    const num = bare[0];
-    if (num.token !== 'num' || (num.radix !== 10 && num.radix !== 2)) return;
     // For macros/define, check if the number got here through a replacement
     if (!sameOrigin(num.source, site)) return;
 
@@ -219,8 +221,9 @@ interface ProcFrame {
   readonly name: string;
   /** Instructions emitted directly in this proc, not in a nested one. */
   count: number;
-  /** The most recent instruction as written, for the message. */
-  lastText: string;
+  /** The most recent instruction, rendered for the message only if it's reported. */
+  lastMnemonic: string;
+  lastTokens?: Token[];
   /** Whether that instruction transfers control away. */
   terminates: boolean;
   /** Whether an `.assert` has vouched for the address since that instruction. */
@@ -243,14 +246,15 @@ class EndprocNoTerminator extends LintRule {
     const frame = this.procStack[this.procStack.length - 1];
     if (!frame) return;
     frame.count++;
-    frame.lastText = renderInstruction(mnemonic, tokens);
+    frame.lastMnemonic = mnemonic;
+    frame.lastTokens = tokens;
     frame.terminates = transfersControl(mnemonic, ops);
     frame.asserted = false;
   }
 
   override enterProc(name: string): void {
-    this.procStack.push(
-        {name, count: 0, lastText: '', terminates: false, asserted: false});
+    this.procStack.push({name, count: 0, lastMnemonic: '', terminates: false,
+                         asserted: false});
   }
 
   override assert(): void {
@@ -263,8 +267,9 @@ class EndprocNoTerminator extends LintRule {
     if (!frame) return;
     // A proc that emitted no instructions is a data table, which doesn't count.
     if (!frame.count || frame.terminates || frame.asserted) return;
+    const last = renderInstruction(frame.lastMnemonic, frame.lastTokens);
     this.report(`\`.endproc\` for \`${frame.name}\` ends with ` +
-                `\`${frame.lastText}\`, instead of a terminal instruction. ` +
+                `\`${last}\`, instead of a terminal instruction. ` +
                 `Add a terminating opcode (rts/rit/jmp/jsr/branch), assert the ` +
                 `fall-through with \`FALLTHROUGH next\` (from ` +
                 `\`.macpack common\`), or \`; js65-lint-disable-next-line ` +
@@ -510,6 +515,21 @@ function addressOperand({arg, tokens}: LintInstruction): Token[]|undefined {
   return operand;
 }
 
+function soleOperandToken({arg, tokens}: LintInstruction): Token|undefined {
+  const mode = arg[0];
+  if (!tokens || mode === 'imm' || mode === 'imp' || mode === 'acc') {
+    return undefined;
+  }
+  let found: Token|undefined;
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (isSyntax(token)) continue;
+    if (found) return undefined;
+    found = token;
+  }
+  return found;
+}
+
 /**
  * The edits that turn `jsr foo` plus `rts` into `jmp foo`: rewrite the mnemonic
  * in place and drop the whole `rts` line. Don't offer this for macro expansions
@@ -601,8 +621,11 @@ function isSyntax(token: Token): boolean {
   switch (token.token) {
     case 'lp': case 'rp': case 'lb': case 'rb': return true;
     case 'op': return token.str === ',';
-    case 'ident':
-      return token.str.length === 1 && /^[xy]$/i.test(token.str);
+    case 'ident': {
+      if (token.str.length !== 1) return false;
+      const c = token.str.charCodeAt(0) | 0x20; // fold case
+      return c === 0x78 /* x */ || c === 0x79 /* y */;
+    }
     default: return false;
   }
 }

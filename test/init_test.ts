@@ -122,7 +122,7 @@ describe('the generated project', function() {
     const {callbacks, written} = fakeFs();
     const lines: string[] = [];
     const log = console.log;
-    console.log = (...parts: unknown[]) => { lines.push(parts.join(' ')); };
+    console.log = (...parts: unknown[]) => { lines.push(...parts.join(' ').split('\n')); };
     let exitCode = 0;
     try {
       const cli = new Cli({...callbacks, exit: code => { exitCode = code; }});
@@ -204,7 +204,7 @@ describe('js65 init', function() {
     const lines: string[] = [];
     let exitCode = 0;
     const log = console.log;
-    console.log = (...parts: unknown[]) => { lines.push(parts.join(' ')); };
+    console.log = (...parts: unknown[]) => { lines.push(...parts.join(' ').split('\n')); };
     try {
       await new Cli({...callbacks, exit: code => { exitCode = code; }}).run(args);
     } finally {

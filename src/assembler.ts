@@ -681,11 +681,23 @@ export class Assembler {
    * the underlying value or the deepest sym ref we found so far.
    */
   private substituteResolvedRef(expr: Expr): Expr {
-    const seen = new Set<number>();
-    while (expr.op === 'sym' && expr.sym == null && expr.num != null &&
-           !seen.has(expr.num)) {
-      seen.add(expr.num);
-      const value = this.symbols[expr.num]?.expr;
+    // Called for every node of every traversal, and the loop almost always
+    // runs zero or one times, so don't pay for the cycle check until the
+    // second hop can actually happen.
+    let seen: Set<number>|undefined;
+    let first: number|undefined;
+    while (expr.op === 'sym' && expr.sym == null && expr.num != null) {
+      const num = expr.num;
+      if (seen) {
+        if (seen.has(num)) break;
+        seen.add(num);
+      } else if (first === undefined) {
+        first = num;
+      } else {
+        if (first === num) break;
+        seen = new Set([first, num]);
+      }
+      const value = this.symbols[num]?.expr;
       if (!value) break;
       expr = value;
     }
@@ -2169,11 +2181,13 @@ export class Assembler {
    * to get pessimized to an ABS addressing mode.
    */
   private lookupSymbol(name: string): Symbol|undefined {
-    if (name.startsWith('@')) return this.cheapLocals.symbols.get(name);
+    if (name.charCodeAt(0) === 0x40 /* @ */) {
+      return this.cheapLocals.symbols.get(name);
+    }
     // This runs for every identifier in every expression, so shortcut
     // checking for the symbol if it isn't explicitly scoped and jump
     // straight to the symbol map lookup.
-    if (!name.includes('::')) {
+    if (name.indexOf(':') < 0 || !name.includes('::')) {
       for (let scope: Scope|undefined = this.currentScope; scope;
            scope = scope.parent) {
         const sym = scope.symbols.get(name);
