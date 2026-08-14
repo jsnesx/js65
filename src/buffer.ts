@@ -10,10 +10,6 @@ class State {
               readonly match: Match|undefined) {}
 }
 
-const RE_SPACE = /[ \t]+/y;
-const RE_NEWLINE = /(\r\n|\n|\r)/y;
-const RE_NEWLINE_GLOBAL = /\r\n|\n|\r/g;
-
 export class Buffer {
   pos = 0;
 
@@ -21,26 +17,39 @@ export class Buffer {
 
   constructor(readonly content: string, public line = 1, public column = 0) {}
 
+  /** Go to the next line, handling things like multiline comments */
   private advance(s: string) {
-    // fast path for skipping the check for newlines when advancing since
-    // almost all tokens we skip by don't have a newline in them
-    if (!s.includes('\n') && !s.includes('\r')) {
-      this.column += s.length;
-      this.pos += s.length;
-      return;
+    const len = s.length;
+    let lines = 0;
+    // Offset just past the last terminator, i.e. the start of the final line.
+    let lineStart = 0;
+    for (let i = 0; i < len; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 0x0d /* \r */) {
+        if (s.charCodeAt(i + 1) === 0x0a /* \n */) i++;
+      } else if (c !== 0x0a /* \n */) {
+        continue;
+      }
+      lines++;
+      lineStart = i + 1;
     }
-    // slow path if the token has newlines in it, we want to split it and move
-    // to the next line/column/etc
-    // s is the freshly-matched token text starting at this.pos.
+    this.pos += len;
+    if (lines) {
+      this.line += lines;
+      this.column = len - lineStart;
+    } else {
+      this.column += len;
+    }
+  }
+
+  // Skip ahead to the end of this string with a known length and no newlines
+  punct(s: string) {
+    const match = [s] as Match;
+    match.line = this.line;
+    match.column = this.column;
+    this.lastMatch = match;
     this.pos += s.length;
-    // A multiline comment can go across multiple lines,
-    // so split on every line terminator rather than just the first.
-    const lines = s.split(RE_NEWLINE_GLOBAL);
-    if (lines.length > 1) {
-      this.line += lines.length - 1;
-      this.column = 0;
-    }
-    this.column += lines[lines.length - 1].length;
+    this.column += s.length;
   }
 
   saveState(): State {
@@ -54,15 +63,35 @@ export class Buffer {
     this.lastMatch = state.match;
   }
 
-  skip(re: RegExp): boolean {
-    re.lastIndex = this.pos;
-    const match = re.exec(this.content) as Match|null;
-    if (!match) return false;
-    this.advance(match[0]);
+  /** Skips a run of spaces and tabs, which can never contain a newline. */
+  space(): boolean {
+    const s = this.content;
+    let p = this.pos;
+    for (;;) {
+      const c = s.charCodeAt(p);
+      if (c !== 0x20 /* space */ && c !== 0x09 /* tab */) break;
+      p++;
+    }
+    if (p === this.pos) return false;
+    this.column += p - this.pos;
+    this.pos = p;
     return true;
   }
-  space(): boolean { return this.skip(RE_SPACE); }
-  newline(): boolean { return this.skip(RE_NEWLINE); }
+
+  /** Skips one line terminator: `\r\n`, `\n` or `\r`. */
+  newline(): boolean {
+    const c = this.content.charCodeAt(this.pos);
+    if (c === 0x0d /* \r */) {
+      this.pos += this.content.charCodeAt(this.pos + 1) === 0x0a /* \n */ ? 2 : 1;
+    } else if (c === 0x0a /* \n */) {
+      this.pos++;
+    } else {
+      return false;
+    }
+    this.line++;
+    this.column = 0;
+    return true;
+  }
 
   lookingAt(re: RegExp|string): boolean {
     if (typeof re === 'string') return this.content.startsWith(re, this.pos);
