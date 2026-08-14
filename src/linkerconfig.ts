@@ -24,7 +24,6 @@ const AREA_TYPES: readonly string[] = ['ro', 'rw'];
 const SEGMENT_TYPES: readonly string[] = ['ro', 'rw', 'bss', 'zp', 'overwrite'];
 
 const RE_CFG_COMMENT = /(#|\/\/).*/y;
-const RE_CFG_NUMBER = /\$?[0-9a-z_]+/iy;
 const RE_CFG_OPERATOR = /([;,=:]|\++|-+|&&?|\|\|?|[*/~^]|<[<=]?|>[>=]?)/y;
 const RE_CFG_PERCENT = /%[a-z0-9_]*/iy;
 
@@ -108,23 +107,41 @@ export class CfgTokenizer extends Tokenizer {
            }
   }
 
-  /** change the default meaning of `%` since here its for `%O`/`%S` filename placeholders */
-  protected override numberRegex(): RegExp { return RE_CFG_NUMBER; }
+  /**
+   * Change the default meaning of `%` since here its for `%O`/`%S` filename
+   * placeholders - leaving it unmatched hands it to `tokenOther` below.
+   */
+  protected override matchNumber(): Token|undefined {
+    const buf = this.buffer;
+    if (buf.content.charCodeAt(buf.pos) === 0x25 /* % */) return undefined;
+    return super.matchNumber();
+  }
 
   /** added a new `;` token for line ending so we need to add it to the operator list */
-  protected override operatorRegex(): RegExp { return RE_CFG_OPERATOR; }
-  protected override addressSizeRegex(): undefined { return undefined; }
-  protected override registerRegex(): undefined { return undefined; }
+  protected override matchOperator(): Token|undefined {
+    return this.buffer.token(RE_CFG_OPERATOR) ? this.strTok('op') : undefined;
+  }
 
-  /** Handle the %o / %s tokens as well */
-  protected override tokenInternal(): Token {
-    if (this.buffer.token(RE_CFG_PERCENT)) {
+  protected override matchAddrSize(): undefined { return undefined; }
+  protected override isRegister(): boolean { return false; }
+
+  /**
+   * The two characters the assembler's dispatch has no branch for: `;`, which is a
+   * line terminator here rather than a comment, and `%`, which introduces the
+   * `%O`/`%S` filename placeholders rather than a binary literal.
+   */
+  protected override tokenOther(c: number): Token {
+    if (c === 0x3b /* ; */) {
+      const tok = this.matchOperator();
+      if (tok) return tok;
+    }
+    if (c === 0x25 /* % */ && this.buffer.token(RE_CFG_PERCENT)) {
       if (this.buffer.group() === '%S' && this.startAddr != null) {
         return {token: 'num', num: this.startAddr};
       }
       return this.strTok('str');
     }
-    return super.tokenInternal();
+    return super.tokenOther(c);
   }
 
   /** A config is tokenized in one pass, so there is no line to resync to. */

@@ -29,17 +29,36 @@ const RE_AT_IDENT = /@+[a-z0-9_]*/iy;
 const RE_IDENT = /[a-z_][a-z0-9_]*/iy;
 // Allow _ in here for user defined directives
 const RE_CS = /\.[a-z_][a-z0-9_]*/iy;
-const RE_ADDR_SIZE = /[azf]:(?!:)/iy;
-/** Non-sticky as it tests a whole identifier, not a slice of the buffer. */
-const RE_REGISTER = /^[axy]$/i;
 const RE_LOCAL_LABEL = /:([+-]\d+|[-+]+|<+rts|>*rts)/y;
-const RE_NUMBER = /[$%]?[0-9a-z_]+/iy;
 const RE_OPERATOR = /(::|:=|:|\++|-+|&&?|\|\|?|[#*/,=~!^]|<[<>=]?|>[>=]?)/y;
 const RE_STRING_START = /["']/y;
 const RE_UNICODE_ESC = /\\u([0-9a-f]{4})/iy;
 const RE_HEX_ESC = /\\x([0-9a-f]{2})/iy;
 const RE_CHAR_ESC = /\\(.)/y;
 const RE_ANY = /./y;
+
+/** Anything a numeric literal can be written with, used to spot a bad digit. */
+function isNumberChar(c: number): boolean {
+  return c >= 0x30 /* 0 */ && c <= 0x39 /* 9 */ ||
+      c >= 0x61 /* a */ && c <= 0x7a /* z */ ||
+      c >= 0x41 /* A */ && c <= 0x5a /* Z */ ||
+      c === 0x5f /* _ */;
+}
+
+function isDecDigit(c: number): boolean {
+  return c >= 0x30 /* 0 */ && c <= 0x39 /* 9 */;
+}
+
+/** Hex is written in either case, `$ff` and `$FF`. */
+function isHexDigit(c: number): boolean {
+  if (c >= 0x30 /* 0 */ && c <= 0x39 /* 9 */) return true;
+  c |= 0x20; // ASCII lowercase
+  return c >= 0x61 /* a */ && c <= 0x66 /* f */;
+}
+
+function isBinDigit(c: number): boolean {
+  return c === 0x30 /* 0 */ || c === 0x31 /* 1 */;
+}
 
 export class Tokenizer implements Tokens.Source {
   readonly buffer: Buffer;
@@ -146,15 +165,27 @@ export class Tokenizer implements Tokens.Source {
    * what gets ignored is different between the two.
    */
   protected skipIgnored(): void {
+    const buf = this.buffer;
     for (;;) {
-      if (this.buffer.space()) continue;
-      if (this.buffer.token(RE_COMMENT)) {
-        this.opts.lintPragmas?.record(this.file, this.buffer.match()!);
-        continue;
+      // Nothing is skippable unless it starts with one of these, and most tokens
+      // don't, so dispatch on the character instead of trying each pattern.
+      switch (buf.content.charCodeAt(buf.pos)) {
+        case 0x20 /* space */: case 0x09 /* tab */:
+          buf.space();
+          continue;
+        case 0x3b /* ; */:
+          buf.token(RE_COMMENT);
+          this.opts.lintPragmas?.record(this.file, buf.match()!);
+          continue;
+        case 0x5c /* \ */:
+          if (this.opts.lineContinuations && buf.token(RE_LINE_CONT)) continue;
+          return;
+        case 0x2f /* / */:
+          if (this.opts.cComments && this.blockComment()) continue;
+          return;
+        default:
+          return;
       }
-      if (this.opts.lineContinuations && this.buffer.token(RE_LINE_CONT)) continue;
-      if (this.opts.cComments && this.blockComment()) continue;
-      return;
     }
   }
 
@@ -173,12 +204,101 @@ export class Tokenizer implements Tokens.Source {
     return true;
   }
 
-  /** `%` is a binary literal prefix in ca65, but used for special `%O` and `%S` flags in linkercfg. */
-  protected numberRegex(): RegExp { return RE_NUMBER; }
+  /** Handle hex/bin/dec prefixed numeric types and separators while we are at it.
+   * needs to be overridable for linker configs where theres no binary `%`
+   */
+  protected matchNumber(): Token|undefined {
+    const s = this.buffer.content;
+    const start = this.buffer.pos;
+    const sep = this.opts.numberSeparators;
+    let p = start;
+    let digits = 0;
+    switch (s.charCodeAt(p)) {
+      case 0x24 /* $ */: {
+        for (p++;; p++) {
+          const c = s.charCodeAt(p);
+          if (isHexDigit(c)) digits++;
+          else if (!(sep && c === 0x5f /* _ */)) break;
+        }
+        if (p === start + 1 && !isNumberChar(s.charCodeAt(p))) return undefined;
+        const text = this.numDigits(start, start + 1, p, digits, 'hex');
+        return {token: 'num', num: +('0x' + text), width: Math.ceil(digits / 2), radix: 16};
+      }
+      case 0x25 /* % */: {
+        for (p++;; p++) {
+          const c = s.charCodeAt(p);
+          if (isBinDigit(c)) digits++;
+          else if (!(sep && c === 0x5f /* _ */)) break;
+        }
+        if (p === start + 1 && !isNumberChar(s.charCodeAt(p))) return undefined;
+        const text = this.numDigits(start, start + 1, p, digits, 'binary');
+        return {token: 'num', num: +('0b' + text), width: Math.ceil(digits / 8), radix: 2};
+      }
+      default: {
+        for (;; p++) {
+          const c = s.charCodeAt(p);
+          if (isDecDigit(c)) digits++;
+          else if (!(sep && c === 0x5f /* _ */)) break;
+        }
+        const text = this.numDigits(start, start, p, digits, 'decimal');
+        return {token: 'num', num: +text, radix: 10};
+      }
+    }
+  }
 
-  protected operatorRegex(): RegExp { return RE_OPERATOR; }
-  protected addressSizeRegex(): RegExp|undefined { return RE_ADDR_SIZE; }
-  protected registerRegex(): RegExp|undefined { return RE_REGISTER; }
+  /**
+   * Creates the actual substring that was holding the number and preps it for
+   * converting into an actual value by replacing separators and so on.
+   */
+  private numDigits(start: number, digitsAt: number, end: number, count: number,
+                    name: string): string {
+    const buf = this.buffer;
+    const s = buf.content;
+    if (count && !isNumberChar(s.charCodeAt(end))) {
+      const str = s.substring(start, end);
+      buf.punct(str);
+      const text = digitsAt === start ? str : s.substring(digitsAt, end);
+      return count === end - digitsAt ? text : text.replaceAll('_', '');
+    }
+    // Take the rest of the run as well, so the error quotes the whole of what
+    // was written where a number belonged.
+    let p = end;
+    while (isNumberChar(s.charCodeAt(p))) p++;
+    const str = s.substring(start, p);
+    buf.punct(str);
+    // The message quotes the literal as it was read, minus any separators.
+    throw new Error(
+        `Bad ${name} number: ${this.opts.numberSeparators ? str.replaceAll('_', '') : str}`);
+  }
+
+  protected matchOperator(): Token|undefined {
+    return this.buffer.token(RE_OPERATOR) ? this.strTok('op') : undefined;
+  }
+
+  protected matchAddrSize(c: number): Token|undefined {
+    // we already know it starts with a/z/f we just want to know if its a:: for a scope
+    const buf = this.buffer;
+    if (buf.content.charCodeAt(buf.pos + 1) !== 0x3a /* : */) return undefined;
+    if (buf.content.charCodeAt(buf.pos + 2) === 0x3a /* : */) return undefined;
+    const str = c === 0x61 /* a */ || c === 0x41 /* A */ ? 'a:' :
+        c === 0x7a /* z */ || c === 0x5a /* Z */ ? 'z:' : 'f:';
+    buf.punct(str);
+    return {token: 'op', str};
+  }
+
+  /** `a`, `x` and `y` name registers, in either case. */
+  protected isRegister(c: number): boolean {
+    c |= 0x20; // ASCII lowercase
+    return c === 0x61 /* a */ || c === 0x78 /* x */ || c === 0x79 /* y */;
+  }
+
+  // Base case when a token "matched" something but failed to get processed.
+  // In the base class we error out, but linkercfg can use this to handle %o
+  protected tokenOther(_c: number): Token {
+    // Get the raw text so the error says what it choked on.
+    const ch = this.buffer.content[this.buffer.pos];
+    throw new Error(`Syntax error${ch ? `: unexpected '${ch}'` : ''}`);
+  }
 
   protected token(): Token {
     // skip whitespace
@@ -214,35 +334,83 @@ export class Tokenizer implements Tokens.Source {
     }
   }
 
+  /** Checks the first character of each token to determine how to process it. */
   protected tokenInternal(): Token {
-    if (this.buffer.newline()) return {token: 'eol'};
-    const addrSize = this.addressSizeRegex();
-    if (addrSize && this.buffer.token(addrSize)) {
-      return {token: 'op', str: this.buffer.group()!.toLowerCase()};
+    const buf = this.buffer;
+    const c = buf.content.charCodeAt(buf.pos);
+    if (c >= 0x61 /* a */ && c <= 0x7a /* z */ ||
+        c >= 0x41 /* A */ && c <= 0x5a /* Z */ ||
+        c === 0x5f /* _ */) {
+      return this.tokenIdent(c);
     }
-    if (this.buffer.token(RE_AT_IDENT) ||
-        this.buffer.token(RE_IDENT)) {
-      const tok = this.strTok('ident') as Tokens.StringToken;
-      // normalize the case for A/X/Y registers as they can be mixed Upper and lower case.
-      if (this.registerRegex()?.test(tok.str)) tok.str = tok.str.toLowerCase();
-      return tok;
+    if (c >= 0x30 /* 0 */ && c <= 0x39 /* 9 */ ||
+        c === 0x24 /* $ */ || c === 0x25 /* % */) {
+      return this.matchNumber() ?? this.tokenOther(c);
     }
-    if (this.buffer.token(RE_CS)) return this.csTok();
-    if (this.buffer.token(RE_LOCAL_LABEL)) return this.strTok('ident');
-    if (this.buffer.token(this.operatorRegex())) {
-      return this.strTok('op');
+    switch (c) {
+      case 0x0a /* \n */:
+      case 0x0d /* \r */:
+        buf.newline();
+        return {token: 'eol'};
+      case 0x40 /* @ */:
+        // An `@` ident can never be a register, so there is no case to normalize.
+        buf.token(RE_AT_IDENT);
+        return this.strTok('ident');
+      case 0x2e /* . */:
+        // A `.` that starts no directive is a stray, as in `.2`.
+        if (buf.token(RE_CS)) return this.csTok();
+        return this.tokenOther(c);
+      case 0x22 /* " */: case 0x27 /* ' */:
+        buf.token(RE_STRING_START);
+        return this.tokenizeStr();
+      case 0x5b /* [ */: buf.punct('['); return {token: 'lb'};
+      case 0x7b /* { */: buf.punct('{'); return {token: 'lc'};
+      case 0x28 /* ( */: buf.punct('('); return {token: 'lp'};
+      case 0x5d /* ] */: buf.punct(']'); return {token: 'rb'};
+      case 0x7d /* } */: buf.punct('}'); return {token: 'rc'};
+      case 0x29 /* ) */: buf.punct(')'); return {token: 'rp'};
+      case 0x5c /* \ */:
+        // `skipIgnored` takes a backslash that continues a line, and only with the
+        // feature on, so whatever reaches here is a stray one.
+        throw new Error(this.opts.lineContinuations ?
+            `Expected a line break after '\\'` :
+            `Unexpected '\\'; line_continuations is off`);
+      case 0x3a /* : */:
+        // A local label (`:+`, `:-`, `:rts`) outranks the `:` operator.
+        if (buf.token(RE_LOCAL_LABEL)) return this.strTok('ident');
+        // fall through to check for `:=` `::` etc
+      case 0x2b /* + */:
+      case 0x2d /* - */:
+      case 0x26 /* & */:
+      case 0x7c /* | */:
+      case 0x23 /* # */:
+      case 0x2a /* * */:
+      case 0x2f /* / */:
+      case 0x2c /* , */:
+      case 0x3d /* = */:
+      case 0x7e /* ~ */:
+      case 0x21 /* ! */:
+      case 0x5e /* ^ */:
+      case 0x3c /* < */:
+      case 0x3e /* > */:
+        return this.matchOperator() ?? this.tokenOther(c);
     }
-    if (this.buffer.tokenStr('[')) return {token: 'lb'};
-    if (this.buffer.tokenStr('{')) return {token: 'lc'};
-    if (this.buffer.tokenStr('(')) return {token: 'lp'};
-    if (this.buffer.tokenStr(']')) return {token: 'rb'};
-    if (this.buffer.tokenStr('}')) return {token: 'rc'};
-    if (this.buffer.tokenStr(')')) return {token: 'rp'};
-    if (this.buffer.token(RE_STRING_START)) return this.tokenizeStr();
-    if (this.buffer.token(this.numberRegex())) return this.tokenizeNum();
-    // Couldn't find any relevant type of token, so get the raw text as the error
-    const ch = this.buffer.content[this.buffer.pos];
-    throw new Error(`Syntax error${ch ? `: unexpected '${ch}'` : ''}`);
+    return this.tokenOther(c);
+  }
+
+  private tokenIdent(c: number): Token {
+    // Check first for addrSize since that takes priority over labels
+    if (c === 0x61 /* a */ || c === 0x7a /* z */ || c === 0x66 /* f */ ||
+        c === 0x41 /* A */ || c === 0x5a /* Z */ || c === 0x46 /* F */) {
+      const addrSize = this.matchAddrSize(c);
+      if (addrSize) return addrSize;
+    }
+    this.buffer.token(RE_IDENT);
+    const tok = this.strTok('ident') as Tokens.StringToken;
+    if (tok.str.length === 1 && this.isRegister(c)) {
+      tok.str = tok.str.toLowerCase();
+    }
+    return tok;
   }
 
   private tokenizeStr(): Token {
@@ -307,27 +475,5 @@ export class Tokenizer implements Tokens.Source {
     };
   }
 
-  protected tokenizeNum(str: string = this.buffer.group()!): Token {
-    if (this.opts.numberSeparators) str = str.replace(/_/g, '');
-    if (str[0] === '$') return parseHex(str.substring(1));
-    if (str[0] === '%') return parseBin(str.substring(1));
-    return parseDec(str);
-  }
 }
-
-function parseHex(str: string): Token {
-  if (!/^[0-9a-f]+$/i.test(str)) throw new Error(`Bad hex number: $${str}`);
-  return {token: 'num', num: Number.parseInt(str, 16), width: Math.ceil(str.length / 2), radix: 16};
-}
-
-function parseDec(str: string): Token {
-  if (!/^[0-9]+$/.test(str)) throw new Error(`Bad decimal number: ${str}`);
-  return {token: 'num', num: Number.parseInt(str, 10), radix: 10};
-}
-
-function parseBin(str: string): Token {
-  if (!/^[01]+$/.test(str)) throw new Error(`Bad binary number: %${str}`);
-  return {token: 'num', num: Number.parseInt(str, 2), width: Math.ceil(str.length / 8), radix: 2};
-}
-
 
