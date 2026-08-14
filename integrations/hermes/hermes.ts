@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-// Compiler frontend for the Static Hermes (shermes) native build. Mirrors
-// integrations/bun.ts / integrations/quickjs.ts, but Hermes exposes no fs,
-// argv, stdin or stdout to JS, so all host I/O goes through the __js65_*
-// functions installed on globalThis by the C++ host (integrations/hermes/hermes_host.cpp).
-// A UTF-8 TextEncoder/TextDecoder polyfill is provided since Hermes ships none.
+// Compiler frontend for the Static Hermes (shermes) native build.
 
 import { Cli } from '../../src/driver/cli.ts';
 import { compileRequest } from '../../src/libassembler.ts';
