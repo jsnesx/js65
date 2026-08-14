@@ -5,7 +5,6 @@ obj/
 quickjs*/
 build/
 # Static Hermes checkout the toolchain build clones into the workspace root.
-# Anchored so integrations/hermes/ stays tracked.
 /hermes/
 .idea/
 .vs/

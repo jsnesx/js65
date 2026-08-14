@@ -23,8 +23,6 @@ It is recommended to rename whichever file you choose to `js65` to use.
 > `bun` (preferred) - Largest file size, fastest execution speed.
 >
 > `hermes` - Small file size, medium-fast execution speed.
->
-> `quickjs` - Not available for download anymore because its too dang slow.
 
 ## Build and run
 
