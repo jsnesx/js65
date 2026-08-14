@@ -8,9 +8,9 @@
   "exports": {
     ".": {
       "types": "./dist/src/libassembler.d.ts",
-      "bun": "./dist/src/entry-bun.js",
-      "node": "./dist/src/entry-node.js",
-      "default": "./dist/src/entry-pako.js"
+      "bun": "./dist/src/driver/entry-bun.js",
+      "node": "./dist/src/driver/entry-node.js",
+      "default": "./dist/src/driver/entry-pako.js"
     },
     "./cli": {
       "types": "./dist/src/driver/cli.d.ts",
@@ -40,7 +40,7 @@
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
     "node": "bun build --target=node --format=esm --outfile build/js65-node.mjs integrations/node.ts",
-    "lib": "bun build --entrypoints ./src/entry-pako.ts --outfile ./build/libassembler.js",
+    "lib": "bun build --entrypoints ./src/driver/entry-pako.ts --outfile ./build/libassembler.js",
     "lsp": "bun build lsp/server/bin.ts --target=node --format=cjs --outfile build/js65-lsp.cjs",
     "test": "bun test --only-failures ./test && bun run test:lsp",
     "test:lsp": "bun run lsp && bun test --only-failures ./lsp/server/test",
