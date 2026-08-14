@@ -447,7 +447,7 @@ describe('js65 build', function() {
     const lines: string[] = [];
     let exitCode = 0;
     const log = console.log;
-    console.log = (...parts: unknown[]) => { lines.push(parts.join(' ')); };
+    console.log = (...parts: unknown[]) => { lines.push(...parts.join(' ').split('\n')); };
     try {
       await new Cli({...callbacks, exit: code => { exitCode = code; }}).run(args);
     } finally {

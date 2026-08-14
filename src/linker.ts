@@ -34,7 +34,6 @@ export interface MesenLabelFormat {
   comment: string,
 }
 
-const RE_IS_COMMENT = /^\s*(;|.*:\s*$)/;
 const RE_COLON = /:/g;
 const RE_INLINE_COMMENT = /;(.*)$/;
 const RE_LABEL_ONLY_LINE = /^\s*.*:\s*$/;
@@ -124,19 +123,16 @@ export class Linker {
     this._link.watches.push(...offset);
   }
 
-  private static getComment(sourceLines?: string[], line: number = 0, debugLevel: number = 1, sourceInfo?: SourceInfo) {
+  private static getComment(sourceLines: string[], firstLine: number,
+                            line: number, debugLevel: number) {
     let comment = "";
 
-    if (sourceLines && line >= 0) {
+    {
       const actualLine = line;
-      let firstLine = actualLine;
 
       if (debugLevel === 0) {
         // Level 0: Only include comments, skip source code and labels
-        // Walk backwards while we see comment lines (;) or label definitions (ending with :)
-        do { firstLine--; } while (firstLine >= 0 && RE_IS_COMMENT.test(sourceLines[firstLine]));
-
-        const lines = sourceLines.slice(firstLine + 1, actualLine + 1);
+        const lines = sourceLines.slice(firstLine, actualLine + 1);
         const result: string[] = [];
 
         for (const l of lines) {
@@ -167,20 +163,12 @@ export class Linker {
         comment = result.join('\\n');
       } else {
         // Level 1+: Include comments and code, but not labels
-        // Walk backwards while we see comment lines (;) or label definitions (ending with :)
-        do { firstLine--; } while (firstLine >= 0 && RE_LABEL_OR_COMMENT_LINE.test(sourceLines[firstLine]));
         // Filter out label-only lines and remove colons from remaining lines
-        comment = sourceLines.slice(firstLine + 1, actualLine + 1)
+        comment = sourceLines.slice(firstLine, actualLine + 1)
           .filter((s) => !RE_LABEL_ONLY_LINE.test(s))
           .map((s) => s.trim().replace(RE_COLON, ''))
           .join('\\n');
       }
-    }
-
-    // Level 2: Append source file location
-    if (debugLevel >= 2 && sourceInfo) {
-      const suffix = ` in file ${sourceInfo.file}:${sourceInfo.line}`;
-      comment = comment ? comment + suffix : suffix.trim();
     }
 
     return comment;
@@ -239,6 +227,50 @@ export class Linker {
       const lines = sources.data.get(file)?.split('\n');
       sourceLinesCache.set(file, lines);
       return lines;
+    };
+
+    // Build up a list of comments before a line as we iterate through the
+    // file so we can attach the full comment to a line of code that is written
+    // above the line in the source code.
+    const windowStartCache = new Map<string, Int32Array>();
+    const windowStarts = (file: string, lines: string[]): Int32Array => {
+      let starts = windowStartCache.get(file);
+      if (!starts) {
+        starts = new Int32Array(lines.length + 1);
+        for (let i = 1; i <= lines.length; i++) {
+          starts[i] = RE_LABEL_OR_COMMENT_LINE.test(lines[i - 1]) ? starts[i - 1] : i;
+        }
+        windowStartCache.set(file, starts);
+      }
+      return starts;
+    };
+
+    const commentCache = new Map<string, Map<number, string>>();
+    let cachedFile: string|undefined;
+    let cachedComments: Map<number, string>|undefined;
+    const commentFor = (source: SourceInfo, line: number): string => {
+      if (source.file !== cachedFile) {
+        cachedFile = source.file;
+        cachedComments = commentCache.get(cachedFile);
+        if (!cachedComments) {
+          commentCache.set(cachedFile, cachedComments = new Map());
+        }
+      }
+      let comment = cachedComments!.get(line);
+      if (comment === undefined) {
+        const lines = getSourceLines(source.file);
+        const start = !lines || line < 0 ? -1 :
+            line <= lines.length ? windowStarts(source.file, lines)[line] : line;
+        comment = start < 0 ? "" :
+            Linker.getComment(lines!, start, line, debugLevel);
+        cachedComments!.set(line, comment);
+      }
+      // Level 2: Append source file location
+      if (debugLevel >= 2) {
+        const suffix = ` in file ${source.file}:${source.line}`;
+        comment = comment ? comment + suffix : suffix.trim();
+      }
+      return comment;
     };
 
     let data = "";
@@ -347,9 +379,7 @@ export class Linker {
       // Generate comment from source info if available
       let comment = "";
       if (s.expr.source) {
-        const {file, line} = s.expr.source;
-        const sourceLines = getSourceLines(file);
-        comment = Linker.getComment(sourceLines, line, debugLevel, s.expr.source);
+        comment = commentFor(s.expr.source, s.expr.source.line);
       }
       const isAnonTemp = isAnonTempLabel(s.expr.sym!);
       addLabel({
@@ -399,11 +429,7 @@ export class Linker {
         // Get source info from sourceMap if available
         let comment = "";
         const srcInfo = c.sourceMap?.get(offsetInChunk);
-        if (srcInfo) {
-          const {file, line} = srcInfo;
-          const sourceLines = getSourceLines(file);
-          comment = Linker.getComment(sourceLines, line - 1, debugLevel, srcInfo);
-        }
+        if (srcInfo) comment = commentFor(srcInfo, srcInfo.line - 1);
 
         // Labels from chunk labelIndex are real labels, not anonymous/temp
         addLabel({
@@ -436,10 +462,7 @@ export class Linker {
       const flushRange = () => {
         if (rangeStart < 0 || !rangeSrcInfo) return;
 
-        let {file, line} = rangeSrcInfo;
-        line--;
-        const sourceLines = getSourceLines(file);
-        const comment = Linker.getComment(sourceLines, line, debugLevel, rangeSrcInfo);
+        const comment = commentFor(rangeSrcInfo, rangeSrcInfo.line - 1);
 
         // In debug level 0, skip entries with no comment and no label
         const n = !seenLabels.has(rangeName!) ? rangeName! : "";
