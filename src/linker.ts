@@ -7,7 +7,7 @@ import { type ErrorCollector, FatalError, RecoverableError } from './error.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import { type CfgSymbols, type LinkerConfig, configSymbols, linkerDefines, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
-import { type Chunk, type Module, type OverwriteMode, Segment, type Substitution, type Symbol } from './module.ts';
+import { type Chunk, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
@@ -654,6 +654,23 @@ export class FreeSpace extends IntervalSet {
   }
 
   /**
+   * Similar to best fit, but we only care about getting the first available free space
+   * that fits this data.
+   */
+  firstFit(s0: number, s1: number, size: number, align: number, delta: number): number|undefined {
+    for (const [f0, f1] of this.tail(s0)) {
+      // Hit the end of the segment
+      if (f0 >= s1) return undefined;
+      const intervalEnd = Math.min(f1, s1);
+      const start = alignUp(f0 - delta, align) + delta;
+      if (start + size > intervalEnd) continue;
+      return start;
+    }
+    // Definitely doesn't fit!
+    return undefined;
+  }
+
+  /**
    * Aligns and find the smallest free segment that fits the chunk
    * Check three different interval types to find the "best" match:
    * - the interval that contains the start address
@@ -781,6 +798,8 @@ class LinkChunk {
   readonly align: number|undefined;
   segments: readonly string[];
   asserts: Expr[];
+  placement: PlacementMode;
+  isMirrored: boolean = false;
 
   subs = new Set<Substitution>();
   selfSubs = new Set<Substitution>();
@@ -809,18 +828,20 @@ class LinkChunk {
   private _org?: number;
   private _offset?: number;
   private _segment?: LinkSegment;
+  private _mirrorOffsets: Array<[LinkSegment, number]> = [];
 
   private readonly _overwrite: OverwriteMode;
 
   constructor(readonly linker: Link,
               readonly index: number,
               chunk: Chunk,
-              chunkOffset: number,
-              symbolOffset: number) {
+              readonly chunkOffset: number,
+              readonly symbolOffset: number) {
     this.name = chunk.name;
     this.size = chunk.data.length;
     this.align = chunk.align;
     this.segments = chunk.segments;
+    this.placement = chunk.placement ?? 'declarationOrder';
     this.labelIndex = chunk.labelIndex && new Map(chunk.labelIndex);
     this.sourceMap = chunk.sourceMap && new Map(chunk.sourceMap);
     this._data = chunk.data;
@@ -838,17 +859,70 @@ class LinkChunk {
   get segment() { return this._segment; }
   get data() { return this._data ?? impossible('no data'); }
 
+  /**
+   * Every (segment, offset) this chunk's bytes live at.
+   * Regular chunks have one spot but a mirror has one per
+   * segment in the list, all sharing the same `org`.
+   */
+  placements(): Array<[LinkSegment, number]> {
+    if (this._segment == null || this._offset == null) return [];
+    return [[this._segment, this._offset], ...this._mirrorOffsets];
+  }
+
   at(): {source?: SourceInfo}|undefined {
     const source = this.sourceMap?.get(0);
     return source && {source};
   }
 
-  initialPlacement() {
+  /** The segments a mirror chunk replicates into, in declaration order. */
+  private mirrorSegments(): LinkSegment[] {
+    return this.segments.map(name => {
+      const s = this.linker.segments.get(name);
+      if (!s) this.linker.fail(`Unknown segment: ${name}`, this.at());
+      return s;
+    });
+  }
+
+  resolveMirrorOrg() {
+    if (this.placement !== 'all') return;
+    this.isMirrored = true;
+    // `.org` mirrors are already fixed
+    if (this._org != null) return;
+
+    const linkSegs = this.mirrorSegments();
+    const size = this.size;
+    const align = this.align ?? 1;
+
+    let org = Math.max(...linkSegs.map(s => s.memory + s.used));
+    let settled;
+    do {
+      settled = org;
+      for (const s of linkSegs) {
+        const base = s.isRam ? s.memory + s.delta : s.offset;
+        // Search from the candidate org onwards, in this segment's own space.
+        const s0 = Math.max(base + s.used, org + s.delta);
+        const s1 = base + s.size;
+        const start = this.linker.free.firstFit(s0, s1, size, align, s.delta)
+          ?? this.linker.fail(`Cannot place chunk ${this.name} mirrored across ${
+              this.segments.join(' & ')}. Couldn't find a common free space ${
+              ''}in all provided banks.`, this.at());
+        // Back into org space, max to make sure we never move backwards.
+        org = Math.max(org, start - s.delta);
+      }
+    } while (settled !== org);
+    this._org = org;
+  }
+
+  fixedPlacements() {
     // Invariant: exactly one of (data) or (org, _offset, _segment) is present.
     // If (org, ...) filled in then we use linker.data instead.
     // We don't call this in the ctor because it depends on all the segments
     // being loaded, but it's the first thing we do in link().
-    if (this._org == null) return;
+
+    // This is called twice at the start, once for the user placed `.org` segments
+    // and then once again after we've settled an `.org` for the mirrored chunks
+    if (this._org == null || !this._data) return;
+    if (this.placement === 'all') return this.mirrorPlacement();
     const eligibleSegments: LinkSegment[] = [];
     for (const name of this.segments) {
       const s = this.linker.segments.get(name);
@@ -884,11 +958,44 @@ class LinkChunk {
     this.place(this._org, segment, this._overwrite);
   }
 
+  private mirrorPlacement() {
+    const segments = this.mirrorSegments();
+    const org = this._org!;
+    const bad = segments.filter(
+        s => org < s.memory || org + this.size > s.memory + s.size);
+    if (bad.length) {
+      this.linker.fail(`Chunk ($${this.size.toString(16)} bytes at $${
+          org.toString(16)}) mirrored across ${
+          this.segments.join(' & ')} does not fit in ${
+          bad.map(s => segmentLabel(s)).join(', ')}`, this.at());
+    }
+    this.place(org, segments[0], this._overwrite, segments.slice(1));
+  }
+
   // NOTE: overwrite is only passed for direct placements!
-  place(org: number, segment: LinkSegment, overwrite?: OverwriteMode) {
+  place(org: number, segment: LinkSegment, overwrite?: OverwriteMode,
+        mirrors: readonly LinkSegment[] = []) {
     this._org = org;
     this._segment = segment;
-    const offset = this._offset = org + segment.delta;
+    this._offset = org + segment.delta;
+    this._mirrorOffsets = mirrors.map(s => [s, org + s.delta]);
+
+    const data = this._data ?? impossible(`No data`);
+    this._data = undefined;
+    // placements returns a list of segments + mirrors to write to
+    for (const [seg, offset] of this.placements()) {
+      this.writeSegment(org, seg, offset, data, overwrite);
+    }
+
+    // Retry the follow-ons
+    for (const [sub, chunk] of this.follow) {
+      chunk.resolveSub(sub, false);
+    }
+  }
+
+  /** The per-segment half of `place`: bytes, free space and overwrite checks. */
+  private writeSegment(org: number, segment: LinkSegment, offset: number,
+                       data: Uint8Array, overwrite?: OverwriteMode) {
     for (const w of this.linker.watches) {
       if (w >= offset && w < offset + this.size)
         fail("Unable to place");
@@ -898,18 +1005,11 @@ class LinkChunk {
     // For RAM segments, skip data manipulation but still track free space
     if (segment.isRam) {
       this.linker.free.delete(offset, offset + this.size);
-      // Notify follow-ons
-      for (const [sub, chunk] of this.follow) {
-        chunk.resolveSub(sub, false);
-      }
-      this._data = undefined;
       return;
     }
 
     // Copy data, leaving out any holes
     const full = this.linker.data;
-    const data = this._data ?? impossible(`No data`);
-    this._data = undefined;
 
     if (this.subs.size) {
       full.splice(offset, data.length);
@@ -951,12 +1051,7 @@ class LinkChunk {
     }
     // Run this before resolving the follow up chunks so it properly reserves
     // the following space even if this chunk failed to place.
-    this.linker.free.delete(this.offset!, this.offset! + this.size);
-
-    // Retry the follow-ons
-    for (const [sub, chunk] of this.follow) {
-      chunk.resolveSub(sub, false);
-    }
+    this.linker.free.delete(offset, offset + this.size);
   }
 
   resolveSubs(initial = false) { //: Map<number, Substitution[]> {
@@ -1001,7 +1096,17 @@ class LinkChunk {
     sub.expr = Exprs.traverse(sub.expr, (e, rec, p) => {
       // First handle most common bank byte case, since it triggers on a
       // different type of resolution.
-      if (initial && p?.op === '^' && p.args!.length === 1 && e.meta) {
+      const bankOp = p?.op === '^' || p?.op === '.bankbyte';
+      if (initial && bankOp && p!.args!.length === 1 && e.meta) {
+        const target = e.meta.chunk != null ?
+            this.linker.chunks[e.meta.chunk] : undefined;
+        if (target?.isMirrored) {
+          // `p` is `^`/`.bank` and `e` is the operand for the label's source
+          this.linker.errorCollector?.add(
+              'warning', `.bank value is 0 for mirrored data`,
+              p!.source ?? e.source ?? sub.expr.source);
+          e.meta.bank = 0;
+        }
         if (e.meta.bank == null) {
           this.addDep(sub, e.meta.chunk!);
         }
@@ -1045,7 +1150,10 @@ class LinkChunk {
     if (this._data) {
       this._data.subarray(offset, offset + bytes.length).set(bytes);
     } else if (this._offset != null) {
-      this.linker.data.set(this._offset + offset, bytes);
+      // A mirror resolves its subs once but has to patch every copy.
+      for (const [, base] of this.placements()) {
+        this.linker.data.set(base + offset, bytes);
+      }
     } else {
       throw new Error(`Impossible`);
     }
@@ -1079,8 +1187,10 @@ function translateExpr(e: Expr, dc: number, ds: number): Expr {
   e = {...e};
   if (e.meta) e.meta = {...e.meta};
   if (e.args) e.args = e.args.map(a => translateExpr(a, dc, ds));
-  if (e.meta?.chunk != null) e.meta.chunk += dc;
-  if (e.op === 'sym' && e.num != null) e.num += ds;
+  if (e.meta?.chunk != null)
+    e.meta.chunk += dc;
+  if (e.op === 'sym' && e.num != null)
+    e.num += ds;
   return e;
 }
 function translateSymbol(s: Symbol, dc: number, ds: number): Symbol {
@@ -1169,7 +1279,8 @@ class Link {
       try {
         fn(item);
       } catch (err) {
-        if (err instanceof FatalError || !this.errorCollector) throw err;
+        if (err instanceof FatalError || !this.errorCollector)
+          throw err;
         if (err instanceof Tokens.SourceError) {
           if (!err.recorded) this.errorCollector.addFromException(err);
           onError?.(item);
@@ -1256,6 +1367,9 @@ class Link {
           offset: chunk.offset,
           bank: chunk.segment?.bank,
         };
+        if (chunk.isMirrored) {
+          meta2.bank = 0;
+        }
         expr = Exprs.evaluate({...expr, meta: {...meta, ...meta2}});
       }
     }
@@ -1347,8 +1461,13 @@ class Link {
         }
       }
     }
-    // Set up all the initial placements.
-    this.collect(this.chunks, chunk => chunk.initialPlacement());
+    // Set up all the initial placements of data that is at a specific org already.
+    this.collect(this.chunks, chunk => chunk.fixedPlacements());
+    // Then settle a shared org for the mirrored chunks, which needs the fixed
+    // data placed first so it only considers space that is really free.
+    this.collect(this.chunks, chunk => chunk.resolveMirrorOrg());
+    // and place all the mirrored chunks AFTER placing the regular fixed data
+    this.collect(this.chunks, chunk => chunk.fixedPlacements());
     if (DEBUG) {
       this.initialReport = `Initial:\n${this.report(true)}`;
     }
@@ -1396,7 +1515,7 @@ class Link {
     // still depends on a different segment can be resolved later.
     const candidates = new Map<string, LinkChunk[]>();
     for (const chunk of this.chunks) {
-      if (chunk.org != null) continue;  // already placed by initialPlacement
+      if (chunk.org != null) continue;  // already placed by fixedPlacement
       const [first] = this.eligibleSegments(chunk);
       if (first == null) continue;      // no segment at all: reported below
       let list = candidates.get(first);
@@ -1448,16 +1567,19 @@ class Link {
     this.stopIfFailed('the module did not link cleanly');
     for (const c of this.chunks) {
       if (c.overlaps) continue;
-      if (c.segment?.isRam) continue;  // RAM chunks not in output
       // At this point, all segments should have been validated, and if the offset
       // isn't known now this is a compiler bug that should be reported.
       if (c.offset == null) {
         impossible(`Chunk ${c.name ?? c.index} was never placed`);
       }
-      const base = this.fileBase(c.segment?.out || '%O');
-      this.output(c.segment?.out).set(
-          c.offset! - base,
-          this.data.slice(c.offset!, c.offset! + c.size!));
+      // A mirror wrote its bytes into every listed segment, each of which may
+      // be a different output file.
+      for (const [segment, offset] of c.placements()) {
+        if (segment.isRam) continue;  // RAM chunks not in output
+        const base = this.fileBase(segment.out || '%O');
+        this.output(segment.out).set(
+            offset - base, this.data.slice(offset, offset + c.size!));
+      }
     }
     if (DEBUG) console.log(this.report(true));
     return patch;
@@ -1960,7 +2082,7 @@ class Link {
     }
     // Check if the chunk can be deduped but placing it at a data segment that overlaps
     // Hueristic, don't search for duplicates for large chunk sizes.
-    if (align === 1 && size < 256 && !chunk.subs.size && !chunk.selfSubs.size) {
+    if (align === 1 && size < 256 && !chunk.subs.size && !chunk.selfSubs.size && !chunk.overlaps) {
       // chunk is resolved: search for an existing copy of it first
       const pattern = this.data.pattern(chunk.data);
       for (const name of segments) {
@@ -2131,7 +2253,14 @@ class Link {
       if (e.meta?.offset != null && e.meta.org != null) {
         out.offset = e.meta.offset + value - e.meta.org;
       }
-      if (e.meta?.bank != null) out.bank = e.meta.bank;
+      if (e.meta?.bank != null)
+        out.bank = e.meta.bank;
+      if (e.meta?.chunk != null && this.chunks[e.meta.chunk]?.isMirrored) {
+        this.errorCollector?.add(
+            'warning',
+            `.bank value is 0 for mirrored data`,
+            symbol.expr?.source);
+      }
       map.set(symbol.export, out);
     }
     return map;
