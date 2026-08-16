@@ -14,27 +14,27 @@ import * as util from '../src/util.ts';
 
 // Some directives (labels especially) are only observable after the preprocessor
 // has split the source into lines, so those cases assemble a source snippet.
-async function assemble(body: string): Promise<number[]> {
+function assemble(body: string): number[] {
   const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
-  const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+  const result = compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
   if (!result.success) throw new Error(JSON.stringify(result));
   return Array.from(result.outputs[0].data);
 }
 
 // Same as `assemble`, but for sources that are expected to fail.
 // Returns the recorded error messages rather than the output bytes.
-async function assembleErrors(body: string): Promise<string[]> {
+function assembleErrors(body: string): string[] {
   const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
-  const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+  const result = compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
   if (result.success) throw new Error('Expected the assembly to fail');
   return result.messages.filter(m => m.level === 'error').map(m => m.message);
 }
 
 // Same as `assemble`, but for sources that are expected to succeed while
 // reporting something. Returns the recorded warnings rather than the bytes.
-async function assembleWarnings(body: string): Promise<string[]> {
+function assembleWarnings(body: string): string[] {
   const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n${body}`;
-  const result = await compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+  const result = compile([{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
   if (!result.success) throw new Error(JSON.stringify(result.messages));
   return result.messages.filter(m => m.level === 'warning').map(m => m.message);
 }
@@ -42,8 +42,8 @@ async function assembleWarnings(body: string): Promise<string[]> {
 // Assembles a snippet through the full tokenizer/preprocessor pipeline and returns
 // the module without linking it. Allows us to test for aliases as those are handled
 // at the tokenizer level.
-async function assembleModule(body: string): Promise<Module> {
-  const result = await libAssemble([{type: 'source', code: body, name: 'test.s'} as AssemblyInput],
+function assembleModule(body: string): Module {
+  const result = libAssemble([{type: 'source', code: body, name: 'test.s'} as AssemblyInput],
                                    {generateDebugInfo: false});
   if (!result.success) throw new Error(JSON.stringify(result.messages));
   return result.modules[0];
@@ -71,9 +71,9 @@ const [_b] = [str, COMMA, LP, RP, ORG, RELOC, ASSERT, SEGMENT];
 describe('Assembler', function() {
 
   describe('Simple instructions', function() {
-    it('should handle `lda #$03`', async function() {
+    it('should handle `lda #$03`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), IMMEDIATE, num(3)]);
+      a.instruction([ident('lda'), IMMEDIATE, num(3)]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -85,9 +85,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `sta $02`', async function() {
+    it('should handle `sta $02`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('sta'), num(2)]);
+      a.instruction([ident('sta'), num(2)]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -99,9 +99,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `ldy $032f`', async function() {
+    it('should handle `ldy $032f`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('ldy'), num(0x32f)]);
+      a.instruction([ident('ldy'), num(0x32f)]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -113,9 +113,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `rts`', async function() {
+    it('should handle `rts`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('rts')]);
+      a.instruction([ident('rts')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -127,9 +127,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lda ($24),y`', async function() {
+    it('should handle `lda ($24),y`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), LP, num(0x24), RP, COMMA, ident('y')]);
+      a.instruction([ident('lda'), LP, num(0x24), RP, COMMA, ident('y')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -141,9 +141,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `sta ($20,x)`', async function() {
+    it('should handle `sta ($20,x)`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('sta'), LP, num(0x20), COMMA, ident('x'), RP]);
+      a.instruction([ident('sta'), LP, num(0x20), COMMA, ident('x'), RP]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -155,9 +155,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lsr`', async function() {
+    it('should handle `lsr`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -169,9 +169,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lsr a`', async function() {
+    it('should handle `lsr a`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lsr'), ident('A')]);
+      a.instruction([ident('lsr'), ident('A')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -183,9 +183,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `ora $480,x`', async function() {
+    it('should handle `ora $480,x`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('ora'), num(0x480), COMMA, ident('x')]);
+      a.instruction([ident('ora'), num(0x480), COMMA, ident('x')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -197,9 +197,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `ora ($ff,x)`', async function() {
+    it('should handle `ora ($ff,x)`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('ora'), LP, num(0xff), COMMA, ident('x'), RP]);
+      a.instruction([ident('ora'), LP, num(0xff), COMMA, ident('x'), RP]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -211,9 +211,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lda a:$80,x`', async function() {
+    it('should handle `lda a:$80,x`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), ident('a'), COLON, num(0x80), COMMA, ident('x')]);
+      a.instruction([ident('lda'), ident('a'), COLON, num(0x80), COMMA, ident('x')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -225,9 +225,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle `lda z:a:$80,x`', async function() {
+    it('should handle `lda z:a:$80,x`', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), ident('z'), COLON, ident('a'), COLON, num(0x80), COMMA, ident('x')]);
+      a.instruction([ident('lda'), ident('z'), COLON, ident('a'), COLON, num(0x80), COMMA, ident('x')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -239,10 +239,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should error for improper address mode `lda z:$8000,y`', async function() {
+    it('should error for improper address mode `lda z:$8000,y`', function() {
       const a = new Assembler(Cpu.P02);
       try {
-        await a.instruction([ident('lda'), ident('z'), COLON, num(0x8000), COMMA, ident('y')]);
+        a.instruction([ident('lda'), ident('z'), COLON, num(0x8000), COMMA, ident('y')]);
       } catch (err: any) {
         expect(err.message).toEqual("Bad address mode zpy for lda");
       }
@@ -250,10 +250,10 @@ describe('Assembler', function() {
   });
 
   describe('Symbols', function() {
-    it('should fill in an immediately-available value', async function() {
+    it('should fill in an immediately-available value', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', 0x23);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -265,10 +265,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should substitute a immediately-available single-byte value with a zp instruction', async function() {
+    it('should substitute a immediately-available single-byte value with a zp instruction', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', 0x23);
-      await a.instruction([ident('lda'), ident('val')]);
+      a.instruction([ident('lda'), ident('val')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -280,10 +280,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should fill in an immediately-available multi-byte value', async function() {
+    it('should fill in an immediately-available multi-byte value', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', 0x2345);
-      await a.instruction([ident('lda'), ident('val')]);
+      a.instruction([ident('lda'), ident('val')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -295,12 +295,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should fill in an immediately-available label', async function() {
+    it('should fill in an immediately-available label', function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x9135);
       a.label('foo');
-      await a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('foo')]);
-      await a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('foo')]);
+      a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('foo')]);
+      a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('foo')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -314,12 +314,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should make a separate chunk for separate .org directives', async function() {
+    it('should make a separate chunk for separate .org directives', function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x1234);
-      await a.instruction([ident('rts')]);
+      a.instruction([ident('rts')]);
       a.org(0x5678);
-      await a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
+      a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -337,12 +337,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should merge chunks when .org is redundant with PC', async function() {
+    it('should merge chunks when .org is redundant with PC', function() {
       const a = new Assembler(Cpu.P02);
       a.org(0x1234);
-      await a.instruction([ident('rts')]);
+      a.instruction([ident('rts')]);
       a.org(0x1235);
-      await a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
+      a.instruction([ident('ldy'), IMMEDIATE, num(0x12)]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -355,9 +355,9 @@ describe('Assembler', function() {
       });
     });
 
-    it('should substitute a forward referenced value', async function() {
+    it('should substitute a forward referenced value', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
       a.assign('val', 0x23);
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -372,9 +372,9 @@ describe('Assembler', function() {
     });
 
     // While this would be nice to have CA65 simply emits a warning and uses ABS addressing instead
-    // it('should substitute a forward referenced single-byte value with a zp instruction', async function() {
+    // it('should substitute a forward referenced single-byte value with a zp instruction', function() {
     //   const a = new Assembler(Cpu.P02);
-    //   await a.instruction([ident('lda'), ident('val')]);
+    //   a.instruction([ident('lda'), ident('val')]);
     //   a.assign('val', 0x23);
     //   expect(strip(a.module())).toEqual({
     //     chunks: [{
@@ -388,9 +388,9 @@ describe('Assembler', function() {
     //   });
     // });
 
-    it('should substitute a forward referenced multi-byte value', async function() {
+    it('should substitute a forward referenced multi-byte value', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), ident('val')]);
+      a.instruction([ident('lda'), ident('val')]);
       a.assign('val', 0x2345);
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -404,12 +404,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should substitute a forward referenced label', async function() {
+    it('should substitute a forward referenced label', function() {
       const a = new Assembler(Cpu.P02);
       a.directive([cs('.org'), num(0x8000)]);
-      await a.instruction([ident('jsr'), ident('foo')]);
+      a.instruction([ident('jsr'), ident('foo')]);
       expect(a.definedSymbol('foo')).toEqual(false);
-      await a.instruction([ident('lda'), IMMEDIATE, num(0)]);
+      a.instruction([ident('lda'), IMMEDIATE, num(0)]);
       a.label('foo');
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -426,12 +426,12 @@ describe('Assembler', function() {
       });
     });
 
-    it('should allow overwriting mutable symbols', async function() {
+    it('should allow overwriting mutable symbols', function() {
       const a = new Assembler(Cpu.P02);
       a.set('foo', 5);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
       a.set('foo', 6);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('foo')]);
 
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -458,11 +458,11 @@ describe('Assembler', function() {
       expect(() => a.label('foo')).toThrow(/Redefining symbol foo/);
     });
 
-    it('should substitute a formula', async function() {
+    it('should substitute a formula', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('val', {op: '+', args: [{op: 'num', num: 1},
                                        {op: 'sym', sym: 'x'}]});
-      await a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('val')]);
       a.assign('x', 2);
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -480,11 +480,11 @@ describe('Assembler', function() {
   });
 
   describe('Cheap locals', function() {
-    it('should handle backward refs', async function() {
+    it('should handle backward refs', function() {
       const a = new Assembler(Cpu.P02);
       a.label('@foo');
-      await a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('@foo')]);
-      await a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('@foo')]);
+      a.instruction([ident('ldx'), IMMEDIATE, op('<'), ident('@foo')]);
+      a.instruction([ident('ldy'), IMMEDIATE, op('>'), ident('@foo')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -503,10 +503,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should handle forward refs', async function() {
+    it('should handle forward refs', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('jsr'), ident('@foo')]);
-      await a.instruction([ident('lda'), IMMEDIATE, num(0)]);
+      a.instruction([ident('jsr'), ident('@foo')]);
+      a.instruction([ident('lda'), IMMEDIATE, num(0)]);
       a.label('@foo');
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -521,10 +521,10 @@ describe('Assembler', function() {
       });
     });
 
-    it('should allow using a cheap local name for a constant', async function() {
+    it('should allow using a cheap local name for a constant', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('@temp', 5);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -534,13 +534,13 @@ describe('Assembler', function() {
         symbols: [], segments: []});
     });
 
-    it('should clear cheap local constants on a non-cheap label', async function() {
+    it('should clear cheap local constants on a non-cheap label', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('@temp', 5);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
       a.label('bar');
       a.assign('@temp', 6);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -556,16 +556,16 @@ describe('Assembler', function() {
       expect(() => a.assign('@temp', 6)).toThrow(/Redefining symbol @temp/);
     });
 
-    it('should allow redefining a cheap local constant after a label changes', async function() {
+    it('should allow redefining a cheap local constant after a label changes', function() {
       const a = new Assembler(Cpu.P02);
       a.reloc();
       a.label('test1');
       a.assign('@temp', 5);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
       a.reloc();
       a.label('test2');
       a.assign('@temp', 6);
-      await a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
+      a.instruction([ident('lda'), IMMEDIATE, ident('@temp')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           name: "test1",
@@ -587,12 +587,12 @@ describe('Assembler', function() {
       expect(() => a.label('@foo')).toThrow(/Redefining symbol @foo/);
     });
 
-    it('should clear the scope on a non-cheap label', async function() {
+    it('should clear the scope on a non-cheap label', function() {
       const a = new Assembler(Cpu.P02);
       a.label('@foo');
-      await a.instruction([ident('jsr'), ident('@foo')]);
+      a.instruction([ident('jsr'), ident('@foo')]);
       a.label('bar');
-      await a.instruction([ident('jsr'), ident('@foo')]);
+      a.instruction([ident('jsr'), ident('@foo')]);
       a.label('@foo');
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -616,9 +616,9 @@ describe('Assembler', function() {
       expect(() => a.label('@foo')).toThrow(/Redefining symbol @foo/);
     });
 
-    it('should be an error if a cheap label is never defined', async function() {
+    it('should be an error if a cheap label is never defined', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('jsr'), ident('@foo')]);
+      a.instruction([ident('jsr'), ident('@foo')]);
       expect(() => a.label('bar'))
           .toThrow(/Cheap local label never defined: @foo/);
       a.module();
@@ -629,15 +629,15 @@ describe('Assembler', function() {
   });
 
   describe('Anonymous labels', function() {
-    it('should work for forward references', async function() {
+    it('should work for forward references', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('bne'), op(':'), op('++')]);
+      a.instruction([ident('bne'), op(':'), op('++')]);
       a.label(':');
-      await a.instruction([ident('bcc'), ident(':+3')]);
+      a.instruction([ident('bcc'), ident(':+3')]);
       a.label(':'); // first target
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       a.label(':');
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       a.label(':'); // second target
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -654,17 +654,17 @@ describe('Assembler', function() {
         segments: []});
     });
 
-    it('should work for backward references', async function() {
+    it('should work for backward references', function() {
       const a = new Assembler(Cpu.P02);
       a.label(':'); // first target
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       a.label(':');
-      await a.instruction([ident('lsr')]);
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       a.label(':'); // second target
-      await a.instruction([ident('bne'), op(':'), op('---')]);
+      a.instruction([ident('bne'), op(':'), op('---')]);
       a.label(':');
-      await a.instruction([ident('bcc'), ident(':-2')]);
+      a.instruction([ident('bcc'), ident(':-2')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -674,11 +674,11 @@ describe('Assembler', function() {
         symbols: [], segments: []});
     });
 
-    it('should allow one label for both forward directions', async function() {
+    it('should allow one label for both forward directions', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('bne'), op(':'), op('+')]);
+      a.instruction([ident('bne'), op(':'), op('+')]);
       a.label(':');
-      await a.instruction([ident('bcc'), ident(':-')]);
+      a.instruction([ident('bcc'), ident(':-')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -691,18 +691,18 @@ describe('Assembler', function() {
         segments: []});
     });
 
-    it('should handle rts references', async function() {
+    it('should handle rts references', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('rts')]);
-      await a.instruction([ident('bne'), ident(':<rts')]);
-      await a.instruction([ident('bne'), ident(':rts')]);
-      await a.instruction([ident('rts')]);
-      await a.instruction([ident('bne'), ident(':>>rts')]);
-      await a.instruction([ident('bne'), ident(':<<rts')]);
-      await a.instruction([ident('bne'), ident(':>>rts')]);
-      await a.instruction([ident('bne'), ident(':<<rts')]);
-      await a.instruction([ident('rts')]);
-      await a.instruction([ident('rts')]);
+      a.instruction([ident('rts')]);
+      a.instruction([ident('bne'), ident(':<rts')]);
+      a.instruction([ident('bne'), ident(':rts')]);
+      a.instruction([ident('rts')]);
+      a.instruction([ident('bne'), ident(':>>rts')]);
+      a.instruction([ident('bne'), ident(':<<rts')]);
+      a.instruction([ident('bne'), ident(':>>rts')]);
+      a.instruction([ident('bne'), ident(':<<rts')]);
+      a.instruction([ident('rts')]);
+      a.instruction([ident('rts')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -732,14 +732,14 @@ describe('Assembler', function() {
   });
 
   describe('Relative labels', function() {
-    it('should work for forward references', async function() {
+    it('should work for forward references', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('bne'), op('++')]);
+      a.instruction([ident('bne'), op('++')]);
       a.label('+');
-      await a.instruction([ident('bcc'), ident('+++')]);
+      a.instruction([ident('bcc'), ident('+++')]);
       a.label('++');
-      await a.instruction([ident('lsr')]);
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       a.label('+++');
       expect(strip(a.module())).toEqual({
         chunks: [{
@@ -756,15 +756,15 @@ describe('Assembler', function() {
         segments: []});
     });
 
-    it('should work for backward references', async function() {
+    it('should work for backward references', function() {
       const a = new Assembler(Cpu.P02);
       a.label('--'); // first target
-      await a.instruction([ident('lsr')]);
-      await a.instruction([ident('lsr')]);
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       a.label('-'); // second target
-      await a.instruction([ident('bne'), op('--')]);
-      await a.instruction([ident('bcc'), ident('-')]);
+      a.instruction([ident('bne'), op('--')]);
+      a.instruction([ident('bcc'), ident('-')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -1338,8 +1338,8 @@ describe('Assembler', function() {
         }]});
     });
 
-    it('should parse the ld65-compatible attributes', async function() {
-      const m = await assembleModule(`
+    it('should parse the ld65-compatible attributes', function() {
+      const m = assembleModule(`
 .segment "ROM" :mem $8000 :size $2000 :out "rom.bin" :fill $ff :define
 .segment "CODE" :load "ROM" :run "RAM" :align $100 :alignload $10 :optional
 .segment "VARS" :mem $300 :size $100 :bss :dedupe
@@ -1363,32 +1363,32 @@ describe('Assembler', function() {
       }]);
     });
 
-    it('should default :fill to zero', async function() {
-      const m = await assembleModule(`.segment "ROM" :mem $8000 :size $10 :fill\n`);
+    it('should default :fill to zero', function() {
+      const m = assembleModule(`.segment "ROM" :mem $8000 :size $10 :fill\n`);
       expect(m.segments).toEqual([{
         name: 'ROM', memory: 0x8000, size: 0x10, fill: 0,
         free: [[0x8000, 0x8010]],
       }]);
     });
 
-    it('should ignore ld65 read-only attributes', async function() {
-      const m = await assembleModule(`.segment "ROM" :mem $8000 :size $10 :ro\n`);
+    it('should ignore ld65 read-only attributes', function() {
+      const m = assembleModule(`.segment "ROM" :mem $8000 :size $10 :ro\n`);
       expect(m.segments).toEqual([{name: 'ROM', memory: 0x8000, size: 0x10}]);
     });
 
-    it('should reject a non-power-of-two alignment', async function() {
-      await expect(assembleModule(`.segment "CODE" :align 3\n`))
-          .rejects.toThrow(/align must be a power of two: 3/);
+    it('should reject a non-power-of-two alignment', function() {
+      expect(() => assembleModule(`.segment "CODE" :align 3\n`))
+          .toThrow(/align must be a power of two: 3/);
     });
 
-    it('should reject an unknown segment attribute', async function() {
-      await expect(assembleModule(`.segment "CODE" :overlay "ROM"\n`))
-          .rejects.toThrow(/Unknown segment attr: overlay/);
+    it('should reject an unknown segment attribute', function() {
+      expect(() => assembleModule(`.segment "CODE" :overlay "ROM"\n`))
+          .toThrow(/Unknown segment attr: overlay/);
     });
 
     it('should not carry .org into a segment that never had one',
-       async function() {
-      const m = await assembleModule(`
+       function() {
+      const m = assembleModule(`
 .segment "ZP" :mem $20 :size $10 :zp
 .segment "RAM" :mem $200 :size $600 :bss
 .org $400
@@ -1400,9 +1400,9 @@ bar: .byte 2
     });
 
     it('should size operands from the new segment after a segment change',
-       async function() {
+       function() {
       // `.org $400` in RAM must not make `bar` an absolute address in ZP.
-      const m = await assembleModule(`
+      const m = assembleModule(`
 .segment "ZP" :mem $20 :size $10 :zp
 .segment "RAM" :mem $200 :size $600 :bss
 .org $400
@@ -1417,8 +1417,8 @@ lda bar
     });
 
     it('should resume a segment\'s own .org on coming back to it',
-       async function() {
-      const m = await assembleModule(`
+       function() {
+      const m = assembleModule(`
 .segment "A" :mem $8000 :size $1000
 .org $8000
 .byte 1, 2, 3
@@ -1435,8 +1435,8 @@ lda bar
       ]);
     });
 
-    it('should resume an .org that opened no chunk', async function() {
-      const m = await assembleModule(`
+    it('should resume an .org that opened no chunk', function() {
+      const m = assembleModule(`
 .segment "A" :mem $8000 :size $1000
 .org $8000
 .segment "B" :mem $9000 :size $1000
@@ -1447,9 +1447,8 @@ lda bar
       expect(m.chunks!.map(c => c.org)).toEqual([undefined, 0x8000]);
     });
 
-    it('should not resume an .org that was ended with .reloc',
-       async function() {
-      const m = await assembleModule(`
+    it('should not resume an .org that was ended with .reloc', function() {
+      const m = assembleModule(`
 .segment "A" :mem $8000 :size $1000
 .org $8000
 .byte 1
@@ -1462,21 +1461,20 @@ lda bar
       expect(m.chunks!.map(c => c.org)).toEqual([0x8000, undefined, undefined]);
     });
 
-    it('should reject .free in a segment that never had an .org',
-       async function() {
-      await expect(assembleModule(`
+    it('should reject .free in a segment that never had an .org', function() {
+      expect(() => assembleModule(`
 .segment "A" :mem $8000 :size $1000
 .org $8000
 .segment "B" :mem $9000 :size $1000
 .free $100
-`)).rejects.toThrow(/\.free in \.reloc mode/);
+`)).toThrow(/\.free in \.reloc mode/);
     });
 
-    it('should allow setting a prefix', async function() {
+    it('should allow setting a prefix', function() {
       const a = new Assembler(Cpu.P02);
       a.segmentPrefix('cr:');
       a.directive([cs('.segment'), str('02')]);
-      await a.instruction([ident('lsr')]);
+      a.instruction([ident('lsr')]);
       expect(strip(a.module())).toEqual({
         chunks: [{
           overwrite: 'allow',
@@ -1488,12 +1486,86 @@ lda bar
     });
   });
 
+  describe('mirror .segment lists', function() {
+    it('should parse an &-separated segment list', function() {
+      const m = assembleModule(`
+.segment "A" & "B"
+.byte 1
+`);
+      expect(m.chunks!.length).toBe(1);
+      expect(m.chunks![0].segments).toEqual(['A', 'B']);
+      expect(m.chunks![0].placement).toBe('all');
+    });
+
+    it('should leave a comma list a pool, not a mirror', function() {
+      const m = assembleModule(`
+.segment "A", "B"
+.byte 1
+`);
+      expect(m.chunks![0].segments).toEqual(['A', 'B']);
+      expect(m.chunks![0].placement ?? 'any').toBe('any');
+    });
+
+    it('should carry a mirror list through .pushseg/.popseg', function() {
+      const m = assembleModule(`
+.segment "A" & "B"
+.byte 1
+.pushseg "C"
+.byte 2
+.popseg
+.byte 3
+.pushseg "A" & "C"
+.byte 4
+.popseg
+`);
+      expect(m.chunks!.map(c => [c.segments, c.placement ?? 'any', [...c.data]]))
+          .toEqual([
+            [['A', 'B'], 'all', [1, 3]],
+            [['C'], 'any', [2]],
+            [['A', 'C'], 'all', [4]],
+          ]);
+    });
+
+    it('should keep .org PCs separate per list mode', function() {
+      const m = assembleModule(`
+.segment "A" & "B"
+.org $8000
+.byte 1
+.segment "A", "B"
+.org $8100
+.byte 2
+.segment "A" & "B"
+.byte 3
+.segment "A", "B"
+.byte 4
+`);
+      expect(m.chunks!.map(
+                 c => [c.segments, c.placement ?? 'any', c.org, [...c.data]]))
+          .toEqual([
+            [['A', 'B'], 'all', 0x8000, [1]],
+            [['A', 'B'], 'any', 0x8100, [2]],
+            [['A', 'B'], 'all', 0x8001, [3]],
+            [['A', 'B'], 'any', 0x8101, [4]],
+          ]);
+    });
+
+    it('should reject mixing , and & separators', function() {
+      expect(() => assembleModule(`.segment "A", "B" & "C"\n`)).toThrow();
+      expect(() => assembleModule(`.segment "A" & "B", "C"\n`)).toThrow();
+    });
+
+    it('should reject an anonymous segment in an & list', function() {
+      expect(() => assembleModule(`.segment $8000 :size $10 & "B"\n`)).toThrow();
+      expect(() => assembleModule(`.segment "A" & $8000 :size $10\n`)).toThrow();
+    });
+  });
+
   describe('anonymous .segment', function() {
     // Assembles under a caller-chosen module name, since that name seeds the
     // generated segment-name hash.
-    async function assembleNamed(body: string, name: string,
-                                 generateDebugInfo = false): Promise<Module> {
-      const result = await libAssemble(
+    function assembleNamed(body: string, name: string,
+                                 generateDebugInfo = false): Module {
+      const result = libAssemble(
           [{type: 'source', code: body, name} as AssemblyInput],
           {generateDebugInfo});
       if (!result.success) throw new Error(JSON.stringify(result.messages));
@@ -1504,8 +1576,8 @@ lda bar
     // is how `assembleModule` runs.
     const ANON = /^@anon@[^\0]+:\d*:[0-9a-f]{12}$/;
 
-    it('should take the address positionally and require :size', async function() {
-      const m = await assembleModule(`.segment $8000 :size $4000\n`);
+    it('should take the address positionally and require :size', function() {
+      const m = assembleModule(`.segment $8000 :size $4000\n`);
       expect(m.segments!.length).toBe(1);
       const [seg] = m.segments!;
       expect(seg.name).toMatch(ANON);
@@ -1515,35 +1587,35 @@ lda bar
       expect(seg.offset).toBeUndefined();
     });
 
-    it('should carry the file and line in the name', async function() {
-      const m = await assembleNamed(
+    it('should carry the file and line in the name', function() {
+      const m = assembleNamed(
           `\n\n.segment $8000 :size $10\n`, 'bank.s', true);
       expect(m.segments![0].name).toMatch(/^@anon@bank\.s:3:[0-9a-f]{12}$/);
     });
 
-    it('should still carry the line without debug info', async function() {
-      const m = await assembleNamed(`.segment $8000 :size $10\n`, 'bank.s');
+    it('should still carry the line without debug info', function() {
+      const m = assembleNamed(`.segment $8000 :size $10\n`, 'bank.s');
       expect(m.segments![0].name).toMatch(/^@anon@bank\.s:1:[0-9a-f]{12}$/);
     });
 
-    it('should distinguish two segments on different lines', async function() {
+    it('should distinguish two segments on different lines', function() {
       // The line is part of the hash, so identical declarations still differ.
-      const m = await assembleNamed(
+      const m = assembleNamed(
           `.segment $8000 :size $10\n.segment $8000 :size $10\n`, 'bank.s', true);
       expect(m.segments![0].name).toMatch(/^@anon@bank\.s:1:/);
       expect(m.segments![1].name).toMatch(/^@anon@bank\.s:2:/);
     });
 
-    it('should generate the same name for the same source twice', async function() {
+    it('should generate the same name for the same source twice', function() {
       const src = `.segment $8000 :size $4000\n.segment $c000 :size $4000\n`;
-      const a = await assembleModule(src);
-      const b = await assembleModule(src);
+      const a = assembleModule(src);
+      const b = assembleModule(src);
       expect(a.segments!.map(s => s.name)).toEqual(b.segments!.map(s => s.name));
     });
 
     it('should generate distinct names for two segments in one module',
-       async function() {
-      const m = await assembleModule(
+       function() {
+      const m = assembleModule(
           `.segment $8000 :size $4000\n.segment $8000 :size $4000\n`);
       // Same address and size: only the sequence number distinguishes them.
       expect(m.segments!.length).toBe(2);
@@ -1551,90 +1623,90 @@ lda bar
     });
 
     it('should generate distinct names for the same source at two paths',
-       async function() {
+       function() {
       const src = `.segment $8000 :size $4000\n`;
-      const a = await assembleNamed(src, 'a.s');
-      const b = await assembleNamed(src, 'b.s');
+      const a = assembleNamed(src, 'a.s');
+      const b = assembleNamed(src, 'b.s');
       expect(a.segments![0].name).not.toBe(b.segments![0].name);
     });
 
-    it('should synthesize a free range for :fill', async function() {
-      const m = await assembleModule(`.segment $8000 :size $4000 :fill $ff\n`);
+    it('should synthesize a free range for :fill', function() {
+      const m = assembleModule(`.segment $8000 :size $4000 :fill $ff\n`);
       expect(m.segments![0].fill).toBe(0xff);
       expect(m.segments![0].free).toEqual([[0x8000, 0xc000]]);
     });
 
-    it('should evaluate the address as an expression', async function() {
-      const m = await assembleModule(`.segment $8000+16 :size $10\n`);
+    it('should evaluate the address as an expression', function() {
+      const m = assembleModule(`.segment $8000+16 :size $10\n`);
       expect(m.segments![0].memory).toBe(0x8010);
     });
 
-    it('should accept :bank as metadata', async function() {
-      const m = await assembleModule(`.segment $8000 :size $10 :bank 3\n`);
+    it('should accept :bank as metadata', function() {
+      const m = assembleModule(`.segment $8000 :size $10 :bank 3\n`);
       expect(m.segments![0].bank).toBe(3);
     });
 
-    it('should ignore ld65 read-only attributes', async function() {
-      const m = await assembleModule(`.segment $8000 :size $10 :ro\n`);
+    it('should ignore ld65 read-only attributes', function() {
+      const m = assembleModule(`.segment $8000 :size $10 :ro\n`);
       expect(m.segments![0]).toEqual(
           {name: m.segments![0].name, memory: 0x8000, size: 0x10});
     });
 
-    it('should bind following data to the generated segment', async function() {
-      const m = await assembleModule(`.segment $8000 :size $10\n.byte 1\n`);
+    it('should bind following data to the generated segment', function() {
+      const m = assembleModule(`.segment $8000 :size $10\n.byte 1\n`);
       expect(m.chunks![0].segments).toEqual([m.segments![0].name]);
     });
 
-    it('should imply .org at the declared address', async function() {
+    it('should imply .org at the declared address', function() {
       // The address is part of the segment, so no explicit `.org` is needed.
-      const m = await assembleModule(`.segment $8000 :size $10\n.byte 1\n`);
+      const m = assembleModule(`.segment $8000 :size $10\n.byte 1\n`);
       expect(m.chunks![0].org).toBe(0x8000);
     });
 
-    it('should re-imply .org for each anonymous segment', async function() {
-      const m = await assembleModule(
+    it('should re-imply .org for each anonymous segment', function() {
+      const m = assembleModule(
           `.segment $8000 :size $10\n.byte 1\n` +
           `.segment $9000 :size $10\n.byte 2\n`);
       expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x9000]);
     });
 
-    it('should resolve labels against the implied .org', async function() {
-      const m = await assembleModule(
+    it('should resolve labels against the implied .org', function() {
+      const m = assembleModule(
           `.segment $8000 :size $10\nStart:\n  .byte 1\n  .word Start\n`);
       expect(m.chunks![0].org).toBe(0x8000);
       expect([...m.chunks![0].data]).toEqual([1, 0x00, 0x80]);
     });
 
-    it('should let an explicit .org move within the segment', async function() {
-      const m = await assembleModule(
+    it('should let an explicit .org move within the segment', function() {
+      const m = assembleModule(
           `.segment $8000 :size $100\n.byte 1\n.org $8040\n.byte 2\n`);
       expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8040]);
     });
 
-    it('should let .reloc drop the implied .org', async function() {
-      const m = await assembleModule(
+    it('should let .reloc drop the implied .org', function() {
+      const m = assembleModule(
           `.segment $8000 :size $100\n.reloc\n.byte 1\n`);
       expect(m.chunks![0].org).toBeUndefined();
     });
 
-    it('should let .free carve a range out of the segment', async function() {
+    it('should let .free carve a range out of the segment', function() {
       // `.free` needs a PC, which the segment's implied `.org` supplies.
-      const m = await assembleModule(
+      const m = assembleModule(
           `.segment $8000 :size $100\n.byte 1\n.free $20\n`);
       expect(m.segments![0].free).toEqual([[0x8001, 0x8021]]);
     });
 
-    it('should reject a missing :size', async function() {
-      await expect(assembleModule(`.segment $8000\n`))
-          .rejects.toThrow(/An anonymous \.segment requires :size/);
-      await expect(assembleModule(`.segment $8000 :fill $ff\n`))
-          .rejects.toThrow(/An anonymous \.segment requires :size/);
+    it('should reject a missing :size', function() {
+      expect(() => assembleModule(`.segment $8000\n`))
+          .toThrow(/An anonymous \.segment requires :size/);
+      expect(() => assembleModule(`.segment $8000 :fill $ff\n`))
+          .toThrow(/An anonymous \.segment requires :size/);
     });
 
-    it('should reject a comma-separated list', async function() {
-      await expect(assembleModule(
+    it('should reject a comma-separated list', function() {
+      expect(() => assembleModule(
               `.segment $8000 :size $10, $9000 :size $10\n`))
-          .rejects.toThrow(
+          .toThrow(
               /anonymous \.segment may not appear in a comma-separated list/);
     });
 
@@ -1643,60 +1715,60 @@ lda bar
                         'optional', 'dedupe', 'default', 'align $10',
                         'define']) {
       const key = attr.split(' ')[0];
-      it(`should reject :${key}`, async function() {
-        await expect(assembleModule(`.segment $8000 :size $10 :${attr}\n`))
-            .rejects.toThrow(new RegExp(
+      it(`should reject :${key}`, function() {
+        expect(() => assembleModule(`.segment $8000 :size $10 :${attr}\n`))
+            .toThrow(new RegExp(
                 `Segment attr ${key} is not allowed on an anonymous \\.segment`));
       });
     }
 
-    it('should reject an unknown segment attribute', async function() {
-      await expect(assembleModule(`.segment $8000 :size $10 :overlay "A"\n`))
-          .rejects.toThrow(/Unknown segment attr: overlay/);
+    it('should reject an unknown segment attribute', function() {
+      expect(() => assembleModule(`.segment $8000 :size $10 :overlay "A"\n`))
+          .toThrow(/Unknown segment attr: overlay/);
     });
 
-    it('should reject an anonymous segment after a named one', async function() {
-      await expect(assembleModule(
+    it('should reject an anonymous segment after a named one', function() {
+      expect(() => assembleModule(
               `.segment "A" :size $10\n.segment $8000 :size $10\n`))
-          .rejects.toThrow(
+          .toThrow(
               /Cannot use an anonymous \.segment after a named \.segment/);
     });
 
-    it('should reject a named segment after an anonymous one', async function() {
-      await expect(assembleModule(
+    it('should reject a named segment after an anonymous one', function() {
+      expect(() => assembleModule(
               `.segment $8000 :size $10\n.segment "A" :size $10\n`))
-          .rejects.toThrow(
+          .toThrow(
               /Cannot use a named \.segment after an anonymous \.segment/);
     });
 
-    it('should reject an anonymous segment after .code', async function() {
+    it('should reject an anonymous segment after .code', function() {
       // `.code` bypasses parseSegmentList entirely, so this pins the latch
       // living in segment() rather than in the parser.
-      await expect(assembleModule(`.code\n.segment $8000 :size $10\n`))
-          .rejects.toThrow(
+      expect(() => assembleModule(`.code\n.segment $8000 :size $10\n`))
+          .toThrow(
               /Cannot use an anonymous \.segment after a named \.segment/);
     });
 
-    it('should reject .pushseg in anonymous mode', async function() {
-      await expect(assembleModule(`.segment $8000 :size $10\n.pushseg\n`))
-          .rejects.toThrow(/\.pushseg cannot be used with anonymous segments/);
+    it('should reject .pushseg in anonymous mode', function() {
+      expect(() => assembleModule(`.segment $8000 :size $10\n.pushseg\n`))
+          .toThrow(/\.pushseg cannot be used with anonymous segments/);
     });
 
-    it('should reject .popseg in anonymous mode', async function() {
-      await expect(assembleModule(
+    it('should reject .popseg in anonymous mode', function() {
+      expect(() => assembleModule(
               `.segment $8000 :size $10\n.popseg\n`))
-          .rejects.toThrow(/\.popseg cannot be used with anonymous segments/);
+          .toThrow(/\.popseg cannot be used with anonymous segments/);
     });
 
-    it('should reject a user segment name starting with @', async function() {
-      await expect(assembleModule(`.segment "@foo"\n`))
-          .rejects.toThrow(/Segment name may not start with '@'/);
+    it('should reject a user segment name starting with @', function() {
+      expect(() => assembleModule(`.segment "@foo"\n`))
+          .toThrow(/Segment name may not start with '@'/);
     });
 
-    it('should reject an @ segment prefix', async function() {
+    it('should reject an @ segment prefix', function() {
       // The check is on the composed name, so a prefix can't smuggle one in.
-      await expect(assembleModule(`.segmentprefix "@"\n.segment "x"\n`))
-          .rejects.toThrow(/Segment name may not start with '@'.*@x/);
+      expect(() => assembleModule(`.segmentprefix "@"\n.segment "x"\n`))
+          .toThrow(/Segment name may not start with '@'.*@x/);
     });
   });
 
@@ -1707,29 +1779,29 @@ lda bar
       return chunk;
     }
 
-    it('should give `.segment "ZEROPAGE"` zeropage address size', async function() {
-      const m = await assembleModule(`.segment "ZEROPAGE"\nFoo: .res 1\n`);
+    it('should give `.segment "ZEROPAGE"` zeropage address size', function() {
+      const m = assembleModule(`.segment "ZEROPAGE"\nFoo: .res 1\n`);
       expect(m.segments).toEqual([{name: 'ZEROPAGE', addressing: 1}]);
     });
 
-    it('should mark a chunk in `.segment "ZEROPAGE"` as zeropage', async function() {
-      const m = await assembleModule(`.segment "ZEROPAGE"\nFoo: .res 1\n`);
+    it('should mark a chunk in `.segment "ZEROPAGE"` as zeropage', function() {
+      const m = assembleModule(`.segment "ZEROPAGE"\nFoo: .res 1\n`);
       expect(chunkIn(m, 'ZEROPAGE').zeropage).toBe(true);
     });
 
     it('should keep zeropage address size when the segment also carries ld65 attributes',
-       async function() {
+       function() {
          // The memory placement usually comes from the linker config, but a source
          // file is free to spell it out. Do not clear the address size in this case.
-         const m = await assembleModule(`.segment "ZEROPAGE" :mem $10 :size $80\nFoo: .res 1\n`);
+         const m = assembleModule(`.segment "ZEROPAGE" :mem $10 :size $80\nFoo: .res 1\n`);
          expect(m.segments).toEqual([
            {name: 'ZEROPAGE', addressing: 1, memory: 0x10, size: 0x80}]);
          expect(chunkIn(m, 'ZEROPAGE').zeropage).toBe(true);
        });
 
     it('should report 1 from `.addrsize` for a label in `.segment "ZEROPAGE"`',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -1739,10 +1811,10 @@ Foo: .res 1
          expect(Array.from(code.data)).toEqual([1]);
        });
 
-    it('should leave other named segments absolute', async function() {
+    it('should leave other named segments absolute', function() {
       // Only ZEROPAGE is zeropage-addressed. The rest of ca65's predeclared
       // segments must stay absolute.
-      const m = await assembleModule(`
+      const m = assembleModule(`
 .segment "BSS"
 Foo: .res 1
 .segment "CODE"
@@ -1761,8 +1833,8 @@ Foo: .res 1
     }
 
     it('should size a label in the `.zeropage` shorthand segment as zeropage',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 .zeropage
 Foo: .res 1
 .segment "CODE"
@@ -1772,8 +1844,8 @@ Foo: .res 1
          expect(codeOf(m)).toEqual([0x85, 0xff, 0xa5, 0xff]);
        });
 
-    it('should size a label in `.segment "ZEROPAGE"` as zeropage', async function() {
-      const m = await assembleModule(`
+    it('should size a label in `.segment "ZEROPAGE"` as zeropage', function() {
+      const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -1784,8 +1856,8 @@ Foo: .res 1
     });
 
     it('should size a label reached through a `.define`d segment name as zeropage',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 .define ZP_SEGMENT "ZEROPAGE"
 .segment ZP_SEGMENT
 Foo: .res 1
@@ -1795,8 +1867,8 @@ Foo: .res 1
          expect(codeOf(m)).toEqual([0x85, 0xff]);
        });
 
-    it('should size indexed operands on a zeropage label as zeropage', async function() {
-      const m = await assembleModule(`
+    it('should size indexed operands on a zeropage label as zeropage', function() {
+      const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -1806,10 +1878,10 @@ Foo: .res 1
       expect(codeOf(m)).toEqual([0xb5, 0xff, 0xb6, 0xff]);
     });
 
-    it('should still size a forward reference as absolute', async function() {
+    it('should still size a forward reference as absolute', function() {
       // ca65 does the same here -- it can't know the address size yet, so it
       // picks absolute and warns. This guards against "fixing" it too eagerly.
-      const m = await assembleModule(`
+      const m = assembleModule(`
 .segment "CODE"
   sta Foo
 .segment "ZEROPAGE"
@@ -1819,8 +1891,8 @@ Foo: .res 1
     });
 
     it('should still size a label in a non-zeropage segment as absolute',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 .segment "BSS"
 Foo: .res 1
 .segment "CODE"
@@ -1830,11 +1902,11 @@ Foo: .res 1
        });
 
     it('should size an outer zeropage label referenced from a `.proc` as zeropage',
-       async function() {
+       function() {
          // The reference resolves in the proc's scope, which doesn't have the
          // symbol, so the address size has to come from walking out to where it
          // is defined.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -1846,8 +1918,8 @@ Foo: .res 1
        });
 
     it('should size an outer zeropage label referenced from a nested `.scope` as zeropage',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -1860,9 +1932,9 @@ Foo: .res 1
          expect(codeOf(m)).toEqual([0x85, 0xff]);
        });
 
-    it('should keep zeropage address size across an offset', async function() {
+    it('should keep zeropage address size across an offset', function() {
       // ca65 propagates address size through +/-, so `Ptr+1` is still zeropage.
-      const m = await assembleModule(`
+      const m = assembleModule(`
 .segment "ZEROPAGE"
 Ptr: .res 2
 .segment "CODE"
@@ -1873,8 +1945,8 @@ Ptr: .res 2
     });
 
     it('should keep zeropage address size across an offset from a `.proc`',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Ptr: .res 2
 .segment "CODE"
@@ -1885,8 +1957,8 @@ Ptr: .res 2
          expect(codeOf(m)).toEqual([0x85, 0xff]);
        });
 
-    it('should keep zeropage address size through an alias', async function() {
-      const m = await assembleModule(`
+    it('should keep zeropage address size through an alias', function() {
+      const m = assembleModule(`
 .segment "ZEROPAGE"
 Ptr: .res 2
 .segment "CODE"
@@ -1897,8 +1969,8 @@ Alias := Ptr
       expect(codeOf(m)).toEqual([0x85, 0xff, 0x85, 0xff]);
     });
 
-    it('should size an `.importzp` symbol offset as zeropage', async function() {
-      const m = await assembleModule(`
+    it('should size an `.importzp` symbol offset as zeropage', function() {
+      const m = assembleModule(`
 .importzp Foo
 .segment "CODE"
   sta Foo
@@ -1908,9 +1980,9 @@ Alias := Ptr
     });
 
     it('should stay absolute when an absolute label is offset by a zeropage one',
-       async function() {
+       function() {
          // Nonsense arithmetic, but it must not silently become zeropage.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Zp: .res 1
 .segment "BSS"
@@ -1922,12 +1994,12 @@ Abs: .res 1
        });
 
     it('should keep zeropage address size through an alias made inside a scope',
-       async function() {
+       function() {
          // `:=` is handled as the preprocessor reads the line, so the alias is
          // built while the scope is open and `Zp` is only reachable through a
          // forward reference. That reference has to carry the address size, or
          // everything downstream of the alias goes absolute.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Zp: .res 1
 .segment "CODE"
@@ -1940,11 +2012,11 @@ Alias := Zp
        });
 
     it('should keep zeropage address size when the offset gets folded away',
-       async function() {
+       function() {
          // With an `.org` the label is no longer chunk-relative, so `Ptr+1`
          // folds to a plain number during `:=` and has to keep the address size
          // through the fold rather than riding along on the relative meta.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 .org $20
 Ptr: .res 2
@@ -1956,10 +2028,10 @@ Alias := Ptr+1
        });
 
     it('should keep zeropage address size for an offset from a nested scope',
-       async function() {
+       function() {
          // Both halves at once: the reference has to find the outer definition
          // to get an address size, and the `+` has to carry it up.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "ZEROPAGE"
 Ptr: .res 2
 .segment "CODE"
@@ -1977,8 +2049,8 @@ Ptr: .res 2
     // binds the name to the enclosing definition at the point of use, which
     // means the number is already in hand when the operand gets sized.
     it('should size a constant from an enclosing scope by its value',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 BLANK_TILE = $af
 .segment "CODE"
 .proc p
@@ -1989,8 +2061,8 @@ BLANK_TILE = $af
        });
 
     it('should size a constant from an enclosing scope through nested scopes',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 BLANK_TILE = $af
 .segment "CODE"
 .scope outer
@@ -2002,10 +2074,10 @@ BLANK_TILE = $af
          expect(codeOf(m)).toEqual([0xa5, 0xaf]);
        });
 
-    it('should fold an offset from an enclosing scope\'s constant', async function() {
+    it('should fold an offset from an enclosing scope\'s constant', function() {
       // Only worth anything if the value comes in rather than a reference: the
       // `+` has to fold to a number before the operand can be sized from it.
-      const m = await assembleModule(`
+      const m = assembleModule(`
 BLANK_TILE = $af
 .segment "CODE"
 .proc p
@@ -2016,10 +2088,10 @@ BLANK_TILE = $af
     });
 
     it('should go absolute when an offset carries the value out of the zeropage',
-       async function() {
+       function() {
          // Both halves fit in a byte and the sum does not, so the address size
          // cannot come from the operands alone.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "CODE"
   lda $ff+$ff
   lda $80+$80
@@ -2028,8 +2100,8 @@ BLANK_TILE = $af
        });
 
     it('should keep an offset absolute when an operand needs two bytes',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 BIG = $1234
 .segment "CODE"
 .proc p
@@ -2039,8 +2111,8 @@ BIG = $1234
          expect(codeOf(m)).toEqual([0xad, 0x34, 0x00]);
        });
 
-    it('should size an explicitly scoped constant by its value', async function() {
-      const m = await assembleModule(`
+    it('should size an explicitly scoped constant by its value', function() {
+      const m = assembleModule(`
 .scope consts
 BLANK_TILE = $af
 .endscope
@@ -2053,8 +2125,8 @@ BLANK_TILE = $af
     });
 
     it('should stay absolute for a constant from an enclosing scope that does not fit',
-       async function() {
-         const m = await assembleModule(`
+       function() {
+         const m = assembleModule(`
 BIG = $1234
 .segment "CODE"
 .proc p
@@ -2065,11 +2137,11 @@ BIG = $1234
        });
 
     it('should still size a constant defined after the reference as absolute',
-       async function() {
+       function() {
          // Same rule as a forward-referenced label: nothing knows the value yet,
          // so the operand has to assume the worst. Guards against widening the
          // lookup into a second pass.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 .segment "CODE"
 .proc p
   lda BLANK_TILE
@@ -2080,10 +2152,10 @@ BLANK_TILE = $af
        });
 
     it('should bind to the enclosing constant when the local one comes later',
-       async function() {
+       function() {
          // The first reference has only the outer `$af` to go on; the second is
          // after the local definition and takes that instead.
-         const m = await assembleModule(`
+         const m = assembleModule(`
 BLANK_TILE = $af
 .segment "CODE"
 .proc p
@@ -2099,8 +2171,8 @@ BLANK_TILE = $12
     // would otherwise be given. They are the escape hatch for the cases above
     // where js65 has to guess, most importantly a forward reference.
     describe('address size overrides', function() {
-      it('should force zeropage on a forward reference with `z:`', async function() {
-        const m = await assembleModule(`
+      it('should force zeropage on a forward reference with `z:`', function() {
+        const m = assembleModule(`
 .segment "CODE"
   sta z:Foo
 .segment "ZEROPAGE"
@@ -2109,8 +2181,8 @@ Foo: .res 1
         expect(codeOf(m)).toEqual([0x85, 0xff]);
       });
 
-      it('should force absolute on a zeropage label with `a:`', async function() {
-        const m = await assembleModule(`
+      it('should force absolute on a zeropage label with `a:`', function() {
+        const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -2119,8 +2191,8 @@ Foo: .res 1
         expect(codeOf(m)).toEqual([0x8d, 0xff, 0xff]);
       });
 
-      it('should force the address size of a known value', async function() {
-        const m = await assembleModule(`
+      it('should force the address size of a known value', function() {
+        const m = assembleModule(`
 .segment "CODE"
   lda a:$12
   lda z:$12
@@ -2128,8 +2200,8 @@ Foo: .res 1
         expect(codeOf(m)).toEqual([0xad, 0x12, 0x00, 0xa5, 0x12]);
       });
 
-      it('should carry the override through an offset', async function() {
-        const m = await assembleModule(`
+      it('should carry the override through an offset', function() {
+        const m = assembleModule(`
 .segment "CODE"
   lda a:$12+1
   lda z:$12+1
@@ -2137,8 +2209,8 @@ Foo: .res 1
         expect(codeOf(m)).toEqual([0xad, 0x13, 0x00, 0xa5, 0x13]);
       });
 
-      it('should force the address size of an indexed operand', async function() {
-        const m = await assembleModule(`
+      it('should force the address size of an indexed operand', function() {
+        const m = assembleModule(`
 .segment "ZEROPAGE"
 Foo: .res 1
 .segment "CODE"
@@ -2149,10 +2221,10 @@ Foo: .res 1
         expect(codeOf(m)).toEqual([0xbd, 0xff, 0xff, 0xbe, 0xff, 0xff, 0xb6, 0x12]);
       });
 
-      it('should accept an override inside an indirect operand', async function() {
+      it('should accept an override inside an indirect operand', function() {
         // Every 6502 indirect mode has a fixed operand size, so the override
         // can only agree with it, but ca65 sources still spell it out.
-        const m = await assembleModule(`
+        const m = assembleModule(`
 .segment "ZEROPAGE"
 Ptr: .res 2
 .segment "CODE"
@@ -2163,22 +2235,22 @@ Ptr: .res 2
       });
 
       it('should reject an override that the mnemonic has no mode for',
-         async function() {
-           expect(await assembleErrors('  lda z:$12,y'))
+         function() {
+           expect(assembleErrors('  lda z:$12,y'))
                .toEqual(['Bad address mode zpy for lda']);
          });
 
-      it('should reject an override on an immediate', async function() {
-        expect(await assembleErrors('  lda #a:$12'))
+      it('should reject an override on an immediate', function() {
+        expect(assembleErrors('  lda #a:$12'))
             .toEqual(['Cannot force absolute addressing on imm arguments']);
       });
 
-      it('should reject a value too big for a forced zeropage', async function() {
-        expect(await assembleErrors('  lda z:$1234')).toEqual(['Not a byte: $1234']);
+      it('should reject a value too big for a forced zeropage', function() {
+        expect(assembleErrors('  lda z:$1234')).toEqual(['Not a byte: $1234']);
       });
 
-      it('should reject `f:`, which needs a 65816', async function() {
-        expect(await assembleErrors('  lda f:$12'))
+      it('should reject `f:`, which needs a 65816', function() {
+        expect(assembleErrors('  lda f:$12'))
             .toEqual(['Far addressing (`f:`) is 65816-only']);
       });
     });
@@ -2193,8 +2265,8 @@ Ptr: .res 2
       return (m.chunks ?? []).filter(c => c.segments.includes(segment));
     }
 
-    it('should pad the segment it appeared in', async function() {
-      const m = await assembleModule(`
+    it('should pad the segment it appeared in', function() {
+      const m = assembleModule(`
 .segment "BBB"
   .byte 4
   .align 64
@@ -2206,8 +2278,8 @@ Ptr: .res 2
       expect(bbb.align).toBe(64);
     });
 
-    it('should not leak the alignment onto the next segment', async function() {
-      const m = await assembleModule(`
+    it('should not leak the alignment onto the next segment', function() {
+      const m = assembleModule(`
 .segment "BBB"
   .byte 4
   .align 64
@@ -2219,8 +2291,8 @@ Ptr: .res 2
       expect(aaa.align).toBeUndefined();
     });
 
-    it('should use the fill value it was given', async function() {
-      const m = await assembleModule(`
+    it('should use the fill value it was given', function() {
+      const m = assembleModule(`
 .segment "BBB"
   .byte 4
   .align 8, $ff
@@ -2231,8 +2303,8 @@ Ptr: .res 2
       expect(Array.from(bbb.data)).toEqual([4, ...new Array(7).fill(0xff)]);
     });
 
-    it('should pad a segment left aligned at the end of the source', async function() {
-      const m = await assembleModule(`
+    it('should pad a segment left aligned at the end of the source', function() {
+      const m = assembleModule(`
 .segment "BBB"
   .byte 4
   .align 8
@@ -2242,10 +2314,10 @@ Ptr: .res 2
       expect(bbb.align).toBe(8);
     });
 
-    it('should keep deferring the alignment when data follows it', async function() {
+    it('should keep deferring the alignment when data follows it', function() {
       // The normal case is unchanged: the alignment belongs to the new chunk,
       // and the linker gets to place it wherever it fits.
-      const m = await assembleModule(`
+      const m = assembleModule(`
 .segment "BBB"
   .byte 4
   .align 64
@@ -2256,8 +2328,8 @@ Ptr: .res 2
       expect(chunks.map(c => c.align)).toEqual([undefined, 64]);
     });
 
-    it('should take the widest of several trailing alignments', async function() {
-      const m = await assembleModule(`
+    it('should take the widest of several trailing alignments', function() {
+      const m = assembleModule(`
 .segment "BBB"
   .byte 4
   .align 8
@@ -2271,8 +2343,8 @@ Ptr: .res 2
       expect(bbb.data.length).toBe(64);
     });
 
-    it('should pad the pushed segment when `.popseg` ends it', async function() {
-      const m = await assembleModule(`
+    it('should pad the pushed segment when `.popseg` ends it', function() {
+      const m = assembleModule(`
 .segment "AAA"
   .byte 6
 .pushseg "BBB"
@@ -2678,25 +2750,25 @@ Ptr: .res 2
       expect(a.getMessages()).toEqual([]);
     });
 
-    it('should parse through the full pipeline', async function() {
+    it('should parse through the full pipeline', function() {
       // `.feature` used to be silently swallowed, so this pins that a real
       // source file reaches the new handler.
-      expect(await assemble('.feature bracket_as_indirect\nlda #$03\n'))
+      expect(assemble('.feature bracket_as_indirect\nlda #$03\n'))
           .toEqual([0xa9, 0x03]);
-      expect(await assembleErrors('.feature nonsense\n'))
+      expect(assembleErrors('.feature nonsense\n'))
           .toEqual([expect.stringMatching(/Unknown feature: nonsense/)]);
     });
 
-    it('should carry the warning through the full pipeline', async function() {
+    it('should carry the warning through the full pipeline', function() {
       // The warning has to survive out to the caller's message list, and must
       // not turn a working source into a failed build.
-      expect(await assemble('.feature string_escapes\nlda #$03\n'))
+      expect(assemble('.feature string_escapes\nlda #$03\n'))
           .toEqual([0xa9, 0x03]);
-      expect(await assembleWarnings('.feature string_escapes\nlda #$03\n'))
+      expect(assembleWarnings('.feature string_escapes\nlda #$03\n'))
           .toEqual([expect.stringMatching(/Cannot change feature string_escapes/)]);
     });
 
-    it('should locate the warning at the line that caused it', async function() {
+    it('should locate the warning at the line that caused it', function() {
       // A file-level warning with no source location is hard to act on, so this
       // must hold without `generateDebugInfo` - locations are gathered for
       // diagnostics regardless of whether they get written out.
@@ -2705,7 +2777,7 @@ Ptr: .res 2
 lda #$03
 .feature org_per_seg
 `;
-      const result = await compile(
+      const result = compile(
           [{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
       expect(result.success).toBe(true);
       const warnings = result.messages.filter(m => m.level === 'warning');
@@ -2726,54 +2798,54 @@ ${body}`;
       }
 
       it('should apply an assembler feature before any source is read',
-         async function() {
-        const result = await build('lda [$10],y\n', ['bracket_as_indirect']);
+         function() {
+        const result = build('lda [$10],y\n', ['bracket_as_indirect']);
         expect(result.success).toBe(true);
         expect(Array.from(result.outputs[0].data)).toEqual([0xb1, 0x10]);
       });
 
       it('should apply a tokenizer feature before any source is read',
-         async function() {
-        const result = await build('lda #1_0\n', ['underline_in_numbers']);
+         function() {
+        const result = build('lda #1_0\n', ['underline_in_numbers']);
         expect(result.success).toBe(true);
         expect(Array.from(result.outputs[0].data)).toEqual([0xa9, 10]);
       });
 
       it('should fail on an unknown name, as the directive does',
-         async function() {
-        const result = await build('lda #$03\n', ['nonsense']);
+         function() {
+        const result = build('lda #$03\n', ['nonsense']);
         expect(result.success).toBe(false);
         expect(result.messages.map(m => m.message))
             .toEqual([expect.stringMatching(/Unknown feature: nonsense/)]);
       });
 
-      it('should fail on a name js65 cannot support', async function() {
-        const result = await build('lda #$03\n', ['dollar_is_pc']);
+      it('should fail on a name js65 cannot support', function() {
+        const result = build('lda #$03\n', ['dollar_is_pc']);
         expect(result.success).toBe(false);
         expect(result.messages.map(m => m.message))
             .toEqual([expect.stringMatching(/Unsupported feature: dollar_is_pc/)]);
       });
 
-      it('should report every bad name, not just the first', async function() {
-        const result = await build('lda #$03\n', ['nonsense', 'dollar_is_pc']);
+      it('should report every bad name, not just the first', function() {
+        const result = build('lda #$03\n', ['nonsense', 'dollar_is_pc']);
         expect(result.messages.map(m => m.message)).toEqual([
           expect.stringMatching(/Unknown feature: nonsense/),
           expect.stringMatching(/Unsupported feature: dollar_is_pc/),
         ]);
       });
 
-      it('should warn once for a feature js65 always applies', async function() {
-        const result = await build('lda #$03\n', ['string_escapes']);
+      it('should warn once for a feature js65 always applies', function() {
+        const result = build('lda #$03\n', ['string_escapes']);
         expect(result.success).toBe(true);
         expect(result.messages.map(m => m.level)).toEqual(['warning']);
         expect(result.messages[0].message)
             .toMatch(/Cannot change feature string_escapes/);
       });
 
-      it('should let a later .feature turn an option back off', async function() {
+      it('should let a later .feature turn an option back off', function() {
         // The flag is a starting state, not a lock: the source still owns the
         // option from the point `.feature` appears.
-        const result = await build('.feature bracket_as_indirect off\nlda [$10],y\n',
+        const result = build('.feature bracket_as_indirect off\nlda [$10],y\n',
                                    ['bracket_as_indirect']);
         expect(result.success).toBe(false);
       });
@@ -2784,39 +2856,39 @@ ${body}`;
     // one that only parses.
     describe('c_comments', function() {
       it('should not skip a block comment without the feature',
-         async function() {
+         function() {
         // `/*` is a division followed by the PC, which can't start a line.
-        expect(await assembleErrors('/* nope */\nlda #$03\n'))
+        expect(assembleErrors('/* nope */\nlda #$03\n'))
             .toEqual([expect.stringMatching(/Unexpected/)]);
       });
 
-      it('should skip a comment inside a line', async function() {
-        expect(await assemble('.feature c_comments\nlda /* mid */ #$03\n'))
+      it('should skip a comment inside a line', function() {
+        expect(assemble('.feature c_comments\nlda /* mid */ #$03\n'))
             .toEqual([0xa9, 0x03]);
       });
 
-      it('should skip a comment that spans lines', async function() {
+      it('should skip a comment that spans lines', function() {
         // Like whitespace, a comment that runs over a newline joins the lines,
         // which is what ca65 does.
-        expect(await assemble(
+        expect(assemble(
             '.feature c_comments\nlda /* one\ntwo\nthree */ #$03\n'))
             .toEqual([0xa9, 0x03]);
       });
 
-      it('should not nest', async function() {
+      it('should not nest', function() {
         // ca65's block comments end at the first `*/`, so the trailing `*/`
         // here is left over and is a syntax error rather than a comment.
-        expect(await assembleErrors(
+        expect(assembleErrors(
             '.feature c_comments\n/* outer /* inner */ */\nlda #$03\n'))
             .not.toEqual([]);
       });
 
-      it('should report an unterminated comment', async function() {
-        expect(await assembleErrors('.feature c_comments\nlda #$03\n/* forever\n'))
+      it('should report an unterminated comment', function() {
+        expect(assembleErrors('.feature c_comments\nlda #$03\n/* forever\n'))
             .toEqual([expect.stringMatching(/Unterminated comment, expected \*\//)]);
       });
 
-      it('should keep counting lines through a comment', async function() {
+      it('should keep counting lines through a comment', function() {
         // A multi-line token is the one thing that can throw off the line
         // counter, and every later diagnostic in the file depends on it.
         const code = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
@@ -2827,7 +2899,7 @@ ${body}`;
    three */
 .feature org_per_seg
 `;
-        const result = await compile(
+        const result = compile(
             [{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
         expect(result.success).toBe(true);
         const warnings = result.messages.filter(m => m.level === 'warning');
@@ -2841,13 +2913,13 @@ ${body}`;
 .org $8000
 `;
 
-      it('should reject `*=` without the feature', async function() {
-        expect(await assembleErrors('*= $8100\n'))
+      it('should reject `*=` without the feature', function() {
+        expect(assembleErrors('*= $8100\n'))
             .toEqual([expect.stringMatching(/requires the pc_assignment feature/)]);
       });
 
-      it('should move the pc like .org', async function() {
-        const m = await assembleModule(`${preamble}.feature pc_assignment
+      it('should move the pc like .org', function() {
+        const m = assembleModule(`${preamble}.feature pc_assignment
 lda #$01
 * = $8100
 lda #$02
@@ -2855,8 +2927,8 @@ lda #$02
         expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8100]);
       });
 
-      it('should accept it with no space before the `=`', async function() {
-        const m = await assembleModule(`${preamble}.feature pc_assignment
+      it('should accept it with no space before the `=`', function() {
+        const m = assembleModule(`${preamble}.feature pc_assignment
 lda #$01
 *=$8100
 lda #$02
@@ -2864,37 +2936,37 @@ lda #$02
         expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8100]);
       });
 
-      it('should still read `*` as the pc in an expression', async function() {
+      it('should still read `*` as the pc in an expression', function() {
         // Only assignment was missing; reading the pc never needed the feature.
-        expect(await assemble('.word *\n')).toEqual([0x00, 0x80]);
+        expect(assemble('.word *\n')).toEqual([0x00, 0x80]);
       });
     });
 
     describe('labels_without_colons', function() {
       it('should reject a bare leading identifier without the feature',
-         async function() {
-        expect(await assembleErrors('foo lda #$01\n')).not.toEqual([]);
+         function() {
+        expect(assembleErrors('foo lda #$01\n')).not.toEqual([]);
       });
 
-      it('should define a label', async function() {
-        expect(await assemble(
+      it('should define a label', function() {
+        expect(assemble(
             '.feature labels_without_colons\nfoo lda #$01\n  jmp foo\n'))
             .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
       });
 
-      it('should define a label on a line of its own', async function() {
-        expect(await assemble(
+      it('should define a label on a line of its own', function() {
+        expect(assemble(
             '.feature labels_without_colons\nfoo\n  lda #$01\n  jmp foo\n'))
             .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
       });
 
-      it('should not turn a mnemonic into a label', async function() {
-        expect(await assemble('.feature labels_without_colons\nlda #$01\n'))
+      it('should not turn a mnemonic into a label', function() {
+        expect(assemble('.feature labels_without_colons\nlda #$01\n'))
             .toEqual([0xa9, 0x01]);
       });
 
-      it('should not turn a macro call into a label', async function() {
-        expect(await assemble(`.feature labels_without_colons
+      it('should not turn a macro call into a label', function() {
+        expect(assemble(`.feature labels_without_colons
 .macro twonops
   nop
   nop
@@ -2903,19 +2975,19 @@ twonops
 `)).toEqual([0xea, 0xea]);
       });
 
-      it('should not turn an assignment into a label', async function() {
-        expect(await assemble(
+      it('should not turn an assignment into a label', function() {
+        expect(assemble(
             '.feature labels_without_colons\nfoo = $01\nlda #foo\n'))
             .toEqual([0xa9, 0x01]);
-        expect(await assemble(
+        expect(assemble(
             '.feature labels_without_colons\nfoo .set $02\nlda #foo\n'))
             .toEqual([0xa9, 0x02]);
       });
 
-      it('should leave struct members alone', async function() {
+      it('should leave struct members alone', function() {
         // Inside a `.struct` a leading identifier declares a member, so the
         // feature must not steal it away as a label.
-        expect(await assemble(`.feature labels_without_colons
+        expect(assemble(`.feature labels_without_colons
 .struct Point
   xpos .byte
   ypos .byte
@@ -2924,8 +2996,8 @@ lda #.sizeof(Point)
 `)).toEqual([0xa9, 0x02]);
       });
 
-      it('should still accept a label with a colon', async function() {
-        expect(await assemble(
+      it('should still accept a label with a colon', function() {
+        expect(assemble(
             '.feature labels_without_colons\nfoo: lda #$01\n  jmp foo\n'))
             .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
       });
@@ -2936,73 +3008,73 @@ lda #.sizeof(Point)
       // linker checks the rest. Both go through `Exprs.fits`, so the feature
       // has to turn off both of them.
       it('should fail on an out of range value the assembler resolved',
-         async function() {
-        expect(await assembleErrors('.byte $1234\n')).toEqual(['Not a byte: $1234']);
-        expect(await assembleErrors('lda #300\n')).toEqual(['Not a byte: $12c']);
-        expect(await assembleErrors('.word $12345\n'))
+         function() {
+        expect(assembleErrors('.byte $1234\n')).toEqual(['Not a byte: $1234']);
+        expect(assembleErrors('lda #300\n')).toEqual(['Not a byte: $12c']);
+        expect(assembleErrors('.word $12345\n'))
             .toEqual(['Not a word: $12345']);
       });
 
       it('should truncate an out of range value the assembler resolved',
-         async function() {
-        expect(await assemble('.feature force_range\n.byte $1234\n'))
+         function() {
+        expect(assemble('.feature force_range\n.byte $1234\n'))
             .toEqual([0x34]);
-        expect(await assemble('.feature force_range\nlda #300\n'))
+        expect(assemble('.feature force_range\nlda #300\n'))
             .toEqual([0xa9, 0x2c]);
       });
 
       it('should take a negative that fits as signed either way',
-         async function() {
+         function() {
         // Not the feature's doing - a negative that fits is always fine.
-        expect(await assemble('.byte -1\n  .word -1\n  lda #-1\n'))
+        expect(assemble('.byte -1\n  .word -1\n  lda #-1\n'))
             .toEqual([0xff, 0xff, 0xff, 0xa9, 0xff]);
-        expect(await assembleErrors('.byte -129\n')).toEqual(['Not a byte: -129']);
+        expect(assembleErrors('.byte -129\n')).toEqual(['Not a byte: -129']);
       });
 
       it('should fail on a branch the assembler resolved out of range',
-         async function() {
+         function() {
         // A backward branch inside one chunk never reaches the linker, so
         // before the check landed this was silently truncated to a wrong jump.
-        expect(await assembleErrors('back: nop\n.res 200\n  bne back\n'))
+        expect(assembleErrors('back: nop\n.res 200\n  bne back\n'))
             .toEqual(['Branch out of range: offset -203 (valid range: -128 to 127)']);
-        expect(await assemble('.feature force_range\nback: nop\n.res 200\n  bne back\n')
-                   .then(d => d.slice(-2)))
+        expect(assemble('.feature force_range\nback: nop\n.res 200\n  bne back\n')
+                   .slice(-2))
             .toEqual([0xd0, 0x35]);
       });
 
       it('should fail on an out of range value without the feature',
-         async function() {
+         function() {
         // The linker reports each failed substitution once per pass, so match
         // the message rather than the count.
-        expect(await assembleErrors('.byte far\nfar: nop\n'))
+        expect(assembleErrors('.byte far\nfar: nop\n'))
             .toContain('Not a byte: $8001 at $8000');
       });
 
-      it('should truncate an out of range value', async function() {
+      it('should truncate an out of range value', function() {
         // `far` is $8001, which does not fit in the byte the linker has to
         // write, so the feature keeps the low byte instead of failing.
-        expect(await assemble('.feature force_range\n.byte far\nfar: nop\n'))
+        expect(assemble('.feature force_range\n.byte far\nfar: nop\n'))
             .toEqual([0x01, 0xea]);
       });
 
       it('should fail on a branch out of range without the feature',
-         async function() {
-        expect(await assembleErrors('bne far\n.res 200\nfar: nop\n'))
+         function() {
+        expect(assembleErrors('bne far\n.res 200\nfar: nop\n'))
             .toContain(
                 'Branch out of range: offset 200 at $8001 (valid range: -128 to 127)');
       });
 
-      it('should truncate a branch out of range', async function() {
-        const data = await assemble(
+      it('should truncate a branch out of range', function() {
+        const data = assemble(
             '.feature force_range\nbne far\n.res 200\nfar: nop\n');
         expect(data.slice(0, 2)).toEqual([0xd0, 0xc8]);
       });
 
       it('should record itself on the substitution it applies to',
-         async function() {
+         function() {
         // The check lives in the linker, so the flag has to survive assembly -
         // including a separate `-c` assembly - by riding on the substitution.
-        const m = await assembleModule(
+        const m = assembleModule(
             '.feature force_range\n.byte far\nfar: nop\n');
         expect(m.chunks![0].subs).toEqual([
           {offset: 0, size: 1, expr: expect.anything(), forceRange: true},
@@ -3010,8 +3082,8 @@ lda #.sizeof(Point)
       });
 
       it('should leave the substitution alone without the feature',
-         async function() {
-        const m = await assembleModule('.byte far\nfar: nop\n');
+         function() {
+        const m = assembleModule('.byte far\nfar: nop\n');
         expect(m.chunks![0].subs![0].forceRange).toBeUndefined();
       });
     });
@@ -3019,17 +3091,17 @@ lda #.sizeof(Point)
     // The features js65 applies unconditionally are only "already on" for as
     // long as nothing regresses them, so pin a few with no flag set at all.
     describe('features that are always on', function() {
-      it('should allow `@` in an identifier', async function() {
-        expect(await assemble('@foo: lda #$01\n  jmp @foo\n'))
+      it('should allow `@` in an identifier', function() {
+        expect(assemble('@foo: lda #$01\n  jmp @foo\n'))
             .toEqual([0xa9, 0x01, 0x4c, 0x00, 0x80]);
       });
 
-      it('should honor string escapes', async function() {
-        expect(await assemble('.byte "a\\x42c"\n')).toEqual([0x61, 0x42, 0x63]);
+      it('should honor string escapes', function() {
+        expect(assemble('.byte "a\\x42c"\n')).toEqual([0x61, 0x42, 0x63]);
       });
 
-      it('should accept either quote style', async function() {
-        expect(await assemble('.byte "ab", \'c\'\n')).toEqual([0x61, 0x62, 0x63]);
+      it('should accept either quote style', function() {
+        expect(assemble('.byte "ab", \'c\'\n')).toEqual([0x61, 0x62, 0x63]);
       });
     });
   });
@@ -3135,11 +3207,11 @@ lda #.sizeof(Point)
     });
 
     // Disabled for now
-    // it('should allow symbols outside of scope to keep size', async function() {
+    // it('should allow symbols outside of scope to keep size', function() {
     //   const a = new Assembler(Cpu.P02);
     //   a.assign('bar', 5);
     //   a.scope('foo');
-    //   await a.instruction([ident('sta'), ident('bar')]);
+    //   a.instruction([ident('sta'), ident('bar')]);
     //   a.endScope();
     //   expect(strip(a.module())).toEqual({
     //     chunks: [{
@@ -3168,8 +3240,8 @@ lda #.sizeof(Point)
       });
     });
 
-    it('should not emit an empty chunk when opened outside a segment', async function() {
-      const m = await assembleModule(`
+    it('should not emit an empty chunk when opened outside a segment', function() {
+      const m = assembleModule(`
 .scope Constants
   FOO = 1
   BAR = 2
@@ -3189,15 +3261,15 @@ lda #.sizeof(Point)
     });
 
     it('should emit no chunks at all for a source that only declares a scope',
-       async function() {
-      const m = await assembleModule(`.scope Constants\n  FOO = 1\n.endscope\n`);
+       function() {
+      const m = assembleModule(`.scope Constants\n  FOO = 1\n.endscope\n`);
       expect(m.chunks).toEqual([]);
     });
 
     // The size of a scope still has to be measured from the first byte the scope
     // actually emits, even though the chunk doesn't exist when the scope opens.
-    it('should size a scope that opens before its chunk exists', async function() {
-      const m = await assembleModule(`
+    it('should size a scope that opens before its chunk exists', function() {
+      const m = assembleModule(`
 .segment "DATA"
 .scope Sized
   .byte 1, 2, 3
@@ -3297,10 +3369,10 @@ lda #.sizeof(Point)
   });
 
   describe('sized syms', function() {
-    it('should use a zp value when the size of the assignment is known', async function() {
+    it('should use a zp value when the size of the assignment is known', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('foo', 5);
-      await a.instruction([ident('lda'), ident('foo')]);
+      a.instruction([ident('lda'), ident('foo')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -3311,21 +3383,21 @@ lda #.sizeof(Point)
         symbols: [],
       });
     });
-    // it('should produce an error when the assignment is negative', async function() {
+    // it('should produce an error when the assignment is negative', function() {
     //   const a = new Assembler(Cpu.P02);
     //   a.assign('foo', -5);
-    //   await a.instruction([ident('lda'), ident('foo')]);
+    //   a.instruction([ident('lda'), ident('foo')]);
     //   try {
-    //     await a.instruction([ident('lda'), ident('foo')]);
+    //     a.instruction([ident('lda'), ident('foo')]);
     //     expect("").toEqual("Test failed, didn't throw an error.");
     //   } catch (err: any) {
     //     expect(err.message).toEqual("-5 not in range 0-255");
     //   }
     // });
-    it('should use a zp value for negative zero', async function() {
+    it('should use a zp value for negative zero', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('foo', -0);
-      await a.instruction([ident('lda'), ident('foo')]);
+      a.instruction([ident('lda'), ident('foo')]);
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
@@ -3336,12 +3408,12 @@ lda #.sizeof(Point)
         symbols: [],
       });
     });
-    it('should use an abs value because foo is resolved to the scope instead', async function() {
+    it('should use an abs value because foo is resolved to the scope instead', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('foo', 5);
       a.scope();
       a.assign('foo', 5000);
-      await a.instruction([ident('lda'), ident('foo')]);
+      a.instruction([ident('lda'), ident('foo')]);
       a.endScope();
       expect(strip(a.module())).toEqual({
         segments: [],
@@ -3353,11 +3425,11 @@ lda #.sizeof(Point)
         symbols: [],
       });
     });
-    // it('should error since foo is resolved as size 1 when outputting the byte, but when resolved later its 2 bytes', async function() {
+    // it('should error since foo is resolved as size 1 when outputting the byte, but when resolved later its 2 bytes', function() {
     //   const a = new Assembler(Cpu.P02);
     //   a.assign('foo', 5);
     //   a.scope();
-    //   await a.instruction([ident('lda'), ident('foo')]);
+    //   a.instruction([ident('lda'), ident('foo')]);
     //   a.assign('foo', 5000);
     //   a.endScope();
     //   try {
@@ -3368,11 +3440,11 @@ lda #.sizeof(Point)
     //     expect(err.message).toEqual("5000 doesn't fit in one byte");
     //   }
     // });
-    it('should use the outer foo when the inner one is not assigned until later', async function() {
+    it('should use the outer foo when the inner one is not assigned until later', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('foo', 5000);
       a.scope();
-      await a.instruction([ident('lda'), ident('foo')]);
+      a.instruction([ident('lda'), ident('foo')]);
       a.assign('foo', 5);
       a.endScope();
       // The reference binds to whatever `foo` names at the point of use, and at
@@ -3388,9 +3460,9 @@ lda #.sizeof(Point)
         symbols: [],
       });
     });
-    it('should use an abs value because the symbol is undefined, so it is sized to 2 until the symbol is defined', async function() {
+    it('should use an abs value because the symbol is undefined, so it is sized to 2 until the symbol is defined', function() {
       const a = new Assembler(Cpu.P02);
-      await a.instruction([ident('lda'), ident('foo')]);
+      a.instruction([ident('lda'), ident('foo')]);
       a.assign('foo', 5);
       // We make a sized substitution for this and set that we'll sub in 5 later.
       // This should also throw a warning that we didn't use ZP addressing for foo
@@ -3412,10 +3484,10 @@ lda #.sizeof(Point)
         }],
       });
     });
-    it('should use an abs value because the symbol is undefined and it ends up using the global foo anyway', async function() {
+    it('should use an abs value because the symbol is undefined and it ends up using the global foo anyway', function() {
       const a = new Assembler(Cpu.P02);
       a.scope();
-      await a.instruction([ident('lda'), ident('foo')]);
+      a.instruction([ident('lda'), ident('foo')]);
       a.endScope();
       a.assign('foo', 5);
       // This does NOT throw a warning in ca65 for ... reasons?
@@ -3437,7 +3509,7 @@ lda #.sizeof(Point)
         }],
       });
     });
-    it('should error due to duplicate scope', async function() {
+    it('should error due to duplicate scope', function() {
       const a = new Assembler(Cpu.P02);
       try {
         a.scope("foo");
@@ -3452,8 +3524,8 @@ lda #.sizeof(Point)
   });
 
   describe('.end', function() {
-    it('stops assembling the rest of the file', async function() {
-      expect(await assemble(`
+    it('stops assembling the rest of the file', function() {
+      expect(assemble(`
   .byte 1
   .end
   .byte 2
@@ -3462,8 +3534,8 @@ lda #.sizeof(Point)
 
     // `###` fails in the preprocessor rather than the assembler, checking that
     // the file is really stopped processing completely
-    it('does not require the rest of the file to be valid', async function() {
-      expect(await assemble(`
+    it('does not require the rest of the file to be valid', function() {
+      expect(assemble(`
   .byte 1
   .end
   .notadirective bogus
@@ -3471,8 +3543,8 @@ lda #.sizeof(Point)
 `)).toEqual([1]);
     });
 
-    it('is skipped inside a false conditional', async function() {
-      expect(await assemble(`
+    it('is skipped inside a false conditional', function() {
+      expect(assemble(`
   .byte 1
   .if 0
   .end
@@ -3483,46 +3555,46 @@ lda #.sizeof(Point)
   });
 
   describe('.forceimport', function() {
-    it('imports the symbol like .import', async function() {
-      const m = await assembleModule(`.forceimport foo\n.byte foo\n`);
+    it('imports the symbol like .import', function() {
+      const m = assembleModule(`.forceimport foo\n.byte foo\n`);
       expect(strip(m).symbols).toEqual([{expr: {op: 'im', sym: 'foo'}}]);
     });
   });
 
   describe('.fopt', function() {
-    it('is accepted and ignored as its unimplemented still', async function() {
-      const m = await assembleModule(`.fopt comment, "hello"\n.byte 1\n`);
+    it('is accepted and ignored as its unimplemented still', function() {
+      const m = assembleModule(`.fopt comment, "hello"\n.byte 1\n`);
       expect(m.chunks![0].data).toEqual(Uint8Array.of(1));
     });
   });
 
   describe('.fatal', function() {
-    it('aborts the assembly instead of continuing like .error', async function() {
+    it('aborts the assembly instead of continuing like .error', function() {
       // `.error` is recoverable, so everything after it is still assembled...
-      expect(await assembleErrors(`
+      expect(assembleErrors(`
   .error "first"
   .error "second"
 `)).toEqual(['first', 'second']);
       // ...while `.fatal` stops immediately, so the second one never runs.
-      expect(await assembleErrors(`
+      expect(assembleErrors(`
   .fatal "first"
   .error "second"
 `)).toEqual(['first']);
     });
 
-    it('reports its message exactly once', async function() {
-      expect(await assembleErrors(`  .fatal "boom"\n`)).toEqual(['boom']);
+    it('reports its message exactly once', function() {
+      expect(assembleErrors(`  .fatal "boom"\n`)).toEqual(['boom']);
     });
 
-    it('requires a single string argument', async function() {
-      expect(await assembleErrors(`  .fatal\n`))
+    it('requires a single string argument', function() {
+      expect(assembleErrors(`  .fatal\n`))
           .toEqual(['Expected constant string after .fatal']);
     });
   });
 
   describe('.sizeof', function() {
-    it('reports the total size of a struct', async function() {
-      expect(await assemble(`
+    it('reports the total size of a struct', function() {
+      expect(assemble(`
 .struct Player
   xpos .byte
   ypos .byte
@@ -3532,19 +3604,19 @@ lda #.sizeof(Point)
 `)).toEqual([4]);
     });
 
-    it('treats a struct tag as a scope rather than a value', async function() {
+    it('treats a struct tag as a scope rather than a value', function() {
       // As in ca65, a struct name names a scope whose size is only reachable
       // through `.sizeof` - it is not itself a symbol holding the size.
-      await expect(assemble(`
+      expect(() => assemble(`
 .struct Player
   hp .word
 .endstruct
   .byte Player
-`)).rejects.toThrow(/Symbol 'Player' undefined/);
+`)).toThrow(/Symbol 'Player' undefined/);
     });
 
-    it('reports the size of an individual struct field', async function() {
-      expect(await assemble(`
+    it('reports the size of an individual struct field', function() {
+      expect(assemble(`
 .struct Player
   xpos .byte
   hp   .word
@@ -3554,8 +3626,8 @@ lda #.sizeof(Point)
 `)).toEqual([1, 2, 8]);
     });
 
-    it('reports the size of a .tag field as the tagged struct size', async function() {
-      expect(await assemble(`
+    it('reports the size of a .tag field as the tagged struct size', function() {
+      expect(assemble(`
 .struct Point
   x .byte
   y .byte
@@ -3568,8 +3640,8 @@ lda #.sizeof(Point)
 `)).toEqual([2, 4]);
     });
 
-    it('reports the size of a .proc', async function() {
-      expect(await assemble(`
+    it('reports the size of a .proc', function() {
+      expect(assemble(`
 .proc Foo
   lda #$00
   rts
@@ -3578,8 +3650,8 @@ lda #.sizeof(Point)
 `)).toEqual([0xa9, 0x00, 0x60, 3]);
     });
 
-    it('includes nested scopes in a .proc size', async function() {
-      expect(await assemble(`
+    it('includes nested scopes in a .proc size', function() {
+      expect(assemble(`
 .proc Outer
   .byte $01
   .proc Inner
@@ -3591,8 +3663,8 @@ lda #.sizeof(Point)
 `)).toEqual([1, 2, 3, 4, 4, 2]);
     });
 
-    it('resolves a forward reference to a .proc size', async function() {
-      expect(await assemble(`
+    it('resolves a forward reference to a .proc size', function() {
+      expect(assemble(`
   .byte .sizeof(Later)
 .proc Later
   .byte $01, $02, $03
@@ -3600,8 +3672,8 @@ lda #.sizeof(Point)
 `)).toEqual([3, 1, 2, 3]);
     });
 
-    it('prefers a scope over a symbol of the same name', async function() {
-      expect(await assemble(`
+    it('prefers a scope over a symbol of the same name', function() {
+      expect(assemble(`
 Foo = 99
 .scope Foo
   .byte $01, $02
@@ -3610,24 +3682,24 @@ Foo = 99
 `)).toEqual([1, 2, 2]);
     });
 
-    it('reports the size of data declared on a label line', async function() {
-      expect(await assemble(`
+    it('reports the size of data declared on a label line', function() {
+      expect(assemble(`
 buf: .res 10
 tbl: .byte $01, $02, $03
   .byte .sizeof(buf), .sizeof(tbl)
 `)).toEqual([...new Array(10).fill(0), 1, 2, 3, 10, 3]);
     });
 
-    it('reports zero for a label with no data on its line', async function() {
-      expect(await assemble(`
+    it('reports zero for a label with no data on its line', function() {
+      expect(assemble(`
 empty:
   .byte $aa
   .byte .sizeof(empty)
 `)).toEqual([0xaa, 0]);
     });
 
-    it('resolves forward references to structs and labels', async function() {
-      expect(await assemble(`
+    it('resolves forward references to structs and labels', function() {
+      expect(assemble(`
   .byte .sizeof(Later), .sizeof(buf)
 .struct Later
   a .byte
@@ -3692,9 +3764,9 @@ buf: .res 5
       }, 'Multi')).toBe(4);
     });
 
-    it('rejects .sizeof on an undefined name', async function() {
-      await expect(assemble(`  .byte .sizeof(Nope)\n`))
-          .rejects.toThrow(/Size of 'Nope' is unknown/);
+    it('rejects .sizeof on an undefined name', function() {
+      expect(() => assemble(`  .byte .sizeof(Nope)\n`))
+          .toThrow(/Size of 'Nope' is unknown/);
     });
   });
 });
