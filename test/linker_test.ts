@@ -3,6 +3,7 @@
 
 import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
+import {ErrorCollector} from '../src/error.ts';
 import {FreeSpace, Linker} from '../src/linker.ts';
 import {type Module, type Segment} from '../src/module.ts';
 import {SourceError} from '../src/token.ts';
@@ -1030,6 +1031,311 @@ describe('Linker', function() {
       segments: [{name: 'code', size: 0x8000, offset: 0x10, memory: 0x8000}],
     };
     expect(() => link(m)).toThrow(/Unknown segment: NOWHERE/);
+  });
+  describe('mirror placement', function() {
+    it('should write an .org mirror at the same org in every segment', function() {
+      const vectors = [0x10, 0x90, 0x00, 0x80, 0x20, 0x90];
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['PRG0', 'PRG1', 'PRG2', 'PRG3'],
+          org: 0xfffa,
+          data: Uint8Array.of(...vectors),
+        }, {
+          // A reference to a mirror label resolves to the single shared org.
+          segments: ['PRG0'],
+          data: Uint8Array.of(0xff, 0xff),
+          subs: [{offset: 0, size: 2, expr: off(0, 0)}],
+        }],
+        segments: [{
+          name: 'PRG0', size: 0x8000, memory: 0x8000, offset: 0x00000,
+          free: [[0x8000, 0x10000]],
+        }, {
+          name: 'PRG1', size: 0x8000, memory: 0x8000, offset: 0x08000,
+          free: [[0x8000, 0x10000]],
+        }, {
+          name: 'PRG2', size: 0x8000, memory: 0x8000, offset: 0x10000,
+          free: [[0x8000, 0x10000]],
+        }, {
+          name: 'PRG3', size: 0x8000, memory: 0x8000, offset: 0x18000,
+          free: [[0x8000, 0x10000]],
+        }],
+      };
+      // The word in PRG0 sees $fffa; each bank's file offset holds the same
+      // six bytes (org $fffa + each segment's own delta).
+      expect(chunks(link(m))).toEqual([
+        [0x00000, [0xfa, 0xff]],
+        [0x07ffa, vectors],
+        [0x0fffa, vectors],
+        [0x17ffa, vectors],
+        [0x1fffa, vectors],
+      ]);
+    });
+
+    it('should place a reloc mirror at one org and consume space in every ' +
+       'segment', function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(0xa9, 0x42, 0x60, 0xff, 0xff),
+          // A word back into the mirror itself, resolved to the shared org.
+          subs: [{offset: 3, size: 2, expr: off(0, 0)}],
+        }, {
+          segments: ['A'],
+          data: Uint8Array.of(0x0b),
+        }, {
+          segments: ['B'],
+          data: Uint8Array.of(0x16),
+        }],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'B', size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }],
+      };
+      // The mirror holds org $8000 in both banks, with identical reference
+      // bytes, and each bank's own next chunk packs right after its copy.
+      expect(chunks(link(m))).toEqual([
+        [0x000, [0xa9, 0x42, 0x60, 0x00, 0x80, 0x0b]],
+        [0x100, [0xa9, 0x42, 0x60, 0x00, 0x80, 0x16]],
+      ]);
+    });
+
+    it('should align a reloc mirror inside the intersected free space',
+       function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          align: 4,
+          data: Uint8Array.of(1, 2),
+        }],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          // B's usable range starts mid-flow, so the shared org has to skip
+          // ahead to the next 4-aligned address inside the intersection.
+          name: 'B', size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8003, 0x8100]],
+        }],
+      };
+      expect(chunks(link(m))).toEqual([[0x004, [1, 2]], [0x104, [1, 2]]]);
+    });
+
+    it('should fail a reloc mirror that does not fit every segment',
+       function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: new Uint8Array(16).fill(1),
+        }],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          // B only freed 8 bytes, so the intersection cannot hold 16.
+          name: 'B', size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8008]],
+        }],
+      };
+      expect(() => link(m)).toThrow(/mirrored across A & B/);
+    });
+
+    it('should reject an .org mirror whose org is outside a listed segment',
+       function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          org: 0x9100,
+          data: Uint8Array.of(1, 2, 3, 4),
+        }],
+        segments: [{
+          name: 'A', size: 0x1000, offset: 0x0000, memory: 0x8000,
+          free: [[0x8000, 0x9000]],
+        }, {
+          name: 'B', size: 0x1000, offset: 0x1000, memory: 0x9000,
+          free: [[0x9000, 0xa000]],
+        }],
+      };
+      // $9100 is inside B only; the error must name A as the offender.
+      expect(() => link(m)).toThrow(/A/);
+    });
+
+    it('should reject an .org mirror that runs off a listed segment',
+       function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          org: 0x8700,
+          data: new Uint8Array(0x200).fill(1),
+        }],
+        segments: [{
+          name: 'A', size: 0x1000, offset: 0x0000, memory: 0x8000,
+          free: [[0x8000, 0x9000]],
+        }, {
+          // B ends at $8800, so the chunk fits in A but not in B.
+          name: 'B', size: 0x800, offset: 0x1000, memory: 0x8000,
+          free: [[0x8000, 0x8800]],
+        }],
+      };
+      expect(() => link(m)).toThrow(/B/);
+    });
+
+    it('should resolve ^ on a mirror label to bank 0 with one warning',
+       function() {
+      const ec = new ErrorCollector();
+      const linker = new Linker({errorCollector: ec});
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(0x60),
+        }, {
+          segments: ['CODE'],
+          data: Uint8Array.of(0xff),
+          subs: [{offset: 0, size: 1, expr: op('^', off(0, 0))}],
+        }],
+        segments: [{
+          name: 'A', bank: 3, size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'B', bank: 5, size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'CODE', bank: 7, size: 0x100, offset: 0x200, memory: 0xa000,
+          free: [[0xa000, 0xa100]],
+        }],
+      };
+      // Not bank 3 (the primary segment's bank): mirrors have no single bank.
+      expect(chunks(linker.read(m).link())).toEqual(
+          [[0x000, [0x60]], [0x100, [0x60]], [0x200, [0x00]]]);
+      expect(ec.hasErrors()).toBe(false);
+      const warnings = ec.getMessages().filter(msg => msg.level === 'warning');
+      expect(warnings.length).toBe(1);
+      expect(warnings[0]!.message).toMatch(/bank/i);
+    });
+
+    it('should export a mirror label with bank 0 and a warning', function() {
+      const ec = new ErrorCollector();
+      const linker = new Linker({errorCollector: ec});
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(0x60),
+        }],
+        symbols: [{export: 'Tramp', expr: off(0, 0)}],
+        segments: [{
+          name: 'A', bank: 3, size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'B', bank: 5, size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }],
+      };
+      linker.read(m).link();
+      expect(linker.exports().get('Tramp'))
+          .toMatchObject({value: 0x8000, bank: 0});
+      expect(ec.getMessages().filter(m => m.level === 'warning').length)
+          .toBe(1);
+    });
+
+    it('should not dedupe a mirror chunk even when the bytes already exist',
+       function() {
+      const m = {
+        chunks: [{
+          segments: ['A'],
+          org: 0x8000,
+          data: Uint8Array.of(1, 2, 3),
+        }, {
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(1, 2, 3),
+        }],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]], dedupe: true,
+        }, {
+          name: 'B', size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8100]], dedupe: true,
+        }],
+      };
+      // Duplicating the bytes is the point, so the mirror is written again in
+      // both segments rather than matching the copy already in A.
+      expect(chunks(link(m))).toEqual([
+        [0x000, [1, 2, 3, 1, 2, 3]],
+        [0x103, [1, 2, 3]],
+      ]);
+    });
+
+    it('should park an empty mirror chunk like a bare label', function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(),
+        }, {
+          segments: ['CODE'],
+          data: Uint8Array.of(0xff, 0xff),
+          subs: [{offset: 0, size: 2, expr: off(0, 0)}],
+        }],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'B', size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'CODE', size: 0x100, offset: 0x200, memory: 0xa000,
+          free: [[0xa000, 0xa100]],
+        }],
+      };
+      expect(chunks(link(m))).toEqual([[0x200, [0x00, 0x80]]]);
+    });
+
+    it('should mirror across RAM segments without writing image bytes',
+       function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['RAM0', 'RAM1'],
+          data: Uint8Array.of(0, 0, 0, 0),
+        }, {
+          segments: ['RAM0'],
+          data: Uint8Array.of(0, 0),
+        }, {
+          segments: ['RAM1'],
+          data: Uint8Array.of(0, 0),
+        }, {
+          segments: ['CODE'],
+          data: Uint8Array.of(0xff, 0xff, 0xff, 0xff, 0xff, 0xff),
+          subs: [
+            {offset: 0, size: 2, expr: off(0, 0)},
+            {offset: 2, size: 2, expr: off(1, 0)},
+            {offset: 4, size: 2, expr: off(2, 0)},
+          ],
+        }],
+        segments: [{
+          name: 'RAM0', memory: 0x300, size: 0x100, bss: true,
+        }, {
+          name: 'RAM1', memory: 0x300, size: 0x100, bss: true,
+        }, {
+          name: 'CODE', size: 0x100, offset: 0, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }],
+      };
+      // Both RAM areas give up the mirrored range at org $300, so each area's
+      // own next chunk lands after it and all three labels share their orgs.
+      expect(chunks(link(m)))
+          .toEqual([[0, [0x00, 0x03, 0x04, 0x03, 0x04, 0x03]]]);
+    });
   });
 });
 

@@ -25,6 +25,9 @@ export interface Substitution {
 // Default is "allow"
 export type OverwriteMode = 'forbid' | 'allow' | 'require';
 
+// Default is declarationOrder
+export type PlacementMode = 'declarationOrder' | 'any' | 'all';
+
 /** Fields shared by Chunk (Uint8Array data) and ChunkNum (number[] data). */
 interface BaseChunk {
   /** Human-readable identifier. */
@@ -51,6 +54,8 @@ interface BaseChunk {
    * same compliation unit as zeropage)
    */
   zeropage?: boolean;
+  /** Defines the rule used when placing in a segment */
+  placement?: PlacementMode;
 }
 
 /**
@@ -107,7 +112,7 @@ export interface Segment {
   fill?: number;
   /** Output file for the segment. Use "%O" for the main output file, or a filename. Empty/undefined means no output. */
   out?: string;
-  /** Segment name where the output data foes. Lets you imitate the MEMORY/SEGMENT split from ca65 */
+  /** Segment name where the output data goes. Lets you imitate the MEMORY/SEGMENT split from ca65 */
   load?: string;
   /** Similar to load but for the `org` address to write to. */
   run?: string;
@@ -127,6 +132,8 @@ export interface Segment {
   default?: boolean;
   /** Unallocated ranges (org), half-open [a, b). */
   free?: number[][];
+  /** Linker is required to place data in ALL of the segments in the list */
+  mirror?: string[];
 }
 
 export const RESERVED_SEGMENT_PREFIX = '@';

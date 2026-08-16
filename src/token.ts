@@ -93,6 +93,7 @@ export const WORD: Token = {token: 'cs', str: '.word'};
 export const COLON: Token = {token: 'op', str: ':'};
 export const DCOLON: Token = {token: 'op', str: '::'};
 export const COMMA: Token = {token: 'op', str: ','};
+export const AND: Token = {token: 'op', str: '&'};
 /** Statement terminator in an ld65 linker config. We don't use this for asm */
 export const SEMI: Token = {token: 'op', str: ';'};
 export const STAR: Token = {token: 'op', str: '*'};
@@ -313,8 +314,8 @@ export function findBalanced(tokens: Token[], i: number): number {
 }
 
 /**
- * Splits on commas not enclosed in balanced parens.  Braces are
- * ignored/not allowed at this point.  This is intended for arithmetic.
+ * Splits on commas not enclosed in balanced parens. Braces are
+ * ignored/not allowed at this point. This is intended for arithmetic.
  */
 export function parseArgList(tokens: Token[],
                               start = 0, end = tokens.length): Token[][] {

@@ -10,7 +10,7 @@
  */
 
 import { Base64 } from './base64.ts';
-import type { Chunk, Module, OverwriteMode, Segment, Substitution, Symbol } from './module.ts';
+import type { Chunk, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { SourceInfo } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -146,6 +146,7 @@ function mapEntries(v: unknown, path: string): Array<[unknown, unknown]> {
 }
 
 const OVERWRITE_MODES = new Set<string>(['forbid', 'allow', 'require']);
+const PLACEMENT_MODES = new Set<string>(['declarationOrder', 'any', 'all']);
 
 function validateChunk(v: unknown, path: string): Chunk {
   if (!isObject(v)) fail(path, 'expected object');
@@ -196,6 +197,11 @@ function validateChunk(v: unknown, path: string): Chunk {
       m.set(reqString(k, `${path}.labelIndex.key`), reqNumber(val, `${path}.labelIndex.value`));
     }
     out.labelIndex = m;
+  }
+  if (v.placement !== undefined) {
+    const p = reqString(v.placement, `${path}.placement`);
+    if (!PLACEMENT_MODES.has(p)) fail(`${path}.placement`, `expected one of ${[...PLACEMENT_MODES].join('|')}`);
+    out.placement = p as PlacementMode;
   }
   return out;
 }

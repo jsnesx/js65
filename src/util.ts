@@ -163,7 +163,8 @@ export class SparseByteArray {
     const i = this._find(start);
     if (i < 0) throw new Error(`Absent: ${start}`);
     const [s, a] = this._chunks[i];
-    if (s + a.length < end) throw new Error(`Absent: ${s + a.length}`);
+    if (s + a.length < end)
+      throw new Error(`Absent: ${s + a.length}`);
     return a.slice(start - s, end - s);
   }
 
@@ -367,7 +368,6 @@ export class IntervalSet implements Iterable<readonly [number, number]> {
   protected _find(v: number): number {
     return binarySearch(this.data.length, (i: number) => {
       const entry = this.data[i];
-      //if (!entry) console.log(i, v);
       if (v < entry[0]) return -1;
       if (v >= entry[1]) return 1;
       return 0;

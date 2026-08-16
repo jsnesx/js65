@@ -48,6 +48,16 @@ describe('parseModule', () => {
     if (!bad.ok) expect(bad.error).toContain('overwrite');
   });
 
+  it('accepts chunk placement any/all and rejects bad values', () => {
+    const all = parseModule({ chunks: [{ segments: ['C'], data: b64([]), placement: 'all' }] });
+    expect(all.ok).toBe(true);
+    if (all.ok) expect(all.value.chunks![0].placement).toBe('all');
+    expect(parseModule({ chunks: [{ segments: ['C'], data: b64([]), placement: 'any' }] }).ok).toBe(true);
+    const bad = parseModule({ chunks: [{ segments: ['C'], data: b64([]), placement: 'sometimes' }] });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain('placement');
+  });
+
   it('rejects wrong field types with a path-qualified error', () => {
     expect(parseModule(42).ok).toBe(false);
     expect(parseModule({ chunks: 'nope' }).ok).toBe(false);

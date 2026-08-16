@@ -474,6 +474,14 @@ export class Assembler {
       //   this.fail(`.org chunks must be single-segment`);
       // }
       this._chunk = {segments: this.segments, data: []};
+      if (this.segments.length === 1) {
+        const maybeMirrored = this.segmentData.get(this.segments[0])?.mirror;
+        if ((maybeMirrored?.length ?? 0) > 1) {
+          // Mirrored means using the list of mirrors as the segment list, but with chunk placement all
+          this._chunk.segments = maybeMirrored!;
+          this._chunk.placement = 'all';
+        }
+      }
       if (this._org != null) this._chunk.org = this._org;
       if (this._name) this._chunk.name = this._name;
       if (this._pendingAlign != null) {
@@ -1025,7 +1033,8 @@ export class Assembler {
       symbols.push(out);
     }
     // declaration order is important here because anon segments define their output in order
-    const segments: mod.Segment[] = [...this.segmentData.values()];
+    // filtering out any mirrored segments from getting into the module for now.
+    const segments: mod.Segment[] = [...this.segmentData.values()].filter(s => s.mirror === undefined);
 
     // Collect all symbols from all scopes for debug purposes
     let debugSymbols: mod.Symbol[] | undefined = undefined;
@@ -2481,6 +2490,10 @@ export class Assembler {
       }
       this.fail(`Expected a segment list`, tokens[start - 1]);
     }
+    if (tokens.find(t => t.token == 'op' && t.str == '&')) {
+      return this.parseShorthandMirroredSegment(tokens);
+    }
+
     return Tokens.parseArgList(tokens, 1).map((ts, _i, all) => {
       // `.segment $8000 :size $4000` - an address rather than a name.
       if (ts[0]?.token === 'num') return this.parseAnonSegment(ts, all.length);
@@ -2587,6 +2600,24 @@ export class Assembler {
     }
 
     return seg;
+  }
+
+  /**
+   * .segment "A" & "B" & ... "Z" ; is shorthand for
+   * .segment "A&B&...&Z" :mirror {"A", "B", ... "Z"}
+   * No commas are allowed in this as the data should be mirrored into all segments listed
+   * Loads or creates a segment with the `:mirrored` attribute and returns just that one segment
+   */
+  parseShorthandMirroredSegment(ts: Token[]): Array<string|mod.Segment> {
+    // Find the list of named segments and reject if we have any attributes or commas
+    // skipping over the first `.segment` token
+    const segnames = ts.slice(1).filter(t => !(t.token === 'op' && t.str === '&'))
+                                .map( t => Tokens.expectString(t) ).sort();
+    const seg: mod.Segment = {
+      name: segnames.join('&'),
+      mirror: segnames,
+    };
+    return [seg];
   }
 
   parseResArgs(tokens: Token[]): [number, number?] {
