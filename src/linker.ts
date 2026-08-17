@@ -678,9 +678,12 @@ export class FreeSpace extends IntervalSet {
    * - the interval that contains the end address.
    * Our goal is to fit the largest things we have into the tightest box
    * possible to leave as much room for other large blocks as possible.
+   *
+   * `slack` receives the size of the hole that was chosen, so a caller
+   * comparing several windows can tell which one fits tightest.
    */
   bestFit(s0: number, s1: number, size: number, align: number,
-          delta: number): number|undefined {
+          delta: number, slack?: {value: number}): number|undefined {
     let found: number|undefined;
     let smallest = Infinity;
 
@@ -724,6 +727,7 @@ export class FreeSpace extends IntervalSet {
     if (hi >= 0 && this.data[hi][0] >= s0)
       consider(this.data[hi][0], s1);
 
+    if (slack) slack.value = smallest;
     return found;
   }
 }
@@ -1226,6 +1230,8 @@ class Link {
   /** True once any named (non-anonymous) segment has been registered. */
   private hasNamedSegment = false;
   private segmentIndex = new Map<string, number>();
+  /** Segment name -> representative of its overlap group. Built on first use. */
+  private overlapGroups: Map<string, string>|undefined;
   /** Names of mapped segments that other unmapped segments are written to. */
   private segmentMappings = new Set<string>();
   /** Track the `used` values for each mapped segment */
@@ -1517,13 +1523,16 @@ class Link {
     // Now place them. Segments are filled by declaration order first,
     // and within the segment, filled from largest to smalled. Anything that
     // still depends on a different segment can be resolved later.
+    // If a segment is part of a pool though, we want to fill the best fit across
+    // the pool instead of in a single segment
     const candidates = new Map<string, LinkChunk[]>();
     for (const chunk of this.chunks) {
       if (chunk.org != null) continue;  // already placed by fixedPlacement
       const [first] = this.eligibleSegments(chunk);
       if (first == null) continue;      // no segment at all: reported below
-      let list = candidates.get(first);
-      if (!list) candidates.set(first, list = []);
+      const key = this.overlapGroup(first);
+      let list = candidates.get(key);
+      if (!list) candidates.set(key, list = []);
       list.push(chunk);
     }
     const errorsBeforePlacement = this.errorCount();
@@ -1599,7 +1608,7 @@ class Link {
     const declared = new Set<string>();
     const composites = new Map<string, {
       members: readonly string[],
-      placement?: PlacementMode,
+      placement: PlacementMode,
       at?: {source?: SourceInfo},
     }>();
     // Remove all composite segments from the final list and build out the composite list
@@ -1612,7 +1621,7 @@ class Link {
       const at = this.segmentSource(name);
       composites.set(name, {
         members,
-        ...(seg.mirror ? {placement: 'all' as PlacementMode} : {}),
+        placement: (seg.mirror ? 'all' : 'any') as PlacementMode,
         ...(at ? {at} : {}),
       });
     }
@@ -1641,7 +1650,7 @@ class Link {
       }
       const composite = composites.get(named[0])!;
       chunk.segments = composite.members;
-      if (composite.placement) chunk.placement = composite.placement;
+      chunk.placement = composite.placement;
     });
     // from here on a composite name is not a segment anyone can place into.
     this.segmentOrder = this.segmentOrder.filter(n => !declared.has(n));
@@ -2113,7 +2122,8 @@ class Link {
   }
 
   /**
-   * The segments a chunk may go in, ordered by segment declaration.
+   * The segments a chunk may go in, ordered by segment declaration and not the order
+   * in the chunk's list of segments.
    * The chunk is placed in the first one it fits in, and defers to the rest in turn.
    * A chunk that named no segment at all falls back to the default segment.
    */
@@ -2137,6 +2147,48 @@ class Link {
     const order = (name: string) =>
         this.segmentIndex.get(name) ?? this.segmentIndex.size;
     return [...segments].sort((a, b) => order(a) - order(b));
+  }
+
+  /**
+   * Maps from a segment name to the "representative" of an overlapping
+   * group of segments. If you have A0, A1, A2 that are all :mem $a000
+   * then this builds a map of A0 -> A0, A1 -> A0, A2 -> A0 so that we
+   * can know which segments are in a group when laying out the chunks.
+   */
+  private overlapGroup(name: string): string {
+    if (!this.overlapGroups) {
+      this.overlapGroups = new Map();
+      // Traverse the segments in address order and build out a set of
+      // intervals for each of the overlapping memory spaces.
+      const spans: Array<[string, number, number]> = [];
+      for (const [n, s] of this.segments) {
+        if (s.size <= 0) continue;
+        const base = s.isRam ? s.memory + s.delta : s.offset;
+        spans.push([n, base, base + s.size]);
+      }
+      spans.sort((a, b) => a[1] - b[1] || a[2] - b[2]);
+      const order = (n: string) =>
+          this.segmentIndex.get(n) ?? this.segmentIndex.size;
+      let rep: string|undefined;
+      let reach = -Infinity;
+      for (const [n, lo, hi] of spans) {
+        // A window starting at or after everything seen so far cannot overlap
+        // any of it, so it opens a fresh group.
+        if (rep == null || lo >= reach) {
+          rep = n;
+          reach = hi;
+        } else {
+          reach = Math.max(reach, hi);
+          if (order(n) < order(rep)) rep = n;
+        }
+        this.overlapGroups.set(n, rep);
+      }
+      // Now promote the first declared segment as the group representative.
+      for (const [n, r] of this.overlapGroups) {
+        this.overlapGroups.set(n, this.overlapGroups.get(r) ?? r);
+      }
+    }
+    return this.overlapGroups.get(name) ?? name;
   }
 
   placeChunk(chunk: LinkChunk) {
@@ -2173,22 +2225,33 @@ class Link {
     }
     // either unresolved, or didn't find a match; just allocate space.
     // look for the smallest possible free block.
-    for (const name of segments) {
-      const segment = this.segment(name);
-      // For RAM segments, free space is tracked with RAM_OFFSET added to memory addresses
-      // For ROM segments, free space is tracked in file offset coordinates.
-      // Adjacent free ranges merge, so the space a mapped segment handed to the
-      // ones lowered into it has to be excluded here rather than left out of
-      // `free`.
-      const base = segment.isRam ? segment.memory + segment.delta : segment.offset;
-      const s0 = base + segment.used;
-      const s1 = base + segment.size;
-      // Any space skipped over for alignment stays free, so we can use it later.
-      const found = this.free.bestFit(s0, s1, size, align, segment.delta);
-      if (found != null) {
-        // found a region
-        chunk.place(found - segment.delta, segment);
-        // this.free.delete(f0, f0 + size);
+    for (let i = 0; i < segments.length;) {
+      const group = this.overlapGroup(segments[i]);
+      let best: {segment: LinkSegment, start: number, slack: number}|undefined;
+      // Check each of the segments that this chunk can be in, grouped by the segment group
+      // This inner list walks through each segment in the group, and the outer loop
+      // handles switching to the next segment group.
+      while (i < segments.length && this.overlapGroup(segments[i]) === group) {
+        const segment = this.segment(segments[i++]);
+        // For RAM segments, free space is tracked with RAM_OFFSET added to memory addresses
+        // For ROM segments, free space is tracked in file offset coordinates.
+        // Adjacent free ranges merge, so the space a mapped segment handed to the
+        // ones lowered into it has to be excluded here rather than left out of
+        // `free`.
+        const base = segment.isRam ? segment.memory + segment.delta : segment.offset;
+        const s0 = base + segment.used;
+        const s1 = base + segment.size;
+        // Any space skipped over for alignment stays free, so we can use it later.
+        // Slack is used here to determine the best fit in the group.
+        const slack = {value: Infinity};
+        const found = this.free.bestFit(s0, s1, size, align, segment.delta, slack);
+        if (found == null) continue;
+        if (best == null || slack.value < best.slack) {
+          best = {segment, start: found, slack: slack.value};
+        }
+      }
+      if (best) {
+        chunk.place(best.start - best.segment.delta, best.segment);
         // TODO - factor out the subs-aware copy method!
         return;
       }
