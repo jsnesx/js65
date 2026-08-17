@@ -1417,6 +1417,10 @@ class Link {
       }
       merged.set(name, s);
     }
+    // Composite segments are aliases and not real segments, we expand them here
+    // now that we should have all of the segments known.
+    this.expandComposites(merged);
+    this.stopIfFailed('the segment lists are not valid');
     // Resolve unmapped segments and hand out file offsets, so that everything
     // below sees plain memory/offset/size.
     this.lowerSegments(merged);
@@ -1583,6 +1587,75 @@ class Link {
     }
     if (DEBUG) console.log(this.report(true));
     return patch;
+  }
+
+  /**
+   * Replaces any mirror/pool composite segments into the appropriate list of segments,
+   * with the right attributes for placement.
+   */
+  private expandComposites(merged: Map<string, Segment>) {
+    const referenced = new Set(this.chunks.flatMap(c => [...c.segments]));
+    /** Every alias name including the optional ones. */
+    const declared = new Set<string>();
+    const composites = new Map<string, {
+      members: readonly string[],
+      placement?: PlacementMode,
+      at?: {source?: SourceInfo},
+    }>();
+    // Remove all composite segments from the final list and build out the composite list
+    for (const [name, seg] of merged) {
+      const members = seg.mirror ?? seg.pool;
+      if (!members) continue;
+      merged.delete(name);
+      declared.add(name);
+      if (seg.optional && !referenced.has(name)) continue;
+      const at = this.segmentSource(name);
+      composites.set(name, {
+        members,
+        ...(seg.mirror ? {placement: 'all' as PlacementMode} : {}),
+        ...(at ? {at} : {}),
+      });
+    }
+    if (!declared.size) return;
+    // Members are resolved after every composite is known, so that the error for
+    // a nested composite can tell it apart from a plain unknown segment.
+    this.collect(composites, ([name, {members, at}]) => {
+      for (const member of members) {
+        if (composites.has(member)) {
+          this.fail(`Segment ${name} lists ${member}, which is itself a ${
+              ''}segment list. Nesting is not supported`, at);
+        }
+        if (!merged.has(member)) {
+          this.fail(`Segment ${name} lists unknown segment ${member}`, at);
+        }
+      }
+    });
+    // Update all of the chunks that reference a composite segment to
+    // use the list of `segments` and the correct placement too.
+    this.collect(this.chunks, chunk => {
+      const named = chunk.segments.filter(s => composites.has(s));
+      if (!named.length) return;
+      if (chunk.segments.length > 1) {
+        this.fail(`Segment list ${named.join(', ')} cannot be combined with ${
+            ''}other segments: ${chunk.segments.join(', ')}`, chunk.at());
+      }
+      const composite = composites.get(named[0])!;
+      chunk.segments = composite.members;
+      if (composite.placement) chunk.placement = composite.placement;
+    });
+    // from here on a composite name is not a segment anyone can place into.
+    this.segmentOrder = this.segmentOrder.filter(n => !declared.has(n));
+    for (const name of declared) {
+      this.segmentIndex.delete(name);
+      this.rawSegments.delete(name);
+    }
+  }
+
+  private segmentSource(name: string): {source?: SourceInfo}|undefined {
+    for (const chunk of this.chunks) {
+      if (chunk.segments.includes(name)) return chunk.at();
+    }
+    return undefined;
   }
 
   /**

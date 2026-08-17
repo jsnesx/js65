@@ -47,10 +47,13 @@ export interface MemoryArea {
 
 export interface SegmentDef {
   name: string;
-  load: string;
-  run: string;
+  /** Unset only on an composite which names areas instead of loading into one. */
+  load?: string;
+  run?: string;
   /** Optional in the config. Defaults to the *load* area's type. */
   type: SegmentType;
+  mirror?: string[];
+  pool?: string[];
   // Unlike the MEMORY section, every numeric SEGMENTS attribute is a plain number
   align?: number;
   alignLoad?: number;
@@ -182,6 +185,14 @@ class Attrs {
     }
   }
 
+  checkForbidden(forbidden: readonly string[], because: string): void {
+    for (const key of forbidden) {
+      if (!this.values.has(key)) continue;
+      Tokens.fail(`'${key}' cannot be combined with '${because}'`,
+                  this.keys.get(key));
+    }
+  }
+
   expr(key: string): Expr|undefined {
     const value = this.values.get(key);
     if (!value) return undefined;
@@ -248,6 +259,39 @@ class Attrs {
     const value = this.name(key);
     if (value == null) Tokens.fail(`Missing required attribute '${key}'`, this.at);
     return value;
+  }
+
+  /**
+   * A braced list of names `key = {A, B}`. The list arrives as one
+   * pre-grouped token, so the commas were not split before here
+   * and so we can make them optional too.
+   */
+  nameList(key: string): string[]|undefined {
+    const value = this.values.get(key);
+    if (!value) return undefined;
+    const grp = value.length === 1 && value[0].token === 'grp' ?
+        value[0] : undefined;
+    if (!grp) {
+      Tokens.fail(`Value of '${key}' must be a braced list: ${key} = {A, B}`,
+                  value[0]);
+    }
+    const names: string[] = [];
+    for (const tok of grp.inner) {
+      if (Tokens.eq(tok, Tokens.COMMA)) continue;
+      if (tok.token !== 'ident' && tok.token !== 'str') {
+        Tokens.fail(`Value of '${key}' must be a list of names`, tok);
+      }
+      names.push(tok.str);
+    }
+    if (names.length < 2) {
+      Tokens.fail(`'${key}' needs at least two segments: ${
+          names.length ? names.join(', ') : '(empty)'}`, this.keys.get(key));
+    }
+    if (new Set(names).size !== names.length) {
+      Tokens.fail(`'${key}' contains a duplicate segment: ${names.join(', ')}`,
+                  this.keys.get(key));
+    }
+    return names;
   }
 }
 
@@ -397,8 +441,13 @@ const MEMORY_ATTRS = [
   'bank', 'define', 'file', 'fill', 'fillval', 'size', 'start', 'type',
 ];
 const SEGMENT_ATTRS = [
-  'align', 'align_load', 'define', 'fillval', 'load', 'offset', 'optional',
-  'run', 'start', 'type',
+  'align', 'align_load', 'define', 'fillval', 'load', 'mirror', 'offset',
+  'optional', 'pool', 'run', 'start', 'type',
+];
+
+const COMPOSITE_FORBIDDEN_ATTRS = [
+  'align', 'align_load', 'define', 'fillval', 'load', 'offset', 'run', 'start',
+  'type',
 ];
 
 function parseMemory(grp: Token[], at: Token, out: MemoryArea[]): void {
@@ -429,11 +478,30 @@ function parseSegments(grp: Token[], at: Token, out: RawSegmentDef[]): void {
     const name = statementName(stmt, 'SEGMENTS', out);
     const attrs = new Attrs(splitAttrs(stmt, 2), stmt[0]);
     attrs.checkKnown(SEGMENT_ATTRS, 'SEGMENTS');
+    const mirror = attrs.nameList('mirror');
+    const pool = attrs.nameList('pool');
+    if (mirror && pool) {
+      Tokens.fail(`Segment '${name}' cannot be both a 'mirror' and a 'pool'`,
+                  stmt[0]);
+    }
+    if (mirror || pool) {
+      const key = mirror ? 'mirror' : 'pool';
+      attrs.checkForbidden(COMPOSITE_FORBIDDEN_ATTRS, key);
+      out.push({
+        name,
+        ...(mirror ? {mirror} : {pool}),
+        optional: attrs.bool('optional', false),
+        define: false,
+        index: out.length,
+        at: stmt[0],
+      });
+      continue;
+    }
     const load = attrs.name('load');
     const run = attrs.name('run');
     if (load == null && run == null) {
-      Tokens.fail(`Segment '${name}' needs at least one of 'load' or 'run'`,
-                  stmt[0]);
+      Tokens.fail(`Segment '${name}' needs at least one of 'load', 'run', ${
+          ''}'mirror' or 'pool'`, stmt[0]);
     }
     out.push({
       name,
@@ -532,8 +600,22 @@ export function parseLinkerConfig(text: string, file = 'linker.cfg',
   const areas = new Map(memory.map(a => [a.name, a]));
   const segments = rawSegments.map(raw => {
     const {at, ...rest} = raw;
+    const members = rest.mirror ?? rest.pool;
+    if (members) {
+      for (const member of members) {
+        if (!areas.has(member)) {
+          Tokens.fail(`Segment '${rest.name}' lists ${member
+              }, which is not a MEMORY area`, at);
+        }
+      }
+      if (areas.has(rest.name)) {
+        Tokens.fail(`Segment '${rest.name}' shares its name with a MEMORY ${
+            ''}area. Rename one of them`, at);
+      }
+      return {...rest} as SegmentDef;
+    }
     for (const key of ['load', 'run'] as const) {
-      if (!areas.has(rest[key])) {
+      if (!areas.has(rest[key]!)) {
         Tokens.fail(`Segment '${rest.name}' has ${key} = ${rest[key]
             }, which is not a MEMORY area`, at);
       }
@@ -548,7 +630,7 @@ export function parseLinkerConfig(text: string, file = 'linker.cfg',
           ''}but does not load and run there. Rename one of them or use the MEMORY segment directly`, at);
     }
     // ld65 defaults a segment's type to that of the area it loads into.
-    return {...rest, type: rest.type ?? areas.get(rest.load)!.type} as SegmentDef;
+    return {...rest, type: rest.type ?? areas.get(rest.load!)!.type} as SegmentDef;
   });
 
   return {memory, segments, files, symbols};
@@ -614,10 +696,18 @@ export function lowerLinkerConfig(
   // And also all of the segment items into segments.
   for (const def of cfg.segments) {
     if (areas.has(def.name)) continue; // already merged into its area
+    const members = def.mirror ?? def.pool;
+    if (members) {
+      const seg: Segment = {name: def.name,
+                            ...(def.mirror ? {mirror: members} : {pool: members})};
+      if (def.optional) seg.optional = true;
+      out.push(seg);
+      continue;
+    }
     const seg: Segment = {name: def.name, load: def.load, run: def.run};
     // `start` is an absolute address. `offset` is relative to the run area.
     const memory = def.start ??
-        (def.offset != null ? areas.get(def.run)!.memory! + def.offset
+        (def.offset != null ? areas.get(def.run!)!.memory! + def.offset
                             : undefined);
     if (memory != null) seg.memory = memory;
     if (def.align != null) seg.align = def.align;

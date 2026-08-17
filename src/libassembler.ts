@@ -769,7 +769,7 @@ export function deserializeRequest(requestJson: string): Js65Request {
 
 /**
  * The main entrypoint which does all the compile steps (assembly + link)
- * Builds everything end to end into one amalgamated output.
+ * Builds everything end to end into the requested output files.
  *
  * @param inputs - sources / modules / action lists to assemble and link
  * @param options - compile options for assembler and linker, similar to the CLI options

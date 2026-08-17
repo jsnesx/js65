@@ -134,6 +134,8 @@ export interface Segment {
   free?: number[][];
   /** Linker is required to place data in ALL of the segments in the list */
   mirror?: string[];
+  /** Linker places data in ANY ONE of the segments in the list */
+  pool?: string[];
 }
 
 export const RESERVED_SEGMENT_PREFIX = '@';
