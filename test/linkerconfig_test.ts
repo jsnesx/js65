@@ -474,7 +474,7 @@ FILES {
        /load = NOPE, which is not a MEMORY area/],
       ['a segment with neither load nor run',
        `MEMORY {\n  A: start = $0, size = $10;\n}\nSEGMENTS {\n  S: type = ro;\n}`,
-       /needs at least one of 'load' or 'run'/],
+       /needs at least one of 'load', 'run', 'mirror' or 'pool'/],
       ['a duplicated area',
        `MEMORY {\n  A: start = $0, size = $10;\n  A: start = $20, size = $10;\n}`,
        /Duplicate MEMORY entry: A/],
@@ -633,6 +633,98 @@ describe('lowerLinkerConfig', function() {
       // `offset` is relative to the run area, unlike `start`.
       {name: 'TABLE', load: 'PRG', run: 'PRG', memory: 0x8200},
     ]);
+  });
+
+  describe('composite segments', function() {
+
+    function expectRejected(cfg: string, message: RegExp) {
+      let err: unknown;
+      try {
+        lower(cfg);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(SourceError);
+      expect((err as Error).message).toMatch(message);
+    }
+
+    const AREAS = `MEMORY {
+      PRG1: start = $8000, size = $4000, file = %O, fill = yes, bank = 1;
+      PRG2: start = $8000, size = $4000, file = %O, fill = yes, bank = 2;
+    }`;
+
+    it('should lower a mirror composite', function() {
+      expect(lower(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}; }`).slice(2))
+          .toEqual([{name: 'COMMON', mirror: ['PRG1', 'PRG2']}]);
+    });
+
+    it('should lower a pool composite', function() {
+      expect(lower(`${AREAS}
+        SEGMENTS { MUSIC: pool = {PRG1, PRG2}; }`).slice(2))
+          .toEqual([{name: 'MUSIC', pool: ['PRG1', 'PRG2']}]);
+    });
+
+    // `splitAttrs` drops depth-0 commas, but the braced list arrives as one
+    // pre-grouped token so its commas survive. Both spellings must agree.
+    it('should accept a comma-less member list', function() {
+      expect(lower(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1 PRG2}; }`).slice(2))
+          .toEqual([{name: 'COMMON', mirror: ['PRG1', 'PRG2']}]);
+    });
+
+    it('should still reject duplicate attributes', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}, mirror = {PRG1, PRG2}; }`,
+                     /Duplicate attribute/i);
+    });
+
+    it('should reject an composite named after a memory area', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { PRG1: mirror = {PRG1, PRG2}; }`, /area|name/i);
+    });
+
+    it('should reject an unknown member', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, NOPE}; }`, /NOPE/);
+    });
+
+    it('should reject mapping attributes alongside an composite', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}, run = PRG1; }`, /mirror|run/i);
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}, load = PRG1; }`,
+                     /mirror|load/i);
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}, start = $9000; }`,
+                     /mirror|start/i);
+    });
+
+    it('should reject both mirror and pool on one entry', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}, pool = {PRG1, PRG2}; }`,
+                     /mirror|pool/i);
+    });
+
+    it('should reject a single-member or empty list', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1}; }`, /at least two|two or more|single/i);
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = {}; }`, /empty|at least two|two or more/i);
+    });
+
+    it('should require braces around the member list', function() {
+      expectRejected(`${AREAS}
+        SEGMENTS { COMMON: mirror = PRG1; }`, /list|brace/i);
+    });
+
+    // `optional` survives lowering here exactly like it does on any other
+    // segment; the linker is what drops it when nothing references it.
+    it('should carry optional through to the lowered composite', function() {
+      expect(lower(`${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}, optional = yes; }`).slice(2))
+          .toEqual([{name: 'COMMON', mirror: ['PRG1', 'PRG2'], optional: true}]);
+    });
   });
 
   describe('a segment sharing its area\'s name', function() {

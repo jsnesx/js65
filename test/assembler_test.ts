@@ -1486,6 +1486,9 @@ lda bar
     });
   });
 
+  // `.segment "A" & "B"` declares the mirror `"A&B"` and uses it in one
+  // statement. The chunk names that alias; the linker is what turns the name
+  // into the member list (see `composite segments` in linker_test.ts).
   describe('mirror .segment lists', function() {
     it('should parse an &-separated segment list', function() {
       const m = assembleModule(`
@@ -1493,8 +1496,8 @@ lda bar
 .byte 1
 `);
       expect(m.chunks!.length).toBe(1);
-      expect(m.chunks![0].segments).toEqual(['A', 'B']);
-      expect(m.chunks![0].placement).toBe('all');
+      expect(m.chunks![0].segments).toEqual(['A&B']);
+      expect(m.segments).toEqual([{name: 'A&B', mirror: ['A', 'B']}]);
     });
 
     it('should leave a comma list a pool, not a mirror', function() {
@@ -1518,14 +1521,20 @@ lda bar
 .byte 4
 .popseg
 `);
-      expect(m.chunks!.map(c => [c.segments, c.placement ?? 'any', [...c.data]]))
-          .toEqual([
-            [['A', 'B'], 'all', [1, 3]],
-            [['C'], 'any', [2]],
-            [['A', 'C'], 'all', [4]],
-          ]);
+      expect(m.chunks!.map(c => [c.segments, [...c.data]])).toEqual([
+        [['A&B'], [1, 3]],
+        [['C'], [2]],
+        [['A&C'], [4]],
+      ]);
+      // Only the two aliases are declarations; `"C"` is a bare name.
+      expect(m.segments).toEqual([
+        {name: 'A&B', mirror: ['A', 'B']},
+        {name: 'A&C', mirror: ['A', 'C']},
+      ]);
     });
 
+    // A mirror and a pool over the same two segments are different places, so
+    // `.org` in one must not pick up where the other left off.
     it('should keep .org PCs separate per list mode', function() {
       const m = assembleModule(`
 .segment "A" & "B"
@@ -1539,14 +1548,12 @@ lda bar
 .segment "A", "B"
 .byte 4
 `);
-      expect(m.chunks!.map(
-                 c => [c.segments, c.placement ?? 'any', c.org, [...c.data]]))
-          .toEqual([
-            [['A', 'B'], 'all', 0x8000, [1]],
-            [['A', 'B'], 'any', 0x8100, [2]],
-            [['A', 'B'], 'all', 0x8001, [3]],
-            [['A', 'B'], 'any', 0x8101, [4]],
-          ]);
+      expect(m.chunks!.map(c => [c.segments, c.org, [...c.data]])).toEqual([
+        [['A&B'], 0x8000, [1]],
+        [['A', 'B'], 0x8100, [2]],
+        [['A&B'], 0x8001, [3]],
+        [['A', 'B'], 0x8101, [4]],
+      ]);
     });
 
     it('should reject mixing , and & separators', function() {
@@ -1557,6 +1564,142 @@ lda bar
     it('should reject an anonymous segment in an & list', function() {
       expect(() => assembleModule(`.segment $8000 :size $10 & "B"\n`)).toThrow();
       expect(() => assembleModule(`.segment "A" & $8000 :size $10\n`)).toThrow();
+    });
+  });
+
+  // The assembler only records the declaration and the name each chunk used.
+  // Turning the name into its members is the linker's job, since the two may
+  // be in different modules - see `composite segments` in linker_test.ts.
+  describe('composite .segment declarations', function() {
+    // `.segment "A" & "B"` is defined as shorthand for a declaration of
+    // `.segment "A&B" :mirror {"A", "B"}` followed by a use of that name, so
+    // the two spellings have to keep producing the same module.
+    it('should declare a mirror composite usable by name', function() {
+      const m = assembleModule(`
+.segment "A&B" :mirror {"A", "B"}
+.segment "A&B"
+.byte 1
+`);
+      expect(m.chunks!.length).toBe(1);
+      expect(m.chunks![0].segments).toEqual(['A&B']);
+      expect(m.segments).toEqual([{name: 'A&B', mirror: ['A', 'B']}]);
+    });
+
+    it('should make the & shorthand equivalent to its declaration', function() {
+      const shorthand = assembleModule(`
+.segment "A" & "B"
+.byte 1, 2
+`);
+      const declared = assembleModule(`
+.segment "A&B" :mirror {"A", "B"}
+.segment "A&B"
+.byte 1, 2
+`);
+      expect(declared.chunks).toEqual(shorthand.chunks);
+      expect(declared.segments).toEqual(shorthand.segments);
+    });
+
+    // A use of the name is just a use of the name, whether or not the
+    // declaration is in this module. Only the linker needs to tell them apart.
+    it('should name the composite on the chunk, not its members', function() {
+      const declared = assembleModule(`
+.segment "COMMON" :mirror {"A", "B"}
+.segment "COMMON"
+.byte 1
+`);
+      const undeclared = assembleModule(`
+.segment "COMMON"
+.byte 1
+`);
+      expect(declared.chunks![0].segments).toEqual(['COMMON']);
+      expect(declared.chunks![0].placement).toBeUndefined();
+      expect(undeclared.chunks).toEqual(declared.chunks);
+    });
+
+    it('should allow an arbitrary name and keep the written member order',
+       function() {
+      // Unlike the & shorthand, which sorts members and derives the name from
+      // them, a declaration names itself and preserves the order as written.
+      const m = assembleModule(`
+.segment "COMMON" :mirror {"B", "A"}
+.segment "COMMON"
+.byte 1
+`);
+      expect(m.segments).toEqual([{name: 'COMMON', mirror: ['B', 'A']}]);
+    });
+
+    it('should accept a comma-less member list', function() {
+      const m = assembleModule(`
+.segment "COMMON" :mirror {"A" "B"}
+.segment "COMMON"
+.byte 1
+`);
+      expect(m.segments).toEqual([{name: 'COMMON', mirror: ['A', 'B']}]);
+    });
+
+    it('should declare a pool composite', function() {
+      const m = assembleModule(`
+.segment "MUSIC" :pool {"A", "B"}
+.segment "MUSIC"
+.byte 1
+`);
+      expect(m.segments).toEqual([{name: 'MUSIC', pool: ['A', 'B']}]);
+      expect(m.chunks![0].segments).toEqual(['MUSIC']);
+    });
+
+    it('should apply the segment prefix to members', function() {
+      const m = assembleModule(`
+.segmentprefix "p"
+.segment "COMMON" :mirror {"A", "B"}
+.segment "COMMON"
+.byte 1
+`);
+      expect(m.segments).toEqual([{name: 'pCOMMON', mirror: ['pA', 'pB']}]);
+    });
+
+    // A single-member list is not a mirror; it would just be an alias, which
+    // this feature deliberately does not provide.
+    it('should reject a single-member composite', function() {
+      expect(() => assembleModule(`.segment "X" :mirror {"A"}\n`))
+          .toThrow(/at least two|two or more|single/i);
+      expect(() => assembleModule(`.segment "X" :pool {"A"}\n`))
+          .toThrow(/at least two|two or more|single/i);
+    });
+
+    it('should reject an empty member list', function() {
+      expect(() => assembleModule(`.segment "X" :mirror {}\n`))
+          .toThrow(/empty|at least two|two or more/i);
+    });
+
+    it('should reject duplicate members', function() {
+      expect(() => assembleModule(`.segment "X" :mirror {"A", "A"}\n`))
+          .toThrow(/duplicate/i);
+    });
+
+    it('should reject a non-string member', function() {
+      expect(() => assembleModule(`.segment "X" :mirror {"A", 5}\n`))
+          .toThrow(/string/i);
+    });
+
+    it('should require braces around the member list', function() {
+      expect(() => assembleModule(`.segment "X" :mirror "A"\n`))
+          .toThrow(/braced list|brace/i);
+      expect(() => assembleModule(`.segment "X" :mirror "A", "B"\n`))
+          .toThrow(/braced list|brace/i);
+    });
+
+    it('should reject both :mirror and :pool on one declaration', function() {
+      expect(() => assembleModule(
+                 `.segment "X" :mirror {"A", "B"} :pool {"A", "B"}\n`))
+          .toThrow(/mirror|pool/i);
+    });
+
+    it('should reject geometry attributes on an composite', function() {
+      for (const attr of [':size $100', ':mem $8000', ':off 0', ':load "A"']) {
+        expect(() => assembleModule(
+                   `.segment "X" :mirror {"A", "B"} ${attr}\n`))
+            .toThrow(/Cannot use other segment attributes/i);
+      }
     });
   });
 

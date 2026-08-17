@@ -1337,6 +1337,143 @@ describe('Linker', function() {
           .toEqual([[0, [0x00, 0x03, 0x04, 0x03, 0x04, 0x03]]]);
     });
   });
+
+  // A `:mirror`/`:pool` declaration names a list of segments. The assembler
+  // expands the ones it can see, so what reaches the linker is either an
+  // already-expanded chunk or a bare name it has to resolve here.
+  describe('composite segments', function() {
+    const AREAS: Segment[] = [{
+      name: 'A', size: 0x8, offset: 0x0, memory: 0x8000, fill: 0,
+      free: [[0x8000, 0x8008]],
+    }, {
+      name: 'B', size: 0x8, offset: 0x8, memory: 0x8000, fill: 0,
+      free: [[0x8000, 0x8008]],
+    }];
+
+    it('should mirror a chunk that names a mirror composite', function() {
+      const m = {
+        chunks: [{segments: ['COMMON'], data: Uint8Array.of(0xa9, 0x42, 0x60)}],
+        segments: [...AREAS, {name: 'COMMON', mirror: ['A', 'B']}],
+      };
+      expect(chunks(link(m))).toEqual([
+        [0, [0xa9, 0x42, 0x60, 0, 0, 0, 0, 0,
+             0xa9, 0x42, 0x60, 0, 0, 0, 0, 0]],
+      ]);
+    });
+
+    it('should spread chunks that name a pool composite', function() {
+      const m = {
+        chunks: [
+          {segments: ['MUSIC'], data: Uint8Array.of(1, 2, 3, 4, 5)},
+          {segments: ['MUSIC'], data: Uint8Array.of(6, 7, 8, 9)},
+        ],
+        segments: [...AREAS, {name: 'MUSIC', pool: ['A', 'B']}],
+      };
+      // The first chunk leaves A too full for the second, which spills into B
+      // rather than being mirrored.
+      expect(chunks(link(m))).toEqual([
+        [0, [1, 2, 3, 4, 5, 0, 0, 0,
+             6, 7, 8, 9, 0, 0, 0, 0]],
+      ]);
+    });
+
+    // A pool name and the comma list it stands for have to place identically -
+    // the alias adds a name, not a placement mode.
+    it('should place a pool composite exactly like the comma list', function() {
+      const data = [Uint8Array.of(1, 2, 3, 4, 5), Uint8Array.of(6, 7, 8, 9)];
+      const viaName = {
+        chunks: data.map(d => ({segments: ['MUSIC'], data: d})),
+        segments: [...AREAS, {name: 'MUSIC', pool: ['A', 'B']}],
+      };
+      const viaList = {
+        chunks: data.map(d => ({segments: ['A', 'B'], data: d})),
+        segments: [...AREAS],
+      };
+      expect(chunks(link(viaName))).toEqual(chunks(link(viaList)));
+    });
+
+    // Likewise a mirror name against the `&` shorthand's expansion.
+    it('should place a mirror composite exactly like the explicit list',
+       function() {
+      const data = Uint8Array.of(0xa9, 0x42, 0x60);
+      const viaName = {
+        chunks: [{segments: ['COMMON'], data}],
+        segments: [...AREAS, {name: 'COMMON', mirror: ['A', 'B']}],
+      };
+      const viaList = {
+        chunks: [{segments: ['A', 'B'], placement: 'all' as const, data}],
+        segments: [...AREAS],
+      };
+      expect(chunks(link(viaName))).toEqual(chunks(link(viaList)));
+    });
+
+    // The reason expansion belongs here and not in the assembler: the module
+    // that uses the name never saw the declaration.
+    it('should resolve an composite declared in another module', function() {
+      const declaring = {segments: [...AREAS, {name: 'COMMON', mirror: ['A', 'B']}]};
+      const using = {
+        chunks: [{segments: ['COMMON'], data: Uint8Array.of(0x60)}],
+      };
+      expect(chunks(link(using, declaring))).toEqual([
+        [0, [0x60, 0, 0, 0, 0, 0, 0, 0,
+             0x60, 0, 0, 0, 0, 0, 0, 0]],
+      ]);
+    });
+
+    it('should resolve a label in a mirror composite to the shared org',
+       function() {
+      const m = {
+        chunks: [{
+          segments: ['COMMON'],
+          data: Uint8Array.of(0x60, 0xff, 0xff),
+          subs: [{offset: 1, size: 2, expr: off(0, 0)}],
+        }],
+        segments: [...AREAS, {name: 'COMMON', mirror: ['A', 'B']}],
+      };
+      expect(chunks(link(m))).toEqual([
+        [0, [0x60, 0x00, 0x80, 0, 0, 0, 0, 0,
+             0x60, 0x00, 0x80, 0, 0, 0, 0, 0]],
+      ]);
+    });
+
+    it('should reject an composite listing an unknown segment', function() {
+      const m = {
+        chunks: [{segments: ['COMMON'], data: Uint8Array.of(1)}],
+        segments: [...AREAS, {name: 'COMMON', mirror: ['A', 'NOPE']}],
+      };
+      expect(() => link(m)).toThrow(/NOPE/);
+    });
+
+    it('should reject a nested composite', function() {
+      const m = {
+        chunks: [{segments: ['OUTER'], data: Uint8Array.of(1)}],
+        segments: [...AREAS, {name: 'INNER', mirror: ['A', 'B']},
+                   {name: 'OUTER', mirror: ['A', 'INNER']}],
+      };
+      expect(() => link(m)).toThrow(/Nesting/i);
+    });
+
+    it('should reject an composite name mixed with other segments', function() {
+      const m = {
+        chunks: [{segments: ['COMMON', 'A'], data: Uint8Array.of(1)}],
+        segments: [...AREAS, {name: 'COMMON', mirror: ['A', 'B']}],
+      };
+      expect(() => link(m)).toThrow(/cannot be combined/i);
+    });
+
+    it('should drop an unreferenced optional composite', function() {
+      const m = {
+        chunks: [{segments: ['A'], data: Uint8Array.of(1)}],
+        // Members don't even have to exist when the alias goes unused.
+        segments: [...AREAS,
+                   {name: 'UNUSED', mirror: ['NOPE1', 'NOPE2'], optional: true}],
+      };
+      expect(chunks(link(m))).toEqual([
+        [0, [1, 0, 0, 0, 0, 0, 0, 0,
+             0, 0, 0, 0, 0, 0, 0, 0]],
+      ]);
+    });
+  });
 });
 
 describe('Linker with an ld65 config', function() {
@@ -1880,6 +2017,75 @@ describe('Linker with an ld65 config', function() {
     }
     expect(err).toBeInstanceOf(SourceError);
     expect((err as SourceError).source).toMatchObject({file: 'test.cfg'});
+  });
+
+  describe('composite segments', function() {
+    const AREAS = `MEMORY {
+        PRG1: start = $8000, size = $8, file = %O, fill = yes, bank = 1;
+        PRG2: start = $8000, size = $8, file = %O, fill = yes, bank = 2;
+      }`;
+
+    it('should mirror a chunk named by a cfg composite into every member',
+       function() {
+      const cfg = `${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}; }`;
+      const m = {
+        chunks: [{segments: ['COMMON'], data: Uint8Array.of(0xa9, 0x42, 0x60)}],
+      };
+      // One org shared by both areas, so the same three bytes land at each
+      // area's own file offset and both areas fill the rest.
+      expect(chunks(linkCfg(cfg, m))).toEqual([
+        [0, [0xa9, 0x42, 0x60, 0, 0, 0, 0, 0,
+             0xa9, 0x42, 0x60, 0, 0, 0, 0, 0]],
+      ]);
+    });
+
+    it('should spread chunks named by a cfg pool composite across members',
+       function() {
+      const cfg = `${AREAS}
+        SEGMENTS { MUSIC: pool = {PRG1, PRG2}; }`;
+      const m = {
+        chunks: [
+          {segments: ['MUSIC'], data: Uint8Array.of(1, 2, 3, 4, 5)},
+          {segments: ['MUSIC'], data: Uint8Array.of(6, 7, 8, 9)},
+        ],
+      };
+      // The first chunk fills most of PRG1; the second no longer fits there
+      // and spills into PRG2 rather than being mirrored.
+      expect(chunks(linkCfg(cfg, m))).toEqual([
+        [0, [1, 2, 3, 4, 5, 0, 0, 0,
+             6, 7, 8, 9, 0, 0, 0, 0]],
+      ]);
+    });
+
+    it('should resolve a label in a cfg mirror composite to the shared org',
+       function() {
+      const cfg = `${AREAS}
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}; }`;
+      const m = {
+        chunks: [{
+          segments: ['COMMON'],
+          data: Uint8Array.of(0x60, 0xff, 0xff),
+          subs: [{offset: 1, size: 2, expr: off(0, 0)}],
+        }],
+      };
+      expect(chunks(linkCfg(cfg, m))).toEqual([
+        [0, [0x60, 0x00, 0x80, 0, 0, 0, 0, 0,
+             0x60, 0x00, 0x80, 0, 0, 0, 0, 0]],
+      ]);
+    });
+
+    it('should fail a cfg mirror that does not fit every member', function() {
+      const cfg = `MEMORY {
+          PRG1: start = $8000, size = $8, file = %O, fill = yes, bank = 1;
+          PRG2: start = $8000, size = $2, file = %O, fill = yes, bank = 2;
+        }
+        SEGMENTS { COMMON: mirror = {PRG1, PRG2}; }`;
+      const m = {
+        chunks: [{segments: ['COMMON'], data: Uint8Array.of(1, 2, 3, 4)}],
+      };
+      expect(() => linkCfg(cfg, m)).toThrow(/PRG1 & PRG2|mirrored across/);
+    });
   });
 });
 

@@ -478,6 +478,31 @@ Test:
       expect(warnings.length).toBe(2);
       expect(warnings.every(m => /bank/i.test(m.message))).toBe(true);
     });
+
+    // The point of a named `:mirror`: a library module writes `.segment
+    // "COMMON"` without knowing the bank names, and only the linker - which
+    // sees every module - can expand the name into them.
+    it('should mirror through a :mirror declared in another module', function() {
+      const banks: AssemblyInput = {type: 'source', name: 'banks.s', code: `
+.segment "PRG0" :bank 0 :size $10 :mem $8000 :off $00 :fill $00
+.segment "PRG1" :bank 1 :size $10 :mem $8000 :off $10 :fill $00
+.segment "COMMON" :mirror {"PRG0", "PRG1"}
+`};
+      const lib: AssemblyInput = {type: 'source', name: 'lib.s', code: `
+.segment "COMMON"
+.reloc
+Trampoline:
+  lda #$42
+  rts
+`};
+      const result = compile([lib, banks], {lineContinuations: true});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const data = result.outputs[0].data;
+      expect(data.length).toBe(0x20);
+      const code = [0xa9, 0x42, 0x60];
+      expect([...data.slice(0x00, 0x03)]).toEqual(code);
+      expect([...data.slice(0x10, 0x13)]).toEqual(code);
+    });
   });
 
   describe('ROM patching with base ROM', function() {

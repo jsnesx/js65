@@ -474,14 +474,6 @@ export class Assembler {
       //   this.fail(`.org chunks must be single-segment`);
       // }
       this._chunk = {segments: this.segments, data: []};
-      if (this.segments.length === 1) {
-        const maybeMirrored = this.segmentData.get(this.segments[0])?.mirror;
-        if ((maybeMirrored?.length ?? 0) > 1) {
-          // Mirrored means using the list of mirrors as the segment list, but with chunk placement all
-          this._chunk.segments = maybeMirrored!;
-          this._chunk.placement = 'all';
-        }
-      }
       if (this._org != null) this._chunk.org = this._org;
       if (this._name) this._chunk.name = this._name;
       if (this._pendingAlign != null) {
@@ -1033,8 +1025,7 @@ export class Assembler {
       symbols.push(out);
     }
     // declaration order is important here because anon segments define their output in order
-    // filtering out any mirrored segments from getting into the module for now.
-    const segments: mod.Segment[] = [...this.segmentData.values()].filter(s => s.mirror === undefined);
+    const segments: mod.Segment[] = [...this.segmentData.values()];
 
     // Collect all symbols from all scopes for debug purposes
     let debugSymbols: mod.Symbol[] | undefined = undefined;
@@ -2508,10 +2499,14 @@ export class Assembler {
       if (!Tokens.eq(ts[1], Tokens.COLON)) {
         this.fail(`Expected comma or colon: ${Tokens.name(ts[1])}`, ts[1]);
       }
+      let nonCompositeAttrSeen = false;
       const seg = {name: str} as mod.Segment;
       // TODO - parse expressions...
       const attrs = Tokens.parseAttrList(ts, 1); // : ident [...]
       for (const [key, val] of attrs) {
+        if (key !== 'mirror' && key !== 'pool') {
+          nonCompositeAttrSeen = true;
+        }
         switch (key) {
           case 'bank': seg.bank = this.parseConst(val, 0); break;
           case 'size': seg.size = this.parseConst(val, 0); break;
@@ -2533,8 +2528,21 @@ export class Assembler {
           case 'default': seg.default = this.parseFlag(val, key); break;
           // js65 has no read-only concept, so accept and ignore ld65's types.
           case 'ro': case 'rw': break;
+          case 'mirror':
+            seg.mirror = this.parseSegmentNameList(val, key, ts[1]);
+            break;
+          case 'pool':
+            seg.pool = this.parseSegmentNameList(val, key, ts[1]);
+            break;
           default: this.fail(`Unknown segment attr: ${key}`);
         }
+      }
+      if (seg.mirror && seg.pool) {
+        this.fail(`A segment may not have both \`:mirror\` and \`:pool\``, ts[1]);
+      }
+      if (nonCompositeAttrSeen && (seg.mirror || seg.pool)) {
+        this.fail(`Cannot use other segment attributes when \`:${
+            seg.mirror ? 'mirror' : 'pool'}\` is used`, ts[1]);
       }
       // Only auto-assign offset if segment has an output file specified
       // Segments without :out and without :off are RAM segments (no file output)
@@ -2547,6 +2555,38 @@ export class Assembler {
       }
       return seg;
     });
+  }
+
+  parseSegmentNameList(val: Token[], key: string, at?: Token): string[] {
+    const grp = val.length === 1 && val[0].token === 'grp' ? val[0] : undefined;
+    if (!grp) {
+      this.fail(`Segment attr ${key} expects a braced list: :${key} {"A", "B"}`,
+                at);
+    }
+    const names: string[] = [];
+    for (const tok of grp.inner) {
+      if (Tokens.eq(tok, Tokens.COMMA)) continue;
+      if (tok.token !== 'str') {
+        this.fail(`Segment attr ${key} expects a list of segment name strings`,
+                  tok);
+      }
+      names.push(tok.str);
+    }
+    return this.checkCompositeMembers(names, key, at);
+  }
+
+  private checkCompositeMembers(names: string[], key: string,
+                              at?: Token): string[] {
+    if (names.length < 2) {
+      this.fail(`Segment attr ${key} needs at least two segments: ${
+          names.length ? names.join(', ') : '(empty)'}`, at);
+    }
+    const prefixed = names.map(n => this._segmentPrefix + n);
+    if (new Set(prefixed).size !== prefixed.length) {
+      this.fail(`Segment attr ${key} contains a duplicate segment: ${
+          prefixed.join(', ')}`, at);
+    }
+    return prefixed;
   }
 
   /**
@@ -2613,9 +2653,10 @@ export class Assembler {
     // skipping over the first `.segment` token
     const segnames = ts.slice(1).filter(t => !(t.token === 'op' && t.str === '&'))
                                 .map( t => Tokens.expectString(t) ).sort();
+    const mirror = this.checkCompositeMembers(segnames, 'mirror', ts[0]);
     const seg: mod.Segment = {
-      name: segnames.join('&'),
-      mirror: segnames,
+      name: mirror.join('&'),
+      mirror,
     };
     return [seg];
   }

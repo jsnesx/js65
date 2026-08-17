@@ -247,6 +247,11 @@ function validateSegment(v: unknown, path: string): Segment {
       return r.map((n, j) => reqNumber(n, `${path}.free[${i}][${j}]`));
     });
   }
+  for (const key of ['mirror', 'pool'] as const) {
+    if (v[key] === undefined) continue;
+    out[key] = reqArray(v[key], `${path}.${key}`)
+      .map((s, i) => reqString(s, `${path}.${key}[${i}]`));
+  }
   return out;
 }
 
