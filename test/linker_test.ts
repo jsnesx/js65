@@ -377,6 +377,105 @@ describe('Linker', function() {
         .toEqual([[0, [1, 2, 3, 4, 9, 5, 6, 7, 8]]]);
   });
 
+  it('should pack overlapping segments as one pool', function() {
+    // Two banks over the same window. Filling them one at a time in
+    // declaration order strands the 3-byte chunk: 'a' takes 4+3, leaving 1,
+    // and the last 3 bytes have to open 'b'. Treated as one pool the tight
+    // holes get spent first and everything fits in 'a'.
+    const m = {
+      chunks: [
+        {segments: ['a', 'b'], data: Uint8Array.of(1, 1, 1, 1)},
+        {segments: ['a', 'b'], data: Uint8Array.of(2, 2, 2)},
+        {segments: ['a', 'b'], data: Uint8Array.of(3, 3, 3)},
+      ],
+      segments: [
+        {name: 'a', size: 10, offset: 0, memory: 0x8000, free: [[0x8000, 0x800a]]},
+        {name: 'b', size: 10, offset: 10, memory: 0x8000, free: [[0x8000, 0x800a]]},
+      ],
+    };
+    expect(chunks(link(m))).toEqual([[0, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3]]]);
+  });
+
+  it('should keep declaration order for disjoint segments', function() {
+    // The fixed-bank-last idiom: FIXED has the smaller hole, but a disjoint
+    // window must not be raided just because it fits tighter. SWITCH is
+    // declared first and so takes the chunk.
+    const m = {
+      chunks: [{segments: ['SWITCH', 'FIXED'], data: Uint8Array.of(1, 2, 3)}],
+      segments: [
+        {name: 'SWITCH', size: 8, offset: 0, memory: 0x8000,
+         free: [[0x8000, 0x8008]]},
+        {name: 'FIXED', size: 4, offset: 8, memory: 0xc000,
+         free: [[0xc000, 0xc004]]},
+      ],
+    };
+    expect(chunks(link(m))).toEqual([[0, [1, 2, 3]]]);
+  });
+
+  it('should use a disjoint segment only once the overlap group is full',
+     function() {
+    // Mixed list: 'a'/'b' share a window and pack together; the disjoint
+    // FIXED is overflow only, and keeps its declaration-order priority.
+    const m = {
+      chunks: [
+        {segments: ['a', 'b', 'FIXED'], data: Uint8Array.of(1, 1, 1, 1)},
+        {segments: ['a', 'b', 'FIXED'], data: Uint8Array.of(2, 2, 2, 2)},
+        {segments: ['a', 'b', 'FIXED'], data: Uint8Array.of(3, 3, 3, 3)},
+      ],
+      segments: [
+        {name: 'a', size: 4, offset: 0, memory: 0x8000, free: [[0x8000, 0x8004]]},
+        {name: 'b', size: 4, offset: 4, memory: 0x8000, free: [[0x8000, 0x8004]]},
+        {name: 'FIXED', size: 4, offset: 8, memory: 0xc000,
+         free: [[0xc000, 0xc004]]},
+      ],
+    };
+    expect(chunks(link(m)))
+        .toEqual([[0, [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]]]);
+  });
+
+  it('should group overlapping segments that interleave in declaration order',
+     function() {
+    // Declaration order alternates between the two windows, so the members of
+    // a group are not written next to each other. Grouping keys off the
+    // earliest member, which is what keeps each group contiguous once the
+    // eligible list is sorted by declaration.
+    const m = {
+      chunks: [
+        {segments: ['a', 'X', 'b', 'Y'], data: Uint8Array.of(1, 1, 1, 1)},
+        {segments: ['a', 'X', 'b', 'Y'], data: Uint8Array.of(2, 2, 2)},
+        {segments: ['a', 'X', 'b', 'Y'], data: Uint8Array.of(3, 3, 3)},
+      ],
+      segments: [
+        {name: 'a', size: 4, offset: 0, memory: 0x8000, free: [[0x8000, 0x8004]]},
+        {name: 'X', size: 4, offset: 4, memory: 0xc000, free: [[0xc000, 0xc004]]},
+        {name: 'b', size: 4, offset: 8, memory: 0x8000, free: [[0x8000, 0x8004]]},
+        {name: 'Y', size: 4, offset: 12, memory: 0xc000, free: [[0xc000, 0xc004]]},
+      ],
+    };
+    // 'a' and 'b' pack as one pool; the $c000 group is never reached.
+    expect(chunks(link(m))).toEqual([[0, [1, 1, 1, 1, 2, 2, 2]], [8, [3, 3, 3]]]);
+  });
+
+  it('should place a pool the same however its members are ordered', function() {
+    // The guarantee `:pool` adds: the order the members were written in does
+    // not reach placement, so a reordered list links byte-identically.
+    const segments = [
+      {name: 'a', size: 6, offset: 0, memory: 0x8000, free: [[0x8000, 0x8006]]},
+      {name: 'b', size: 6, offset: 6, memory: 0x8000, free: [[0x8000, 0x8006]]},
+      {name: 'c', size: 6, offset: 12, memory: 0x8000, free: [[0x8000, 0x8006]]},
+    ];
+    const build = (list: string[]) => chunks(link({
+      chunks: [
+        {segments: list, data: Uint8Array.of(1, 1, 1, 1, 1), placement: 'any'},
+        {segments: list, data: Uint8Array.of(2, 2, 2), placement: 'any'},
+        {segments: list, data: Uint8Array.of(3, 3, 3, 3), placement: 'any'},
+      ],
+      segments,
+    }));
+    expect(build(['c', 'a', 'b'])).toEqual(build(['a', 'b', 'c']));
+    expect(build(['b', 'c', 'a'])).toEqual(build(['a', 'b', 'c']));
+  });
+
   it('should measure an unmapped segment and pack it into the mapped one', function() {
     const m = {
       chunks: [{
@@ -1017,9 +1116,11 @@ describe('Linker', function() {
     };
     const linker = new Linker({target: 'nes-nrom'});
     // Header at $00, then PRG: the three ROM segments share one window, so
-    // they hand out consecutive space rather than colliding.
+    // they hand out consecutive space rather than colliding. Sharing a window
+    // also makes them one overlap group, which packs largest chunk first, so
+    // RODATA's three bytes land ahead of the two single-byte chunks.
     expect([...linker.read(m).link().slice(0x10, 0x15)])
-        .toEqual([0x60, 1, 2, 3, 0xaa]);
+        .toEqual([1, 2, 3, 0x60, 0xaa]);
   });
 
   it('should report a chunk whose segment nobody declared', function() {

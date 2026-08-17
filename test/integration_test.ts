@@ -505,6 +505,44 @@ Trampoline:
     });
   });
 
+  describe('pool segments (:pool)', function() {
+    const banks = [
+      '.segment "PRG0" :bank 0 :size 8 :mem $8000 :off $00 :fill $00',
+      '.segment "PRG1" :bank 1 :size 8 :mem $8000 :off $08 :fill $00',
+    ].join('\n');
+    const body = (seg: string) => [
+      `.segment ${seg}`, '  .byte 1,1,1,1',
+      `.segment ${seg}`, '  .byte 2,2,2',
+      `.segment ${seg}`, '  .byte 3,3,3',
+    ].join('\n');
+    const build = (code: string) => {
+      const input: AssemblyInput = {type: 'source', code, name: 'pool.s'};
+      const result = compile([input], {lineContinuations: true});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      return [...result.outputs[0].data];
+    };
+
+    // `:pool` names a list; it must not become a second placement engine.
+    it('should place a :pool list the same as the equivalent comma list',
+       function() {
+      const pool = build(
+          `${banks}\n.segment "MUSIC" :pool {"PRG0", "PRG1"}\n${body('"MUSIC"')}`);
+      expect(pool).toEqual(build(`${banks}\n${body('"PRG0", "PRG1"')}`));
+      // Two overlapping banks packed as one pool: 4+3 fill PRG0, and the
+      // last 3 spill into PRG1 rather than opening a hole in PRG0.
+      expect(pool).toEqual([1, 1, 1, 1, 2, 2, 2, 0, 3, 3, 3, 0, 0, 0, 0, 0]);
+    });
+
+    it('should place a :pool the same however its members are ordered',
+       function() {
+      const forward = build(
+          `${banks}\n.segment "MUSIC" :pool {"PRG0", "PRG1"}\n${body('"MUSIC"')}`);
+      const reversed = build(
+          `${banks}\n.segment "MUSIC" :pool {"PRG1", "PRG0"}\n${body('"MUSIC"')}`);
+      expect(reversed).toEqual(forward);
+    });
+  });
+
   describe('ROM patching with base ROM', function() {
     it('should patch specific locations in base ROM', function() {
       // Create a base ROM filled with $FF
