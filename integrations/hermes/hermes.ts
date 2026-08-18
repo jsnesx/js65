@@ -148,12 +148,9 @@ function runLibraryMode(): void {
   const callbacks = {
     resolveText: (bases: readonly string[], filePath: string) => {
       const hit = __js65_cbResolveText(bases, filePath);
-      return hit && {base: bases[hit.baseIndex], content: stripBom(hit.content)};
+      return hit && {baseIndex: hit.baseIndex, content: stripBom(hit.content)};
     },
-    resolveBinary: (bases: readonly string[], filePath: string) => {
-      const hit = __js65_cbResolveBinary(bases, filePath);
-      return hit && {base: bases[hit.baseIndex], content: hit.content};
-    },
+    resolveBinary: (bases: readonly string[], filePath: string) => __js65_cbResolveBinary(bases, filePath),
   };
 
   // Bare CancelSignal that polls the host cancel flag (Hermes ships no AbortController). The

@@ -71,8 +71,8 @@ internal class BrowserCompileResult
 // Return value sent as a json encoded string to a fileCallback
 internal class BrowserResolvedFile
 {
-    [JsonPropertyName("base")]
-    public string Base { get; set; } = "";
+    [JsonPropertyName("baseIndex")]
+    public int BaseIndex { get; set; }
 
     [JsonPropertyName("content")]
     public string Content { get; set; } = "";
@@ -248,9 +248,9 @@ public partial class BrowserJsEngine : Assembler
     private static string[] ParseBasePaths(string basePathsJson) =>
         JsonSerializer.Deserialize(basePathsJson, AssmeblerContext.Default.StringArray) ?? [];
 
-    private static string Pack(string basePath, string content) =>
+    private static string Pack(int baseIndex, string content) =>
         JsonSerializer.Serialize(
-            new BrowserResolvedFile { Base = basePath, Content = content },
+            new BrowserResolvedFile { BaseIndex = baseIndex, Content = content },
             AssmeblerContext.Default.BrowserResolvedFile);
 
     private string LoadTextFileCallback(string basePathsJson, string filePath)
@@ -261,18 +261,18 @@ public partial class BrowserJsEngine : Assembler
         if (Callbacks?.OnFileResolveText != null)
         {
             var hit = Callbacks.OnFileResolveText.Invoke(bases, filePath);
-            return hit is null ? "" : Pack(hit.BasePath, hit.Content);
+            return hit is null ? "" : Pack(hit.BaseIndex, hit.Content);
         }
 
         // Fall back to JS module callback if configured. It reads one full path at a time,
         // so the search loop runs here rather than crossing into JS once per probe.
         if (_fileCallbackModule != null && _fileCallbackConfig != null)
         {
-            foreach (var basePath in bases)
+            for (var i = 0; i < bases.Length; i++)
             {
-                var fullPath = CombinePath(basePath, filePath);
+                var fullPath = CombinePath(bases[i], filePath);
                 var text = CallModuleFunction(_fileCallbackModule, _fileCallbackConfig.ReadTextFuncName, fullPath, "");
-                if (!string.IsNullOrEmpty(text)) return Pack(basePath, text);
+                if (!string.IsNullOrEmpty(text)) return Pack(i, text);
             }
         }
 
@@ -289,17 +289,17 @@ public partial class BrowserJsEngine : Assembler
         if (Callbacks?.OnFileResolveBinary != null)
         {
             var hit = Callbacks.OnFileResolveBinary.Invoke(bases, filePath);
-            return hit is null ? "" : Pack(hit.BasePath, Convert.ToBase64String(hit.Content));
+            return hit is null ? "" : Pack(hit.BaseIndex, Convert.ToBase64String(hit.Content));
         }
 
         // Fall back to JS module callback if configured (also returns base64).
         if (_fileCallbackModule != null && _fileCallbackConfig != null)
         {
-            foreach (var basePath in bases)
+            for (var i = 0; i < bases.Length; i++)
             {
-                var fullPath = CombinePath(basePath, filePath);
+                var fullPath = CombinePath(bases[i], filePath);
                 var b64 = CallModuleFunction(_fileCallbackModule, _fileCallbackConfig.ReadBinaryFuncName, fullPath, "");
-                if (!string.IsNullOrEmpty(b64)) return Pack(basePath, b64);
+                if (!string.IsNullOrEmpty(b64)) return Pack(i, b64);
             }
         }
 
