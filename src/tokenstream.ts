@@ -53,8 +53,26 @@ const MACPACK: Map<string, string> = new Map(
   ]
 );
 
-export interface ReadFileCallback { (path: string, filename: string) : string }
-export interface ReadFileBinaryCallback { (path: string, filename: string) : Uint8Array|string }
+/**
+ * A file located by searching the include directories: the base it was found under,
+ * plus its contents. The base is kept because two `header.inc` files in different
+ * directories must resolve to distinct paths, especially for debugging info.
+ */
+export interface ResolvedFile<T> {
+  base: string;
+  content: T;
+}
+
+/**
+ * Searches `bases` in order for `filename` and reads the first hit, returning
+ * `undefined` when no base has it.
+ */
+export interface ResolveFileCallback {
+  (bases: readonly string[], filename: string): ResolvedFile<string> | undefined;
+}
+export interface ResolveFileBinaryCallback {
+  (bases: readonly string[], filename: string): ResolvedFile<Uint8Array|string> | undefined;
+}
 
 export class SourceContents {
   data: Map<string, string> = new Map<string, string>();
@@ -64,8 +82,8 @@ export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
 
   constructor(
-    readonly readFile?: ReadFileCallback,
-    readonly readFileBinary?: ReadFileBinaryCallback,
+    readonly resolveFile?: ResolveFileCallback,
+    readonly resolveFileBinary?: ResolveFileBinaryCallback,
     readonly opts?: Options,
     readonly sourceContents?: SourceContents,
     readonly errorCollector?: ErrorCollector) {}
@@ -75,18 +93,13 @@ export class TokenStream implements Tokens.Source {
     return this.stack.length ? this.stack[this.stack.length - 1].dir : undefined;
   }
 
-  // Try each search directory in turn, returning the first that loads along with
-  // the base it loaded from.
+  // Hand the whole search list to the frontend and let it report the winner. A
+  // frontend that finds nothing returns undefined
   loadFile<T>(path: string, bases: string[],
-             action: (path: string, filename: string) => T,
-             at?: Token): {value: T, base: string} {
-    for (const base of bases) {
-      try {
-        return {value: action(base, path), base};
-      } catch (_e) {
-        // unable to load the file at that path, try the next include directory.
-      }
-    }
+             resolve: (bases: readonly string[], filename: string) => ResolvedFile<T> | undefined,
+             at?: Token): ResolvedFile<T> {
+    const found = resolve(bases, path);
+    if (found) return found;
     // Report against the .include/.incbin line so the diagnostic carries a source location.
     Tokens.fail(`Could not find file ${path} in include directories: ${bases.join(",")}`, at);
   }
@@ -117,12 +130,12 @@ export class TokenStream implements Tokens.Source {
   }
 
   include(path: string, at?: Token): void {
-    if (!this.readFile) {
+    if (!this.resolveFile) {
       Tokens.fail(`Cannot read file, no reader available: ${path}`, at);
     }
     // TODO - options?
-    const {value: code, base} = this.loadFile<string>(
-        path, this.includeSearch(), this.readFile, at);
+    const {content: code, base} = this.loadFile<string>(
+        path, this.includeSearch(), this.resolveFile, at);
     // Dont use the name of the file for the include, use the resolved
     // path so that two "header.inc" files in different dirs have the correct path.
     const resolved = joinDir(base, path);
@@ -142,17 +155,17 @@ export class TokenStream implements Tokens.Source {
 
   incbin(path: string, offset: number, length: number|undefined,
          at?: Token): string {
-    if (!this.readFileBinary) {
+    if (!this.resolveFileBinary) {
       Tokens.fail(`Cannot read binary file, no reader available: ${path}`, at);
     }
     const loaded = this.loadFile<Uint8Array|string>(
-        path, this.binIncludeSearch(), this.readFileBinary, at);
+        path, this.binIncludeSearch(), this.resolveFileBinary, at);
     // The callback hands back either base64 or bytes, and the caller may slice
     // it, so decode to bytes, slice, then re-encode.
     // TODO this is a little jank, but we base64 encode the binary file for now
     // so it can be loaded faster without parsing later.
-    const bytes = typeof loaded.value === 'string' ?
-        new Base64().decode(loaded.value) : loaded.value;
+    const bytes = typeof loaded.content === 'string' ?
+        new Base64().decode(loaded.content) : loaded.content;
     const end = length !== undefined ? offset + length : undefined;
     return new Base64().encode(bytes.slice(offset, end));
   }

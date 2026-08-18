@@ -3,7 +3,7 @@
 
 import { Base64 } from '../base64.ts';
 import { SourceError, type AssemblerMessage } from '../error.ts';
-import { compile, deserializeObjectFile, findOutput, isGzip, type AssemblyInput,
+import { compile, deserializeObjectFile, findOutput, isGzip, searchFiles, type AssemblyInput,
          type CompileResult, type FileCallbacks, type Js65Options } from '../libassembler.ts';
 import type { LintOptions, SymbolDefine } from '../options.ts';
 import { dirOf, joinDir } from '../util.ts';
@@ -41,9 +41,11 @@ export class BuildSession {
 
   constructor(readonly callbacks: Callbacks) {}
 
+  // The search loop runs here so only the base that actually hits is recorded as a
+  // dependency and cached; the misses along the way leave no trace.
   readonly fileCallbacks: FileCallbacks = {
-    readText: (path, filename) => this.readSource(path, filename),
-    readBinary: (path, filename) => this.readBinary(path, filename),
+    resolveText: searchFiles((path, filename) => this.readSource(path, filename)),
+    resolveBinary: searchFiles((path, filename) => this.readBinary(path, filename)),
   };
 
   reset() {

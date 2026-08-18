@@ -218,14 +218,14 @@ extern "C" JS65_EXPORT const Js65Result *js65_compile(
     const char *requestJson,
     const uint8_t *baseRom,
     int32_t baseRomLen,
-    Js65ReadFn readText,
-    Js65ReadFn readBinary,
+    Js65ResolveFn resolveText,
+    Js65ResolveFn resolveBinary,
     const int32_t *cancelFlag) {
   std::lock_guard<std::mutex> lock(g_compileMutex);
 
   HostContext host;
-  host.readText = readText;
-  host.readBinary = readBinary;
+  host.resolveText = resolveText;
+  host.resolveBinary = resolveBinary;
   host.readCtx = ctx;
   host.cancelFlag = cancelFlag;
   host.request = requestJson ? requestJson : "";

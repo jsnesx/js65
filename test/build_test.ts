@@ -83,10 +83,10 @@ describe('BuildSession dependency tracking', function() {
     const {session: s} = session(
         {'main.s': 'a', 'inc/defs.inc': 'b', 'assets/tiles.chr': 'c'});
     await s.readInput('main.s');
-    await s.fileCallbacks.readText('inc', 'defs.inc');
-    await s.fileCallbacks.readBinary('assets', 'tiles.chr');
+    s.fileCallbacks.resolveText(['inc'], 'defs.inc');
+    s.fileCallbacks.resolveBinary(['assets'], 'tiles.chr');
     // The same header included twice is still one prerequisite.
-    await s.fileCallbacks.readText('inc', 'defs.inc');
+    s.fileCallbacks.resolveText(['inc'], 'defs.inc');
     expect(s.dependencies()).toEqual(['main.s', 'inc/defs.inc', 'assets/tiles.chr']);
   });
 
@@ -99,7 +99,7 @@ describe('BuildSession dependency tracking', function() {
   it('writes the target and a phony rule for each prerequisite', async function() {
     const {session: s, text} = session({'main.s': 'a', 'my src/defs.inc': 'b'});
     await s.readInput('main.s');
-    await s.fileCallbacks.readText('my src', 'defs.inc');
+    s.fileCallbacks.resolveText(['my src'], 'defs.inc');
     await s.writeDepFile('out.d', './out.nes');
     // Spaces have to be escaped for make, and the target is normalized first.
     expect(text('out.d')).toBe(

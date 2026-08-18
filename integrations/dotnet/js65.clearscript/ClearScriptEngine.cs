@@ -21,9 +21,11 @@ public class ClearScriptEngine : Assembler, IDisposable
     /// Initialize the Clearscript backed assembler engine.
     /// </summary>
     /// <param name="options"></param>
-    /// <param name="useFileSystemCallbacks"></param>
+    /// <param name="callbacks">Resolve callbacks for <c>.include</c>/<c>.incbin</c>. Defaults to
+    /// <see cref="Js65FileSystemCallbacks.Default"/>, which reads from disk.</param>
     /// <param name="debugJavascript">Sets clearscript flags to debug the internal javascript</param>
-    public ClearScriptEngine(Js65Options? options = null, bool useFileSystemCallbacks = true, bool debugJavascript = false) : base(options)
+    public ClearScriptEngine(Js65Options? options = null, Js65Callbacks? callbacks = null, bool debugJavascript = false)
+        : base(options, callbacks ?? Js65FileSystemCallbacks.Default)
     {
         // If you need to debug the javascript, add these flags and connect to the debugger through vscode.
         // follow this tutorial for how https://clearscript.clearfoundry.net/Details/Build.html#_Debugging_with_ClearScript_2
@@ -43,14 +45,6 @@ public class ClearScriptEngine : Assembler, IDisposable
         // Load the js65 code from the embedded resources
         var libassembler = ReadResource(typeof(ClearScriptEngine).Assembly, "js65.libassembler.js");
         _engine.DocumentSettings.AddSystemDocument("@system/libassembler", ModuleCategory.Standard,libassembler);
-
-        // Setup the filesystem callbacks
-        if (!useFileSystemCallbacks) return;
-        Callbacks = new()
-        {
-            OnFileReadText = LoadTextFileCallback,
-            OnFileReadBinary = LoadBinaryFileCallback
-        };
     }
     
     public override async Task<Js65CompileResult> Apply(byte[] rom, CancellationToken ct = default)
@@ -58,6 +52,8 @@ public class ClearScriptEngine : Assembler, IDisposable
         _engine.AddHostTypes(typeof(Task), typeof(Console), typeof(JavaScriptExtensions), typeof(Js65Callbacks), typeof(Js65Options));
         // Clearscript doesn't handle null objects, so just default if its missing.
         _engine.AddHostObject("FileCallbacks", Callbacks ?? new Js65Callbacks());
+        _engine.Script.hostList = new Func<System.Collections.IList, string[]>(
+            bases => Enumerable.Range(0, bases.Count).Select(i => (string)bases[i]!).ToArray());
         // The JS polls hostCancel.IsCancellationRequested; a boxed CancellationToken still
         // reflects cancellation because the struct references the underlying token source.
         _engine.AddHostObject("hostCancel", ct);
@@ -85,9 +81,20 @@ function toU8(hostBytes) {
     for (let i = 0; i < n; i++) u8[i] = hostBytes[i];
     return u8;
 }
+// The whole include search list crosses to the host in one call, as a string[] the
+// resolve delegates take directly (IReadOnlyList<string>).
+const toHostList = (bases) => hostList(bases);
+// The host owns the search, so one .include costs one interop crossing no matter how
+// many directories it had to try, and a resource-backed host answers from a lookup.
 const callbacks = {
-    readText: (basePath, relPath) => FileCallbacks.OnFileReadText(basePath, relPath),
-    readBinary: (basePath, relPath) => toU8(FileCallbacks.OnFileReadBinary(basePath, relPath)),
+    resolveText: (bases, relPath) => {
+        const hit = FileCallbacks.OnFileResolveText(toHostList(bases), relPath);
+        return hit && {base: hit.BasePath, content: hit.Content};
+    },
+    resolveBinary: (bases, relPath) => {
+        const hit = FileCallbacks.OnFileResolveBinary(toHostList(bases), relPath);
+        return hit && {base: hit.BasePath, content: toU8(hit.Content)};
+    },
 };
 // Bare CancelSignal polling the host token (V8 ships no AbortController); the core reads
 // .aborted at per-line / per-chunk boundaries so a long compile cancels cooperatively.
@@ -182,25 +189,6 @@ if (typeof globalThis.TextDecoder === 'undefined') {
         using var stream = assembly.GetManifestResourceStream(name)!;
         using StreamReader reader = new(stream);
         return reader.ReadToEnd();
-    }
-
-    private static string? ExeBasePath => Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location);
-
-    private static string LoadTextFileCallback(string basePath, string relPath)
-    {
-        var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, relPath));
-        if (!File.Exists(fullPath))
-            throw new FileNotFoundException($"Could not find file {fullPath}");
-        var data = File.ReadAllText(fullPath);
-        return data;
-    }
-    private static byte[] LoadBinaryFileCallback(string basePath, string relPath)
-    {
-        var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, relPath));
-        if (!File.Exists(fullPath))
-            throw new FileNotFoundException($"Could not find file {fullPath}");
-        var data = File.ReadAllBytes(fullPath);
-        return data;
     }
 
     public override void Dispose()

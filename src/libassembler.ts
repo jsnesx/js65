@@ -30,7 +30,7 @@ import { applyFeatures,
          type TokenizerOptions } from './options.ts';
 import { LintPragmas } from './lint.ts';
 import * as Tokens from './token.ts';
-import { TokenStream, SourceContents } from './tokenstream.ts';
+import { TokenStream, SourceContents, type ResolvedFile } from './tokenstream.ts';
 import { type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest } from "./validate_modules.ts";
 import * as Exprs from './expr.ts';
@@ -42,6 +42,7 @@ import { gzipCodec } from './driver/codec/codec.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
+export type { ResolvedFile };
 export type { Expr, Module, Segment, SymbolDefine, SymbolIndex };
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
@@ -222,11 +223,34 @@ export interface OutputFile {
 }
 
 /**
- * File system callbacks for .include/.incbin directives
+ * File system callbacks for .include/.incbin directives.
+ * Each frontend is expected to walk through each base path in order,
+ * trying to load the file `filename` and resolve the file location if found.
+ * If the file is not found, then return null/undefined.
  */
 export interface FileCallbacks {
-  readText: (path: string, filename: string) => string;
-  readBinary: (path: string, filename: string) => Uint8Array | string;
+  resolveText: (bases: readonly string[], filename: string) => ResolvedFile<string> | undefined;
+  resolveBinary: (bases: readonly string[], filename: string) => ResolvedFile<Uint8Array | string> | undefined;
+}
+
+/**
+ * Helper function to try each file in a basePath list you can use if you don't
+ * need anything special.
+ */
+export function searchFiles<T>(
+  read: (base: string, filename: string) => T | undefined,
+): (bases: readonly string[], filename: string) => ResolvedFile<T> | undefined {
+  return (bases, filename) => {
+    for (const base of bases) {
+      try {
+        const content = read(base, filename);
+        if (content !== undefined) return {base, content};
+      } catch (_e) {
+        // Not in this directory; try the next one.
+      }
+    }
+    return undefined;
+  };
 }
 
 /** Result type for assemble that includes collected messages */
@@ -359,8 +383,8 @@ export function assemble(
             case 'code': {
               // For code actions, we need to tokenize and process through the full pipeline
               const toks = new TokenStream(
-                callbacks?.readText,
-                callbacks?.readBinary,
+                callbacks?.resolveText,
+                callbacks?.resolveBinary,
                 opts,
                 sourceContents,
                 asm.errorCollector
@@ -499,8 +523,8 @@ export function assemble(
       const {opts, asmOpts} = moduleOpts(input.name);
       const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
       const toks = new TokenStream(
-        callbacks?.readText,
-        callbacks?.readBinary,
+        callbacks?.resolveText,
+        callbacks?.resolveBinary,
         opts,
         sourceContents,
         asm.errorCollector
@@ -819,17 +843,20 @@ export function compile(
     const sourceContents = options.generateDebugInfo ? new SourceContents() : undefined;
 
     // .include / .incbin readers. They are optional (sources may use neither); a missing
-    // one only fails if a directive actually needs it. readBinary may hand back base64
+    // one only fails if a directive actually needs it. resolveBinary may hand back base64
     // (some hosts can only marshal binary as a string), so decode it to bytes here.
     const fileCallbacks: FileCallbacks = {
-      readText: (basePath, relPath) => {
-        if (!callbacks?.readText) throw new Error(`No readText callback provided (reading ${basePath}/${relPath})`);
-        return callbacks.readText(basePath, relPath);
+      resolveText: (bases, relPath) => {
+        if (!callbacks?.resolveText) throw new Error(`No resolveText callback provided (reading ${relPath})`);
+        return callbacks.resolveText(bases, relPath);
       },
-      readBinary: (basePath, relPath) => {
-        if (!callbacks?.readBinary) throw new Error(`No readBinary callback provided (reading ${basePath}/${relPath})`);
-        const data = callbacks.readBinary(basePath, relPath);
-        return typeof data === 'string' ? base64.decode(data) : data;
+      resolveBinary: (bases, relPath) => {
+        if (!callbacks?.resolveBinary) throw new Error(`No resolveBinary callback provided (reading ${relPath})`);
+        const found = callbacks.resolveBinary(bases, relPath);
+        if (!found) return undefined;
+        return typeof found.content === 'string'
+            ? {base: found.base, content: base64.decode(found.content)}
+            : found;
       },
     };
 
@@ -897,15 +924,24 @@ export function compileRequest(
  */
 export function compileBrowser(
   requestJson: string,
-  readText: (basePath: string, relPath: string) => string,
-  readBinaryBase64: (basePath: string, relPath: string) => string,
+  resolveText: (basePathsJson: string, relPath: string) => string,
+  resolveBinaryBase64: (basePathsJson: string, relPath: string) => string,
   baseRom: ArrayLike<number> | undefined,
   shouldCancel?: () => boolean,
 ): string {
   const base64 = new Base64();
+  // JSImport cannot marshal a string[] param or a struct return through a callback, so we
+  // marshall the data into a simple json struct and restore it to an object here.
+  const unpack = <T,>(json: string, decode: (s: string) => T): ResolvedFile<T> | undefined => {
+    if (!json) return undefined;
+    const hit = JSON.parse(json) as {base: string, content: string};
+    return {base: hit.base, content: decode(hit.content)};
+  };
   const callbacks: FileCallbacks = {
-    readText: (basePath, relPath) => readText(basePath, relPath),
-    readBinary: (basePath, relPath) => base64.decode(readBinaryBase64(basePath, relPath)),
+    resolveText: (bases, relPath) =>
+        unpack(resolveText(JSON.stringify(bases), relPath), s => s),
+    resolveBinary: (bases, relPath) =>
+        unpack(resolveBinaryBase64(JSON.stringify(bases), relPath), s => base64.decode(s)),
   };
   // The marshaller hands the byte[] param across as a JS number array; normalize to a
   // real Uint8Array for the linker.

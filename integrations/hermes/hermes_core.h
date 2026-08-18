@@ -2,7 +2,7 @@
 
 // Shared host core for the Static Hermes js65 frontend. The CLI executable
 // (hermes_host.cpp) and the shared library (hermes_lib.cpp) are thin entry points over
-// this core. They differ only in which Js65ReadFn pair they register (filesystem vs.
+// this core. They differ only in which Js65ResolveFn pair they register (filesystem vs.
 // host-supplied function pointers) and in their entry-specific bindings (stdin/stdout vs.
 // the request/result protocol). The JSI helpers, the read bindings and the runtime
 // bootstrap live here as the single source of truth.
@@ -30,9 +30,9 @@ using namespace facebook;
 // Host state shared with the JS bindings for one runJs65Core call. Lives on the entry's stack
 // and outlives the runtime created inside runJs65Core.
 struct HostContext {
-  // Backs __js65_cbReadText / __js65_cbReadBinary.
-  Js65ReadFn readText = nullptr;
-  Js65ReadFn readBinary = nullptr;
+  // Backs __js65_cbResolveText / __js65_cbResolveBinary.
+  Js65ResolveFn resolveText = nullptr;
+  Js65ResolveFn resolveBinary = nullptr;
   void *readCtx = nullptr;
 
   // Backs __js65_cancelled: host-owned flag flipped from another thread to cancel the
@@ -64,15 +64,17 @@ void writeFileBytes(jsi::Runtime &rt, const std::filesystem::path &path, const s
 // resolve includes to the same target.
 std::filesystem::path resolvePath(std::string_view base, std::string_view file);
 
-// Filesystem-backed Js65ReadFn implementations: read a file relative to the include base.
-// The CLI registers these as its read callbacks.
-int32_t fsReadText(void *ctx, const char *basePath, const char *relPath,
-                   const uint8_t **outData, int32_t *outLen);
-int32_t fsReadBinary(void *ctx, const char *basePath, const char *relPath,
-                     const uint8_t **outData, int32_t *outLen);
+// Filesystem-backed Js65ResolveFn implementations: search each base in order and read the
+// first that has the file. The CLI registers these as its resolve callbacks.
+int32_t fsResolveText(void *ctx, const char *const *basePaths, int32_t basePathCount,
+                      const char *relPath, int32_t *outBase,
+                      const uint8_t **outData, int32_t *outLen);
+int32_t fsResolveBinary(void *ctx, const char *const *basePaths, int32_t basePathCount,
+                        const char *relPath, int32_t *outBase,
+                        const uint8_t **outData, int32_t *outLen);
 
-// Install the bindings both entries share: __js65_args, the read callbacks
-// (__js65_cbReadText / __js65_cbReadBinary), __js65_writeText / __js65_writeBytes,
+// Install the bindings both entries share: __js65_args, the resolve callbacks
+// (__js65_cbResolveText / __js65_cbResolveBinary), __js65_writeText / __js65_writeBytes,
 // __js65_listDir, __js65_exit, and __js65_gzip / __js65_gunzip.
 void installCommonBindings(jsi::Runtime &rt, HostContext &ctx);
 

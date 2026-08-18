@@ -4,14 +4,35 @@ using System.Text.Json.Serialization;
 
 namespace js65;
 
+/// <summary>
+/// Returned by the resolve callbacks, both the path where the file was found and the
+/// actual file contents. <c>null</c> means the file wasn't found in the basePath.
+/// </summary>
+/// <param name="BasePath">The entry of basePaths that had the file.</param>
+/// <param name="Content">The file's contents.</param>
+public record Js65ResolvedText(string BasePath, string Content);
+
+/// <inheritdoc cref="Js65ResolvedText"/>
+public record Js65ResolvedBinary(string BasePath, byte[] Content);
+
 public record Js65Callbacks
 {
     public const string STDIN = "//stdin";
     public const string STDOUT = "//stdout";
-    public delegate string FileReadText(string basePath, string file);
-    public delegate byte[] FileReadBinary(string basePath, string file);
-    public FileReadText? OnFileReadText { get; set; }
-    public FileReadBinary? OnFileReadBinary { get; set; }
+
+    /// <summary>
+    /// Called by the assembler when its time to load a file (either through .include or similar)
+    /// The frontend is expected to go through the list of paths in order and try loading the file.
+    /// If it's found, return both the path it was found, and the actual data, otherwise null to
+    /// indicate nothing was found.
+    /// </summary>
+    public delegate Js65ResolvedText? FileResolveText(IReadOnlyList<string> basePaths, string file);
+
+    /// <inheritdoc cref="FileResolveText"/>
+    public delegate Js65ResolvedBinary? FileResolveBinary(IReadOnlyList<string> basePaths, string file);
+
+    public FileResolveText? OnFileResolveText { get; set; }
+    public FileResolveBinary? OnFileResolveBinary { get; set; }
 }
 
 public record Js65Options

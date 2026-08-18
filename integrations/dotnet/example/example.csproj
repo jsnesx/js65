@@ -42,11 +42,14 @@
   <!-- Exclude DesktopExample.cs when building for browser -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-browser'">
     <Compile Remove="DesktopExample.cs" />
+    <Compile Remove="Properties\DesktopAssemblyInfo.cs" />
   </ItemGroup>
 
-  <!-- Exclude BrowserExample.cs when building for desktop -->
+  <!-- Exclude BrowserExample.cs when building for desktop. AssemblyInfo.cs marks the whole
+       assembly as browser-only, which would make the desktop engines look unreachable here. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <Compile Remove="BrowserExample.cs" />
+    <Compile Remove="Properties\AssemblyInfo.cs" />
   </ItemGroup>
 
 </Project>

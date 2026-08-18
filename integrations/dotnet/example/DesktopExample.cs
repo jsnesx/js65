@@ -197,21 +197,26 @@ Console.WriteLine($"included file should write constant ($89) at address $8089: 
 // Second mini-example demonstrating how to use Callbacks
 // Both desktop engines resolve .include / .incbin through Js65Callbacks.
 // The default load file callbacks will read from disk, but you can override them to load from where you want.
-// In this example, we serve one straight from memory with nothing on disk. Pass
-// useFileSystemCallbacks: false to opt out of the default disk loader, then supply your own.
+// In this example, we serve one straight from memory with nothing on disk. Passing your own
+// Js65Callbacks replaces the default disk loader entirely.
 Console.WriteLine();
 Console.WriteLine("Custom callback demo: serving an include from memory");
-Assembler memAsm = useHermes
-  ? new HermesEngine(useFileSystemCallbacks: false)
-  : new ClearScriptEngine(useFileSystemCallbacks: false);
-memAsm.Options.includePaths = ["./"];
-memAsm.Callbacks = new Js65Callbacks
+// The callbacks are passed a list of paths to check in order and the file name that you should open.
+// You can implement this however makes sense for your target platform, for instance, if you wanted
+// to read embedded text files in a fake filesystem.
+// Returning null tells the assembler that the file was not found.
+var embedded = new Dictionary<string, string> { ["constants.inc"] = "CUSTOM_CONSTANT = $42\n" };
+var memCallbacks = new Js65Callbacks
 {
-  OnFileReadText = (_, relPath) => relPath.EndsWith("constants.inc")
-    ? "CUSTOM_CONSTANT = $42\n"
-    : throw new FileNotFoundException(relPath),
-  OnFileReadBinary = (_, relPath) => throw new FileNotFoundException(relPath),
+  OnFileResolveText = (basePaths, file) => embedded.TryGetValue(file, out var content)
+    ? new Js65ResolvedText(basePaths.Count > 0 ? basePaths[0] : "", content)
+    : null,
+  OnFileResolveBinary = (_, _) => null,
 };
+Assembler memAsm = useHermes
+  ? new HermesEngine(callbacks: memCallbacks)
+  : new ClearScriptEngine(callbacks: memCallbacks);
+memAsm.Options.includePaths = ["./"];
 memAsm.Module().Code("""
 .segment "HEADER" :bank $00 :size $0010 :mem $0000 :off $00000
 .segment "PRG0"   :bank $00 :size $4000 :mem $8000 :off $00010
@@ -240,8 +245,8 @@ if (!memResult.success || memResult.romdata[0x10 + 0x0050] != 0x42)
 Console.WriteLine();
 Console.WriteLine("Cancellation demo: applying with an already-cancelled token");
 Assembler cancelAsm = useHermes
-  ? new HermesEngine(useFileSystemCallbacks: false)
-  : new ClearScriptEngine(useFileSystemCallbacks: false);
+  ? new HermesEngine()
+  : new ClearScriptEngine();
 cancelAsm.Options.lineContinuations = true;
 cancelAsm.Module().Code("""
 .segment "HEADER" :bank $00 :size $0010 :mem $0000 :off $00000

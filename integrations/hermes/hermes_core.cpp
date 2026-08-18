@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 namespace js65core {
 
@@ -40,7 +41,7 @@ class VectorMutableBuffer : public jsi::MutableBuffer {
   std::vector<uint8_t> data_;
 };
 
-// Holds the bytes returned by the filesystem Js65ReadFn until the read binding copies
+// Holds the bytes returned by the filesystem Js65ResolveFn until the resolve binding copies
 // them into a JS value. Overwritten each call, which is safe because the binding copies
 // immediately and synchronously before the next read.
 thread_local std::vector<uint8_t> g_fsScratch;
@@ -195,20 +196,82 @@ std::vector<uint8_t> gzipDecompress(jsi::Runtime &rt, const std::vector<uint8_t>
   return out;
 }
 
-int32_t fsReadText(void *, const char *basePath, const char *relPath,
-                   const uint8_t **outData, int32_t *outLen) {
-  if (!readFileInto(resolvePath(basePath ? basePath : "", relPath ? relPath : ""), g_fsScratch))
-    return -1;
-  *outData = g_fsScratch.data();
-  *outLen = static_cast<int32_t>(g_fsScratch.size());
-  return 0;
+int32_t fsResolveText(void *, const char *const *basePaths, int32_t basePathCount,
+                      const char *relPath, int32_t *outBase,
+                      const uint8_t **outData, int32_t *outLen) {
+  const char *rel = relPath ? relPath : "";
+  for (int32_t i = 0; i < basePathCount; ++i) {
+    const char *base = basePaths[i] ? basePaths[i] : "";
+    if (!readFileInto(resolvePath(base, rel), g_fsScratch)) continue;
+    *outBase = i;
+    *outData = g_fsScratch.data();
+    *outLen = static_cast<int32_t>(g_fsScratch.size());
+    return 0;
+  }
+  return -1;
 }
 
-int32_t fsReadBinary(void *ctx, const char *basePath, const char *relPath,
-                     const uint8_t **outData, int32_t *outLen) {
+int32_t fsResolveBinary(void *ctx, const char *const *basePaths, int32_t basePathCount,
+                        const char *relPath, int32_t *outBase,
+                        const uint8_t **outData, int32_t *outLen) {
   // Text and binary reads are byte-identical on the filesystem side.
-  return fsReadText(ctx, basePath, relPath, outData, outLen);
+  return fsResolveText(ctx, basePaths, basePathCount, relPath, outBase, outData, outLen);
 }
+
+namespace {
+
+// A file the host located: which base had it, plus its bytes.
+struct HostHit {
+  int32_t base;
+  std::vector<uint8_t> data;
+};
+
+// Shared body of the two resolve bindings: marshal (bases[], relPath) out to the host
+// callback and copy back whatever it points at. Returns nullopt when no base had the
+// file, which the JS side turns into `undefined` and the assembler into a diagnostic.
+std::optional<HostHit> resolveViaHost(jsi::Runtime &rt, HostContext &ctx, Js65ResolveFn fn,
+                                      const char *name, const jsi::Value *args, size_t count) {
+  if (count < 2 || !args[0].isObject() || !args[0].getObject(rt).isArray(rt) || !args[1].isString())
+    throwError(rt, std::string(name) + ": (bases[], relPath) expected");
+  if (!fn) throwError(rt, std::string(name) + ": no resolve callback");
+
+  // Hold the strings alive for the duration of the call; the pointer array views them.
+  jsi::Array bases = args[0].getObject(rt).getArray(rt);
+  size_t n = bases.size(rt);
+  std::vector<std::string> owned;
+  owned.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    jsi::Value v = bases.getValueAtIndex(rt, i);
+    owned.push_back(v.isString() ? v.getString(rt).utf8(rt) : std::string());
+  }
+  std::vector<const char *> ptrs;
+  ptrs.reserve(n);
+  for (const std::string &s : owned) ptrs.push_back(s.c_str());
+
+  std::string rel = args[1].getString(rt).utf8(rt);
+  int32_t which = 0;
+  const uint8_t *data = nullptr;
+  int32_t len = 0;
+  if (fn(ctx.readCtx, ptrs.data(), static_cast<int32_t>(n), rel.c_str(), &which, &data, &len) != 0)
+    return std::nullopt;
+  if (which < 0 || static_cast<size_t>(which) >= n)
+    throwError(rt, std::string(name) + ": host returned an out-of-range base index");
+  // Copy before returning: the host buffer is only valid until the next callback.
+  return HostHit{which, std::vector<uint8_t>(data ? data : (const uint8_t *)"",
+                                             (data ? data : (const uint8_t *)"") + (len > 0 ? len : 0))};
+}
+
+// Build the `{base, content}` object the batched FileCallbacks contract returns.
+jsi::Value makeResolved(jsi::Runtime &rt, int32_t baseIndex, jsi::Value content) {
+  // The JS side passed the base list in, so hand back the index it chose; hermes.ts
+  // maps it to the string.
+  jsi::Object out(rt);
+  out.setProperty(rt, "baseIndex", jsi::Value(baseIndex));
+  out.setProperty(rt, "content", std::move(content));
+  return out;
+}
+
+} // namespace
 
 void installCommonBindings(jsi::Runtime &rt, HostContext &ctx) {
   setFn(rt, "__js65_args", 0,
@@ -219,32 +282,19 @@ void installCommonBindings(jsi::Runtime &rt, HostContext &ctx) {
         return arr;
       });
 
-  setFn(rt, "__js65_cbReadText", 2,
+  setFn(rt, "__js65_cbResolveText", 2,
       [&ctx](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
-        if (count < 2 || !args[0].isString() || !args[1].isString())
-          throwError(rt, "__js65_cbReadText: (basePath, relPath) expected");
-        if (!ctx.readText) throwError(rt, "__js65_cbReadText: no readText callback");
-        std::string base = args[0].getString(rt).utf8(rt);
-        std::string rel = args[1].getString(rt).utf8(rt);
-        const uint8_t *data = nullptr;
-        int32_t len = 0;
-        if (ctx.readText(ctx.readCtx, base.c_str(), rel.c_str(), &data, &len) != 0)
-          throwError(rt, "Could not read file: " + rel);
-        return jsi::String::createFromUtf8(rt, data ? data : (const uint8_t *)"", len > 0 ? (size_t)len : 0);
+        auto hit = resolveViaHost(rt, ctx, ctx.resolveText, "__js65_cbResolveText", args, count);
+        if (!hit) return jsi::Value::undefined();
+        return makeResolved(rt, hit->base,
+            jsi::String::createFromUtf8(rt, hit->data.data(), hit->data.size()));
       });
 
-  setFn(rt, "__js65_cbReadBinary", 2,
+  setFn(rt, "__js65_cbResolveBinary", 2,
       [&ctx](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
-        if (count < 2 || !args[0].isString() || !args[1].isString())
-          throwError(rt, "__js65_cbReadBinary: (basePath, relPath) expected");
-        if (!ctx.readBinary) throwError(rt, "__js65_cbReadBinary: no readBinary callback");
-        std::string base = args[0].getString(rt).utf8(rt);
-        std::string rel = args[1].getString(rt).utf8(rt);
-        const uint8_t *data = nullptr;
-        int32_t len = 0;
-        if (ctx.readBinary(ctx.readCtx, base.c_str(), rel.c_str(), &data, &len) != 0)
-          throwError(rt, "Could not read file: " + rel);
-        return makeUint8Array(rt, std::vector<uint8_t>(data, data + (len > 0 ? len : 0)));
+        auto hit = resolveViaHost(rt, ctx, ctx.resolveBinary, "__js65_cbResolveBinary", args, count);
+        if (!hit) return jsi::Value::undefined();
+        return makeResolved(rt, hit->base, makeUint8Array(rt, std::move(hit->data)));
       });
 
   setFn(rt, "__js65_writeText", 2,
