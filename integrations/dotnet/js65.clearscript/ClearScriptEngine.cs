@@ -89,11 +89,11 @@ const toHostList = (bases) => hostList(bases);
 const callbacks = {
     resolveText: (bases, relPath) => {
         const hit = FileCallbacks.OnFileResolveText(toHostList(bases), relPath);
-        return hit && {base: hit.BasePath, content: hit.Content};
+        return hit && {baseIndex: hit.BaseIndex, content: hit.Content};
     },
     resolveBinary: (bases, relPath) => {
         const hit = FileCallbacks.OnFileResolveBinary(toHostList(bases), relPath);
-        return hit && {base: hit.BasePath, content: toU8(hit.Content)};
+        return hit && {baseIndex: hit.BaseIndex, content: toU8(hit.Content)};
     },
 };
 // Bare CancelSignal polling the host token (V8 ships no AbortController); the core reads

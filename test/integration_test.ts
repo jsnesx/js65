@@ -743,7 +743,7 @@ TestLabel:
         if (base !== 'inc') throw new Error(`ENOENT ${base}/${file}`);
         return 'hit';
       });
-      expect(resolve(['a', 'b', 'inc', 'z'], 'f.s')).toEqual({base: 'inc', content: 'hit'});
+      expect(resolve(['a', 'b', 'inc', 'z'], 'f.s')).toEqual({baseIndex: 2, content: 'hit'});
     });
 
     it('stops probing once a base hits', function() {
@@ -764,13 +764,13 @@ TestLabel:
 
     it('treats an undefined result as a miss, so a reader need not throw', function() {
       const resolve = searchFiles((base: string) => base === 'b' ? 'hit' : undefined);
-      expect(resolve(['a', 'b'], 'f.s')).toEqual({base: 'b', content: 'hit'});
+      expect(resolve(['a', 'b'], 'f.s')).toEqual({baseIndex: 1, content: 'hit'});
     });
 
     it('keeps an empty-string result as a hit', function() {
       // Distinct from undefined: a real but empty file must not fall through.
       const resolve = searchFiles((base: string) => base === 'a' ? '' : undefined);
-      expect(resolve(['a', 'b'], 'f.s')).toEqual({base: 'a', content: ''});
+      expect(resolve(['a', 'b'], 'f.s')).toEqual({baseIndex: 0, content: ''});
     });
 
     it('returns undefined for an empty base list', function() {
@@ -788,6 +788,21 @@ TestLabel:
       }),
       resolveBinary: (): undefined => undefined,
     };
+
+    it('rejects a baseIndex the resolver was never offered', function() {
+      // A frontend reporting a base outside the search list is broken; the assembler has to
+      // say so rather than joining an undefined base into the resolved path.
+      const outOfRange: FileCallbacks = {
+        resolveText: () => ({baseIndex: 7, content: '.org $8000\n'}),
+        resolveBinary: () => undefined,
+      };
+      const input: AssemblyInput = { type: 'source', code: '.include "found.s"\n', name: 'test.s' };
+      const result = compile([input], { includePaths: ['a', 'b'] }, outOfRange);
+
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors[0].message).toContain('out-of-range base index 7');
+    });
 
     it('reports a missing include as an error rather than succeeding silently', function() {
       const input: AssemblyInput = { type: 'source', code: '.include "nope.s"\n  nop\n', name: 'test.s' };
@@ -828,7 +843,7 @@ TestLabel:
       const batched: FileCallbacks = {
         resolveText: (bases, file) => {
           calls.push({bases: [...bases], file});
-          return {base: 'inc', content: '.org $8000\n'};
+          return {baseIndex: bases.indexOf('inc'), content: '.org $8000\n'};
         },
         resolveBinary: () => undefined,
       };

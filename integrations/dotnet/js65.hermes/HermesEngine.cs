@@ -178,26 +178,24 @@ public partial class HermesEngine : Assembler, IDisposable
                 bases[i] = Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(basePaths, i * IntPtr.Size)) ?? "";
             var relPathStr = Marshal.PtrToStringUTF8(relPath) ?? "";
 
-            string? hitBase;
+            int? hitIndex;
             byte[]? bytes;
             if (text)
             {
                 var hit = Callbacks?.OnFileResolveText?.Invoke(bases, relPathStr);
-                hitBase = hit?.BasePath;
+                hitIndex = hit?.BaseIndex;
                 bytes = hit is null ? null : Encoding.UTF8.GetBytes(hit.Content);
             }
             else
             {
                 var hit = Callbacks?.OnFileResolveBinary?.Invoke(bases, relPathStr);
-                hitBase = hit?.BasePath;
+                hitIndex = hit?.BaseIndex;
                 bytes = hit?.Content;
             }
 
-            if (bytes is null || hitBase is null) return -1;
-            // The ABI reports the winner by index, so map the base back to where it came from.
-            var index = Array.IndexOf(bases, hitBase);
-            if (index < 0) return -1;
-            outBase = index;
+            if (bytes is null || hitIndex is null) return -1;
+            if (hitIndex.Value < 0 || hitIndex.Value >= bases.Length) return -1;
+            outBase = hitIndex.Value;
 
             if (bytes.Length == 0) return 0; // outData stays null; native treats len 0 as empty.
 

@@ -54,12 +54,15 @@ const MACPACK: Map<string, string> = new Map(
 );
 
 /**
- * A file located by searching the include directories: the base it was found under,
- * plus its contents. The base is kept because two `header.inc` files in different
- * directories must resolve to distinct paths, especially for debugging info.
+ * A file located by searching the include directories: which base it was found under,
+ * plus its contents. The base is reported as an index into the `bases` array that was
+ * passed in, since the caller already has those strings and an out-of-range index is a
+ * detectable error where an arbitrary string is not. It is kept at all because two
+ * `header.inc` files in different directories must resolve to distinct paths,
+ * especially for debugging info.
  */
 export interface ResolvedFile<T> {
-  base: string;
+  baseIndex: number;
   content: T;
 }
 
@@ -97,9 +100,19 @@ export class TokenStream implements Tokens.Source {
   // frontend that finds nothing returns undefined
   loadFile<T>(path: string, bases: string[],
              resolve: (bases: readonly string[], filename: string) => ResolvedFile<T> | undefined,
-             at?: Token): ResolvedFile<T> {
+             at?: Token): {content: T, base: string} {
     const found = resolve(bases, path);
-    if (found) return found;
+    if (found) {
+      const base = bases[found.baseIndex];
+      // A frontend that reports a base it wasn't offered is broken; say so here rather
+      // than letting an undefined leak into the resolved path.
+      if (base === undefined) {
+        Tokens.fail(
+            `Resolver returned out-of-range base index ${found.baseIndex} for ${path} ` +
+            `(${bases.length} bases were offered)`, at);
+      }
+      return {content: found.content, base};
+    }
     // Report against the .include/.incbin line so the diagnostic carries a source location.
     Tokens.fail(`Could not find file ${path} in include directories: ${bases.join(",")}`, at);
   }

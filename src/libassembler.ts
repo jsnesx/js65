@@ -226,6 +226,7 @@ export interface OutputFile {
  * File system callbacks for .include/.incbin directives.
  * Each frontend is expected to walk through each base path in order,
  * trying to load the file `filename` and resolve the file location if found.
+ * Report the hit as the index into `bases`, not the path string.
  * If the file is not found, then return null/undefined.
  */
 export interface FileCallbacks {
@@ -241,10 +242,10 @@ export function searchFiles<T>(
   read: (base: string, filename: string) => T | undefined,
 ): (bases: readonly string[], filename: string) => ResolvedFile<T> | undefined {
   return (bases, filename) => {
-    for (const base of bases) {
+    for (let baseIndex = 0; baseIndex < bases.length; baseIndex++) {
       try {
-        const content = read(base, filename);
-        if (content !== undefined) return {base, content};
+        const content = read(bases[baseIndex], filename);
+        if (content !== undefined) return {baseIndex, content};
       } catch (_e) {
         // Not in this directory; try the next one.
       }
@@ -855,7 +856,7 @@ export function compile(
         const found = callbacks.resolveBinary(bases, relPath);
         if (!found) return undefined;
         return typeof found.content === 'string'
-            ? {base: found.base, content: base64.decode(found.content)}
+            ? {baseIndex: found.baseIndex, content: base64.decode(found.content)}
             : found;
       },
     };
@@ -934,8 +935,8 @@ export function compileBrowser(
   // marshall the data into a simple json struct and restore it to an object here.
   const unpack = <T,>(json: string, decode: (s: string) => T): ResolvedFile<T> | undefined => {
     if (!json) return undefined;
-    const hit = JSON.parse(json) as {base: string, content: string};
-    return {base: hit.base, content: decode(hit.content)};
+    const hit = JSON.parse(json) as {baseIndex: number, content: string};
+    return {baseIndex: hit.baseIndex, content: decode(hit.content)};
   };
   const callbacks: FileCallbacks = {
     resolveText: (bases, relPath) =>

@@ -5,15 +5,18 @@ using System.Text.Json.Serialization;
 namespace js65;
 
 /// <summary>
-/// Returned by the resolve callbacks, both the path where the file was found and the
-/// actual file contents. <c>null</c> means the file wasn't found in the basePath.
+/// Returned by the resolve callbacks, both which base path the file was found under and
+/// the actual file contents. <c>null</c> means the file wasn't found in any basePath.
 /// </summary>
-/// <param name="BasePath">The entry of basePaths that had the file.</param>
+/// <param name="BaseIndex">
+/// Index into the basePaths list that was passed in, identifying the entry that had the
+/// file. Must be in range; the assembler rejects an index it did not offer.
+/// </param>
 /// <param name="Content">The file's contents.</param>
-public record Js65ResolvedText(string BasePath, string Content);
+public record Js65ResolvedText(int BaseIndex, string Content);
 
 /// <inheritdoc cref="Js65ResolvedText"/>
-public record Js65ResolvedBinary(string BasePath, byte[] Content);
+public record Js65ResolvedBinary(int BaseIndex, byte[] Content);
 
 public record Js65Callbacks
 {

@@ -208,8 +208,8 @@ Console.WriteLine("Custom callback demo: serving an include from memory");
 var embedded = new Dictionary<string, string> { ["constants.inc"] = "CUSTOM_CONSTANT = $42\n" };
 var memCallbacks = new Js65Callbacks
 {
-  OnFileResolveText = (basePaths, file) => embedded.TryGetValue(file, out var content)
-    ? new Js65ResolvedText(basePaths.Count > 0 ? basePaths[0] : "", content)
+  OnFileResolveText = (basePaths, file) => embedded.TryGetValue(file, out var content) && basePaths.Count > 0
+    ? new Js65ResolvedText(0, content)
     : null,
   OnFileResolveBinary = (_, _) => null,
 };

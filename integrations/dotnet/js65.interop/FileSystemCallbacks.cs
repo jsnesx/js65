@@ -24,26 +24,26 @@ public static class Js65FileSystemCallbacks
     public static Js65ResolvedText? ResolveText(IReadOnlyList<string> basePaths, string file)
     {
         var found = Find(basePaths, file);
-        return found is null ? null : new Js65ResolvedText(found.Value.BasePath, File.ReadAllText(found.Value.FullPath));
+        return found is null ? null : new Js65ResolvedText(found.Value.BaseIndex, File.ReadAllText(found.Value.FullPath));
     }
 
     /// <inheritdoc cref="ResolveText"/>
     public static Js65ResolvedBinary? ResolveBinary(IReadOnlyList<string> basePaths, string file)
     {
         var found = Find(basePaths, file);
-        return found is null ? null : new Js65ResolvedBinary(found.Value.BasePath, File.ReadAllBytes(found.Value.FullPath));
+        return found is null ? null : new Js65ResolvedBinary(found.Value.BaseIndex, File.ReadAllBytes(found.Value.FullPath));
     }
 
     /// <summary>
     /// First base whose combination with <paramref name="file"/> exists on disk. Returns
     /// null when no base has the file.
     /// </summary>
-    private static (string BasePath, string FullPath)? Find(IReadOnlyList<string> basePaths, string file)
+    private static (int BaseIndex, string FullPath)? Find(IReadOnlyList<string> basePaths, string file)
     {
-        foreach (var basePath in basePaths)
+        for (var i = 0; i < basePaths.Count; i++)
         {
-            var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, file));
-            if (File.Exists(fullPath)) return (basePath, fullPath);
+            var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePaths[i], file));
+            if (File.Exists(fullPath)) return (i, fullPath);
         }
         return null;
     }
