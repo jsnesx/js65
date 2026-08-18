@@ -6,6 +6,7 @@ import {Base64} from '../src/base64.ts';
 import {Preprocessor} from '../src/preprocessor.ts';
 import * as Tokens from '../src/token.ts';
 import {TokenStream} from '../src/tokenstream.ts';
+import {searchFiles} from '../src/libassembler.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
 import { Assembler } from '../src/assembler.ts';
@@ -855,17 +856,17 @@ const BINARY = util.fromByteString('0123456789');
  * the tests tell "resolved the directive" apart from "merely read past it".
  */
 async function testFiles(lines: string[], reads: string[] = []): Promise<string[]> {
-  const readText = (_base: string, name: string) => {
+  const readText = searchFiles((_base: string, name: string) => {
     reads.push(name);
     const code = TEXT_FILES[name];
     if (code == null) throw new Error(`no such file: ${name}`);
     return code;
-  };
-  const readBinary = (_base: string, name: string) => {
+  });
+  const readBinary = searchFiles((_base: string, name: string) => {
     reads.push(name);
     if (name !== 'data.bin') throw new Error(`no such file: ${name}`);
     return BINARY;
-  };
+  });
   const toks = new TokenStream(readText, readBinary);
   toks.enter(new Tokenizer(lines.join('\n'), 'input.s'));
   const pre = new Preprocessor(toks, new Assembler());

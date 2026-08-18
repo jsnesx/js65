@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {compile, compileRequest, deserializeObjectFile, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
+import {compile, compileRequest, deserializeObjectFile, searchFiles, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
 
 function compileSource(source: string, filename: string = 'test.s'): Uint8Array {
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
@@ -72,16 +72,16 @@ function resolve(base: string, rel: string): string {
 
 function makeFs(text: Record<string, string>, bin: Record<string, number[]> = {}): FileCallbacks {
   return {
-    readText: (base, rel) => {
+    resolveText: searchFiles((base: string, rel: string) => {
       const key = resolve(base, rel);
       if (!(key in text)) throw new Error(`ENOENT ${key}`);
       return text[key];
-    },
-    readBinary: (base, rel) => {
+    }),
+    resolveBinary: searchFiles((base: string, rel: string) => {
       const key = resolve(base, rel);
       if (!(key in bin)) throw new Error(`ENOENT ${key}`);
       return new Uint8Array(bin[key]);
-    },
+    }),
   };
 }
 
@@ -737,14 +737,56 @@ TestLabel:
     });
   });
 
+  describe('searchFiles', function() {
+    it('returns the first base that has the file, with its contents', function() {
+      const resolve = searchFiles((base: string, file: string) => {
+        if (base !== 'inc') throw new Error(`ENOENT ${base}/${file}`);
+        return 'hit';
+      });
+      expect(resolve(['a', 'b', 'inc', 'z'], 'f.s')).toEqual({base: 'inc', content: 'hit'});
+    });
+
+    it('stops probing once a base hits', function() {
+      const tried: string[] = [];
+      const resolve = searchFiles((base: string) => {
+        tried.push(base);
+        if (base !== 'b') throw new Error('ENOENT');
+        return 'hit';
+      });
+      resolve(['a', 'b', 'c'], 'f.s');
+      expect(tried).toEqual(['a', 'b']);
+    });
+
+    it('returns undefined rather than throwing when no base has the file', function() {
+      const resolve = searchFiles(() => { throw new Error('ENOENT'); });
+      expect(resolve(['a', 'b'], 'f.s')).toBeUndefined();
+    });
+
+    it('treats an undefined result as a miss, so a reader need not throw', function() {
+      const resolve = searchFiles((base: string) => base === 'b' ? 'hit' : undefined);
+      expect(resolve(['a', 'b'], 'f.s')).toEqual({base: 'b', content: 'hit'});
+    });
+
+    it('keeps an empty-string result as a hit', function() {
+      // Distinct from undefined: a real but empty file must not fall through.
+      const resolve = searchFiles((base: string) => base === 'a' ? '' : undefined);
+      expect(resolve(['a', 'b'], 'f.s')).toEqual({base: 'a', content: ''});
+    });
+
+    it('returns undefined for an empty base list', function() {
+      const resolve = searchFiles(() => 'never asked');
+      expect(resolve([], 'f.s')).toBeUndefined();
+    });
+  });
+
   describe('.include resolution', function() {
     // Only 'inc/' has the file; 'missing/' is searched first so the loop has to fall through.
     const callbacks = {
-      readText: (base: string, file: string) => {
+      resolveText: searchFiles((base: string, file: string) => {
         if (base !== 'inc') throw new Error(`ENOENT ${base}/${file}`);
         return '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.org $8000\n';
-      },
-      readBinary: (): never => { throw new Error('no binaries in this test'); },
+      }),
+      resolveBinary: (): undefined => undefined,
     };
 
     it('reports a missing include as an error rather than succeeding silently', function() {
@@ -776,6 +818,48 @@ TestLabel:
       expect(result.success).toBe(false);
       expect(result.messages.filter(m => m.level === 'warning').map(m => m.message))
           .toEqual(['earlier warning']);
+    });
+
+    // The frontend gets the whole search list in one call and runs the loop itself. A
+    // frontend behind a thread or process boundary (the web worker) depends on this: one
+    // call per .include, not one per directory probed.
+    it('hands the frontend every search directory in a single call', function() {
+      const calls: {bases: readonly string[], file: string}[] = [];
+      const batched: FileCallbacks = {
+        resolveText: (bases, file) => {
+          calls.push({bases: [...bases], file});
+          return {base: 'inc', content: '.org $8000\n'};
+        },
+        resolveBinary: () => undefined,
+      };
+      const input: AssemblyInput = {
+        type: 'source',
+        code: '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n.include "found.s"\n',
+        name: 'test.s',
+      };
+      const result = compile([input], { includePaths: ['a', 'b', 'c', 'inc'] }, batched);
+
+      expect(result.success).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].file).toBe('found.s');
+      // Every -I directory rides along, so no directory needs a round trip of its own.
+      expect(calls[0].bases).toContain('inc');
+      expect(calls[0].bases.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it('reports the miss once, after the frontend has tried every base', function() {
+      let calls = 0;
+      const batched: FileCallbacks = {
+        resolveText: () => { calls++; return undefined; },
+        resolveBinary: () => undefined,
+      };
+      const input: AssemblyInput = { type: 'source', code: '.include "nope.s"\n', name: 'test.s' };
+      const result = compile([input], { includePaths: ['a', 'b', 'c'] }, batched);
+
+      expect(calls).toBe(1);
+      expect(result.success).toBe(false);
+      expect(result.messages.filter(m => m.level === 'error')[0].message)
+          .toContain('Could not find file nope.s');
     });
     it('resolves nested .include relative to the including file', () => {
       const fs = makeFs({

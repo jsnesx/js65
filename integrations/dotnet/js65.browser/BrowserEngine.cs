@@ -68,6 +68,16 @@ internal class BrowserCompileResult
     public BrowserAssemblerMessage[] Messages { get; set; } = [];
 }
 
+// Return value sent as a json encoded string to a fileCallback
+internal class BrowserResolvedFile
+{
+    [JsonPropertyName("base")]
+    public string Base { get; set; } = "";
+
+    [JsonPropertyName("content")]
+    public string Content { get; set; } = "";
+}
+
 [JsonSourceGenerationOptions(WriteIndented = false)]
 [JsonSerializable(typeof(Js65Options))]
 [JsonSerializable(typeof(Js65Callbacks))]
@@ -77,6 +87,8 @@ internal class BrowserCompileResult
 [JsonSerializable(typeof(BrowserSourceInfo))]
 [JsonSerializable(typeof(BrowserAssemblerMessage))]
 [JsonSerializable(typeof(BrowserAssemblerMessage[]))]
+[JsonSerializable(typeof(BrowserResolvedFile))]
+[JsonSerializable(typeof(string[]))]
 internal partial class AssmeblerContext : JsonSerializerContext;
 
 /// <summary>
@@ -109,6 +121,9 @@ public partial class BrowserJsEngine : Assembler
     // Calls libassembler's compileBrowser. We have this strange entrypoint because of the JsInterop
     // restrictions which prevent us from marshalling a raw list of bytes, so we work around it
     // by stringifying pretty much everything.
+    // The text and binary callbacks have the same issue, so the "request" function is a json document
+    // with a list of paths to check `["inc/", "etc"]` and a filename to load. This should return
+    // a string with a json object `BrowserResolvedFile` or "" for not found.
     [JSImport("compileBrowser", "js65.interop.libassembler.js")]
     private static partial string CompileBrowser(
         string requestJson,
@@ -230,39 +245,62 @@ public partial class BrowserJsEngine : Assembler
         };
     }
 
-    private string LoadTextFileCallback(string basePath, string filePath)
+    private static string[] ParseBasePaths(string basePathsJson) =>
+        JsonSerializer.Deserialize(basePathsJson, AssmeblerContext.Default.StringArray) ?? [];
+
+    private static string Pack(string basePath, string content) =>
+        JsonSerializer.Serialize(
+            new BrowserResolvedFile { Base = basePath, Content = content },
+            AssmeblerContext.Default.BrowserResolvedFile);
+
+    private string LoadTextFileCallback(string basePathsJson, string filePath)
     {
+        var bases = ParseBasePaths(basePathsJson);
+
         // C# callbacks take precedence
-        if (Callbacks?.OnFileReadText != null)
+        if (Callbacks?.OnFileResolveText != null)
         {
-            return Callbacks.OnFileReadText.Invoke(basePath, filePath);
+            var hit = Callbacks.OnFileResolveText.Invoke(bases, filePath);
+            return hit is null ? "" : Pack(hit.BasePath, hit.Content);
         }
 
-        // Fall back to JS module callback if configured
+        // Fall back to JS module callback if configured. It reads one full path at a time,
+        // so the search loop runs here rather than crossing into JS once per probe.
         if (_fileCallbackModule != null && _fileCallbackConfig != null)
         {
-            var fullPath = CombinePath(basePath, filePath);
-            return CallModuleFunction(_fileCallbackModule, _fileCallbackConfig.ReadTextFuncName, fullPath, "");
+            foreach (var basePath in bases)
+            {
+                var fullPath = CombinePath(basePath, filePath);
+                var text = CallModuleFunction(_fileCallbackModule, _fileCallbackConfig.ReadTextFuncName, fullPath, "");
+                if (!string.IsNullOrEmpty(text)) return Pack(basePath, text);
+            }
         }
 
         return "";
     }
 
-    // Returns base64: this is a JSImport delegate callback, and .NET WASM cannot marshal
+    // Content is base64: this is a JSImport delegate callback, and .NET WASM cannot marshal
     // arrays through callbacks, so include bytes have to cross as a string.
-    private string LoadBinaryFileCallback(string basePath, string filePath)
+    private string LoadBinaryFileCallback(string basePathsJson, string filePath)
     {
+        var bases = ParseBasePaths(basePathsJson);
+
         // C# callbacks take precedence
-        if (Callbacks?.OnFileReadBinary != null)
+        if (Callbacks?.OnFileResolveBinary != null)
         {
-            return Convert.ToBase64String(Callbacks.OnFileReadBinary.Invoke(basePath, filePath));
+            var hit = Callbacks.OnFileResolveBinary.Invoke(bases, filePath);
+            return hit is null ? "" : Pack(hit.BasePath, Convert.ToBase64String(hit.Content));
         }
 
         // Fall back to JS module callback if configured (also returns base64).
         if (_fileCallbackModule != null && _fileCallbackConfig != null)
         {
-            var fullPath = CombinePath(basePath, filePath);
-            return CallModuleFunction(_fileCallbackModule, _fileCallbackConfig.ReadBinaryFuncName, fullPath, "");
+            foreach (var basePath in bases)
+            {
+                var fullPath = CombinePath(basePath, filePath);
+                var b64 = CallModuleFunction(_fileCallbackModule, _fileCallbackConfig.ReadBinaryFuncName, fullPath, "");
+                if (!string.IsNullOrEmpty(b64)) return Pack(basePath, b64);
+            }
         }
 
         return "";

@@ -75,8 +75,8 @@ int main(int argc, char **argv) {
 
   HostContext ctx;
   // The CLI reads includes straight off the filesystem relative to the include base.
-  ctx.readText = &js65core::fsReadText;
-  ctx.readBinary = &js65core::fsReadBinary;
+  ctx.resolveText = &js65core::fsResolveText;
+  ctx.resolveBinary = &js65core::fsResolveBinary;
   for (int i = 1; i < argc; ++i)
     ctx.args.emplace_back(argv[i]);
 

@@ -27,10 +27,10 @@ public partial class HermesEngine : Assembler, IDisposable
     // it waits for an in-flight compile to release the gate.
     private static readonly SemaphoreSlim CompileGate = new(1, 1);
 
-    private readonly Js65ReadFn _readText;
-    private readonly Js65ReadFn _readBinary;
-    private readonly IntPtr _readTextPtr;
-    private readonly IntPtr _readBinaryPtr;
+    private readonly Js65ResolveFn _resolveText;
+    private readonly Js65ResolveFn _resolveBinary;
+    private readonly IntPtr _resolveTextPtr;
+    private readonly IntPtr _resolveBinaryPtr;
 
     // Pins the buffer most recently handed to the native side until it has been copied
     // (the native read binding copies synchronously before the next callback / return).
@@ -41,45 +41,36 @@ public partial class HermesEngine : Assembler, IDisposable
         NativeLibrary.SetDllImportResolver(typeof(HermesEngine).Assembly, ResolveLibrary);
     }
 
-    public HermesEngine(Js65Options? options = null, bool useFileSystemCallbacks = true)
-        : base(options)
+    /// <param name="options"></param>
+    /// <param name="callbacks">Resolve callbacks for <c>.include</c>/<c>.incbin</c>. Defaults to
+    /// <see cref="Js65FileSystemCallbacks.Default"/>, which reads relative to the executable.</param>
+    public HermesEngine(Js65Options? options = null, Js65Callbacks? callbacks = null)
+        : base(options, callbacks ?? Js65FileSystemCallbacks.Default)
     {
-        _readText = ReadTextThunk;
-        _readBinary = ReadBinaryThunk;
-        _readTextPtr = Marshal.GetFunctionPointerForDelegate(_readText);
-        _readBinaryPtr = Marshal.GetFunctionPointerForDelegate(_readBinary);
-
-        // Default to filesystem-backed callbacks (resolving relative to the executable).
-        // Consumers can replace Callbacks for custom loading.
-        if (!useFileSystemCallbacks) return;
-        Callbacks = new()
-        {
-            OnFileReadText = LoadTextFileCallback,
-            OnFileReadBinary = LoadBinaryFileCallback
-        };
+        _resolveText = ResolveTextThunk;
+        _resolveBinary = ResolveBinaryThunk;
+        _resolveTextPtr = Marshal.GetFunctionPointerForDelegate(_resolveText);
+        _resolveBinaryPtr = Marshal.GetFunctionPointerForDelegate(_resolveBinary);
     }
 
     public override async Task<Js65CompileResult> Apply(byte[] rom, CancellationToken ct = default)
     {
         var req = BuildRequest();
 
-        // Cancellable even while queued: a serialized runtime means a long compile holds the
-        // gate, so waiting callers must be able to bail before they ever start.
         await CompileGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             return await Task.Run(() =>
             {
                 // Host-owned cancel flag the native side polls (via __js65_cancelled). Pinned so
-                // its address stays valid for the whole call; the registration flips it from
-                // whichever thread requests cancellation while the compile runs.
+                // its address stays valid for the whole call
                 var cancel = new int[1];
                 var cancelHandle = GCHandle.Alloc(cancel, GCHandleType.Pinned);
                 using var reg = ct.Register(() => Volatile.Write(ref cancel[0], 1));
                 try
                 {
                     var resultPtr = js65_compile(
-                        IntPtr.Zero, req, rom, rom.Length, _readTextPtr, _readBinaryPtr,
+                        IntPtr.Zero, req, rom, rom.Length, _resolveTextPtr, _resolveBinaryPtr,
                         cancelHandle.AddrOfPinnedObject());
                     FreePinned();
                     if (resultPtr == IntPtr.Zero)
@@ -114,8 +105,8 @@ public partial class HermesEngine : Assembler, IDisposable
         string requestJson,
         [In] byte[] baseRom,
         int baseRomLen,
-        IntPtr readText,
-        IntPtr readBinary,
+        IntPtr resolveText,
+        IntPtr resolveBinary,
         IntPtr cancelFlag);
 
     [LibraryImport(LibraryName)]
@@ -162,39 +153,52 @@ public partial class HermesEngine : Assembler, IDisposable
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int Js65ReadFn(IntPtr ctx, IntPtr basePath, IntPtr relPath, out IntPtr outData, out int outLen);
+    private delegate int Js65ResolveFn(IntPtr ctx, IntPtr basePaths, int basePathCount, IntPtr relPath,
+                                       out int outBase, out IntPtr outData, out int outLen);
 
-    private int ReadTextThunk(IntPtr ctx, IntPtr basePath, IntPtr relPath, out IntPtr outData, out int outLen)
-        => Read(text: true, basePath, relPath, out outData, out outLen);
+    private int ResolveTextThunk(IntPtr ctx, IntPtr basePaths, int basePathCount, IntPtr relPath,
+                                 out int outBase, out IntPtr outData, out int outLen)
+        => Resolve(text: true, basePaths, basePathCount, relPath, out outBase, out outData, out outLen);
 
-    private int ReadBinaryThunk(IntPtr ctx, IntPtr basePath, IntPtr relPath, out IntPtr outData, out int outLen)
-        => Read(text: false, basePath, relPath, out outData, out outLen);
+    private int ResolveBinaryThunk(IntPtr ctx, IntPtr basePaths, int basePathCount, IntPtr relPath,
+                                   out int outBase, out IntPtr outData, out int outLen)
+        => Resolve(text: false, basePaths, basePathCount, relPath, out outBase, out outData, out outLen);
 
-    // Invoke the managed callback and hand the bytes to the native side as a pinned buffer
-    // (valid until the next callback or until js65_compile returns). Returns 0 on success,
-    // -1 on a missing file / no callback / exception, which the assembler reports.
-    private int Read(bool text, IntPtr basePath, IntPtr relPath, out IntPtr outData, out int outLen)
+    private int Resolve(bool text, IntPtr basePaths, int basePathCount, IntPtr relPath,
+                        out int outBase, out IntPtr outData, out int outLen)
     {
+        outBase = 0;
         outData = IntPtr.Zero;
         outLen = 0;
         try
         {
             FreePinned();
-            var basePathStr = Marshal.PtrToStringUTF8(basePath) ?? "";
+            var bases = new string[basePathCount < 0 ? 0 : basePathCount];
+            for (var i = 0; i < bases.Length; i++)
+                bases[i] = Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(basePaths, i * IntPtr.Size)) ?? "";
             var relPathStr = Marshal.PtrToStringUTF8(relPath) ?? "";
 
+            string? hitBase;
             byte[]? bytes;
             if (text)
             {
-                var s = Callbacks?.OnFileReadText?.Invoke(basePathStr, relPathStr);
-                bytes = s is null ? null : Encoding.UTF8.GetBytes(s);
+                var hit = Callbacks?.OnFileResolveText?.Invoke(bases, relPathStr);
+                hitBase = hit?.BasePath;
+                bytes = hit is null ? null : Encoding.UTF8.GetBytes(hit.Content);
             }
             else
             {
-                bytes = Callbacks?.OnFileReadBinary?.Invoke(basePathStr, relPathStr);
+                var hit = Callbacks?.OnFileResolveBinary?.Invoke(bases, relPathStr);
+                hitBase = hit?.BasePath;
+                bytes = hit?.Content;
             }
 
-            if (bytes is null) return -1;
+            if (bytes is null || hitBase is null) return -1;
+            // The ABI reports the winner by index, so map the base back to where it came from.
+            var index = Array.IndexOf(bases, hitBase);
+            if (index < 0) return -1;
+            outBase = index;
+
             if (bytes.Length == 0) return 0; // outData stays null; native treats len 0 as empty.
 
             _pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
@@ -299,24 +303,6 @@ public partial class HermesEngine : Assembler, IDisposable
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "js65.dll";
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "libjs65.dylib";
         return "libjs65.so";
-    }
-
-    private static string? ExeBasePath => Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location);
-
-    private static string LoadTextFileCallback(string basePath, string relPath)
-    {
-        var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, relPath));
-        if (!File.Exists(fullPath))
-            throw new FileNotFoundException($"Could not find file {fullPath}");
-        return File.ReadAllText(fullPath);
-    }
-
-    private static byte[] LoadBinaryFileCallback(string basePath, string relPath)
-    {
-        var fullPath = Path.GetFullPath(Path.Combine(ExeBasePath!, basePath, relPath));
-        if (!File.Exists(fullPath))
-            throw new FileNotFoundException($"Could not find file {fullPath}");
-        return File.ReadAllBytes(fullPath);
     }
 
     public override void Dispose()

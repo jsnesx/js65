@@ -1,15 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-// Stable C ABI for the js65 shared library (js65.dll / libjs65.so / libjs65.dylib).
-// A native host (e.g. the .NET js65.hermes engine) calls js65_compile to assemble and
-// link a request, supplying two function pointers that service .include / .incbin reads
-// so includes can come from anywhere the host chooses, not just disk.
-//
-// The result is an explicit struct tree, not an opaque blob: every field has a fixed
-// offset so any language can marshal it directly. Explicit padding members pin the
-// layout so it does not shift with compiler alignment choices. All pointers below are
-// owned by the library and remain valid until js65_free_result; strings are UTF-8 and
-// NUL-terminated; a pointer documented as nullable is NULL when the value is absent.
+// C ABI for the js65 shared library (js65.dll / libjs65.so / libjs65.dylib).
 
 #ifndef JS65_H
 #define JS65_H
@@ -26,18 +17,18 @@ extern "C" {
 #define JS65_EXPORT __attribute__((visibility("default")))
 #endif
 
-// User provided File-read callback. Return 0 on success and set *outData/*outLen to a buffer that
-// stays valid until the next callback call or until js65_compile returns; the library
-// copies it before either happens. Return nonzero for not-found/error, which the
-// assembler reports as a diagnostic. Text is UTF-8 bytes (no NUL terminator required).
-//
-//   userData  - the opaque pointer passed as ctx to js65_compile
-//   basePath  - the include base directory being searched (may be empty)
-//   relPath   - the file requested by the directive
-typedef int32_t (*Js65ReadFn)(
+// User provided file read callbacks. The assembler core library
+// will call these functions to request that the host perform a search
+// through ALL the provided basePaths in order, checking to see if `relPath`
+// is in that basePath, and places the file contents in `outData` if found.
+// `outBase` should hold the index for the `basePath` which had the file
+// The string data in `outData` should be UTF-8
+typedef int32_t (*Js65ResolveFn)(
     void *userData,
-    const char *basePath,
+    const char *const *basePaths,
+    int32_t basePathCount,
     const char *relPath,
+    int32_t *outBase,
     const uint8_t **outData,
     int32_t *outLen);
 
@@ -85,13 +76,11 @@ typedef struct Js65Result {
 // * ctx is a user provided opaque pointer that will be passed into the callbacks.
 // * requestJson is the combined input/action + options serialized as a string so that js65
 // can validate the inputs as if they are untrusted (so you don't have to)
+//
 // For more details on the requestJson structure, see what the `Assembler.cs` class builds
 // * baseRom is the image we are patching, it can be NULL if you aren't patching anything.
 // * cancelFlag (nullable) points to host-owned memory that, when set to a nonzero value from
-// another thread, cooperatively cancels the in-flight compile: the assembler observes it at
-// per-line / per-chunk boundaries and returns a normal failure result (a "Compilation
-// cancelled" message). Pass NULL to disable cancellation. The pointed-to int
-// must stay valid for the duration of the call; the library only reads it.
+// another thread, cooperatively cancels the in-flight compile.
 //
 // Not thread-safe: the call re-inits the single-threaded Hermes runtime, so callers must
 // serialize concurrent js65_compile calls.
@@ -100,8 +89,8 @@ JS65_EXPORT const Js65Result *js65_compile(
     const char *requestJson,
     const uint8_t *baseRom,
     int32_t baseRomLen,
-    Js65ReadFn readText,
-    Js65ReadFn readBinary,
+    Js65ResolveFn resolveText,
+    Js65ResolveFn resolveBinary,
     const int32_t *cancelFlag);
 
 // Free a result returned by js65_compile.

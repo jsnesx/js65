@@ -13,8 +13,11 @@ setGzipCodec(hermesCodec);
 declare const __js65_args: () => string[];
 // Reads take the include base and requested file separately so the host resolves them:
 // the CLI joins them and reads disk; the shared library forwards to the caller's pointers.
-declare const __js65_cbReadText: (basePath: string, relPath: string) => string;
-declare const __js65_cbReadBinary: (basePath: string, relPath: string) => Uint8Array;
+/** `{baseIndex, content}` naming which of `bases` had the file, or undefined if none did. */
+declare const __js65_cbResolveText:
+    (bases: readonly string[], relPath: string) => {baseIndex: number, content: string} | undefined;
+declare const __js65_cbResolveBinary:
+    (bases: readonly string[], relPath: string) => {baseIndex: number, content: Uint8Array} | undefined;
 declare const __js65_writeText: (fullpath: string, data: string) => void;
 declare const __js65_writeBytes: (fullpath: string, data: Uint8Array) => void;
 // Non-recursive; bare entry names, directories marked with a trailing '/'. Throws if
@@ -113,10 +116,14 @@ function resolvePath(base: string, file: string): string {
 
 const cli = new Cli({
   fsReadString: (path: string, filename: string): string => {
-    return stripBom(__js65_cbReadText(path, filename));
+    const hit = __js65_cbResolveText([path], filename);
+    if (!hit) throw new Error(`Could not read file: ${filename}`);
+    return stripBom(hit.content);
   },
   fsReadBytes: (path: string, filename: string): Uint8Array => {
-    return __js65_cbReadBinary(path, filename);
+    const hit = __js65_cbResolveBinary([path], filename);
+    if (!hit) throw new Error(`Could not read file: ${filename}`);
+    return hit.content;
   },
   fsReadStdin: async (): Promise<Uint8Array> => __js65_stdinBytes(),
   fsWriteString: async (path: string, filename: string, data: string): Promise<void> => {
@@ -135,11 +142,18 @@ const cli = new Cli({
 // host as a typed struct (built via the __js65_result* calls) rather than a serialized
 // string, so the ABI in js65.h stays explicit.
 function runLibraryMode(): void {
+  // The host resolves against the whole search list in one call and reports which base
+  // won by index, so a `.include` costs one crossing of the ABI no matter how many
+  // directories had to be tried.
   const callbacks = {
-    readText: (basePath: string, filePath: string): string =>
-      stripBom(__js65_cbReadText(basePath, filePath)),
-    readBinary: (basePath: string, filePath: string): Uint8Array =>
-      __js65_cbReadBinary(basePath, filePath),
+    resolveText: (bases: readonly string[], filePath: string) => {
+      const hit = __js65_cbResolveText(bases, filePath);
+      return hit && {base: bases[hit.baseIndex], content: stripBom(hit.content)};
+    },
+    resolveBinary: (bases: readonly string[], filePath: string) => {
+      const hit = __js65_cbResolveBinary(bases, filePath);
+      return hit && {base: bases[hit.baseIndex], content: hit.content};
+    },
   };
 
   // Bare CancelSignal that polls the host cancel flag (Hermes ships no AbortController). The

@@ -9,7 +9,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import {assemble, link, type AssemblyInput, type AssemblerOptions, type CancelSignal} from '../../src/libassembler.ts';
+import {assemble, link, searchFiles, type AssemblyInput, type AssemblerOptions, type CancelSignal,
+        type FileCallbacks} from '../../src/libassembler.ts';
 import type {AssemblerMessage, SourceInfo} from '../../src/error.ts';
 import {MacroIndex, SymbolIndex} from '../../src/lspindex.ts';
 import type {Module} from '../../src/module.ts';
@@ -219,34 +220,36 @@ export class Analyzer {
    * disk; both are normalized to the POSIX paths the assembler expects. Every
    * successful read is tracked into `touched` for include-graph invalidation.
    */
-  private makeCallbacks(touched: Set<string>): {
+  private makeCallbacks(touched: Set<string>): FileCallbacks & {
     readText: (base: string, rel: string) => string,
-    readBinary: (base: string, rel: string) => Uint8Array,
   } {
     const fsImpl = this.opts.fsImpl ?? fs;
     const openDocs = this.openDocs;
     // Only *successful* reads are recorded. The include path search involves
-    // lots of unsuccessful reads trying to find the right path so skip those.
-    return {
-      readText: (base, rel) => {
-        const posix = joinDir(toPosix(base), toPosix(rel));
-        const open = openDocs.get(posix);
-        if (open) {
-          touched.add(posix);
-          return open.text;
-        }
-        const osPath = pathFromPosix(posix);
-        const text = fsImpl.readFileSync(osPath, 'utf8');
+    // lots of unsuccessful reads trying to find the right path so skip those,
+    // which searchFiles handles by only returning the base that hit.
+    const readText = (base: string, rel: string): string => {
+      const posix = joinDir(toPosix(base), toPosix(rel));
+      const open = openDocs.get(posix);
+      if (open) {
         touched.add(posix);
-        return text;
-      },
-      readBinary: (base, rel) => {
+        return open.text;
+      }
+      const osPath = pathFromPosix(posix);
+      const text = fsImpl.readFileSync(osPath, 'utf8');
+      touched.add(posix);
+      return text;
+    };
+    return {
+      readText,
+      resolveText: searchFiles(readText),
+      resolveBinary: searchFiles((base, rel) => {
         const posix = joinDir(toPosix(base), toPosix(rel));
         const osPath = pathFromPosix(posix);
         const buf = fsImpl.readFileSync(osPath);
         touched.add(posix);
         return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-      },
+      }),
     };
   }
 
