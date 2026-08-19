@@ -2,7 +2,8 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import {computeFolding, computeSemanticTokens, SEMANTIC_TOKEN_LEGEND} from '../worker/features/structure.ts';
+import {computeFolding, computeSemanticTokens, SEMANTIC_TOKEN_LEGEND,
+        type SymbolResolver} from '../worker/features/structure.ts';
 
 describe('structure', () => {
   describe('computeFolding', () => {
@@ -161,6 +162,144 @@ describe('structure', () => {
         const prev = tokens[i - 1], cur = tokens[i];
         expect(cur.line > prev.line ||
                (cur.line === prev.line && cur.char >= prev.char)).toBe(true);
+      }
+    });
+  });
+
+  describe('computeSemanticTokens classification', () => {
+    function decode(data: number[]):
+        Array<{line: number, char: number, length: number, type: number, mod: number}> {
+      const out = [];
+      let line = 0, char = 0;
+      for (let i = 0; i < data.length; i += 5) {
+        line += data[i];
+        char = data[i] === 0 ? char + data[i + 1] : data[i + 1];
+        out.push({line, char, length: data[i + 2], type: data[i + 3], mod: data[i + 4]});
+      }
+      return out;
+    }
+
+    const idx = (name: string) => SEMANTIC_TOKEN_LEGEND.tokenTypes.indexOf(name);
+    const modBit = (name: string) => 1 << SEMANTIC_TOKEN_LEGEND.tokenModifiers.indexOf(name);
+
+    /** A resolver standing in for a completed assemble. */
+    function resolver(spec: {
+      kinds?: Record<string, 'label' | 'constant' | 'enumMember' | 'structMember'>,
+      macros?: string[],
+      scopes?: string[],
+    }): SymbolResolver {
+      return {
+        kindOf: (name) => spec.kinds?.[name],
+        isMacro: (name) => (spec.macros ?? []).includes(name),
+        isScope: (name) => (spec.scopes ?? []).includes(name),
+      };
+    }
+
+    /** Find the token starting at a given 0-based line/column. */
+    function at(tokens: ReturnType<typeof decode>, line: number, char: number) {
+      return tokens.find(t => t.line === line && t.char === char);
+    }
+
+    it('colours a label reference the same as its definition', () => {
+      const text = ['main:', '  jsr main', ''].join('\n');
+      const syms = resolver({kinds: {main: 'label'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const def = at(tokens, 0, 0)!;
+      const ref = tokens.find(t => t.line === 1 && t.length === 4 && t.char > 2)!;
+      expect(def.type).toBe(idx('function'));
+      expect(ref.type).toBe(idx('function'));
+      // Only the definition carries the declaration modifier.
+      expect(def.mod & modBit('declaration')).toBeTruthy();
+      expect(ref.mod & modBit('declaration')).toBeFalsy();
+    });
+
+    it('separates an enum member from a plain constant', () => {
+      const text = ['  lda #Color', '  lda #Speed', ''].join('\n');
+      const syms = resolver({kinds: {Color: 'enumMember', Speed: 'constant'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const color = tokens.find(t => t.line === 0 && t.length === 5)!;
+      const speed = tokens.find(t => t.line === 1 && t.length === 5)!;
+      expect(color.type).toBe(idx('enumMember'));
+      expect(speed.type).toBe(idx('variable'));
+      expect(speed.mod & modBit('readonly')).toBeTruthy();
+    });
+
+    it('separates a constant from a mutable RAM variable', () => {
+      const text = ['  lda Konst', '  lda Ram', ''].join('\n');
+      const syms = resolver({kinds: {Konst: 'constant'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      // Column 6, past the `lda`, so the mnemonic's own token isn't picked up.
+      const konst = at(tokens, 0, 6)!;
+      const ram = at(tokens, 1, 6)!;
+      expect(konst.type).toBe(idx('variable'));
+      expect(konst.mod & modBit('readonly')).toBeTruthy();
+      expect(ram.type).toBe(idx('variable'));
+      expect(ram.mod & modBit('readonly')).toBeFalsy();
+    });
+
+    it('treats the left of a scope operator as a namespace', () => {
+      const text = ['  lda Foo::bar', ''].join('\n');
+      const syms = resolver({kinds: {bar: 'constant'}, scopes: ['Foo']});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const foo = at(tokens, 0, 6)!;
+      const bar = at(tokens, 0, 11)!;
+      expect(foo.type).toBe(idx('namespace'));
+      // The trailing segment keeps its own kind rather than inheriting one.
+      expect(bar.type).toBe(idx('variable'));
+      expect(bar.mod & modBit('readonly')).toBeTruthy();
+    });
+
+    it('marks mnemonics with defaultLibrary and directives without', () => {
+      const text = ['  .byte $01', '  lda #$01', ''].join('\n');
+      const tokens = decode(computeSemanticTokens(text, resolver({})).data);
+      const byte = tokens.find(t => t.line === 0 && t.type === idx('keyword'))!;
+      const lda = tokens.find(t => t.line === 1 && t.type === idx('keyword'))!;
+      expect(byte.mod & modBit('defaultLibrary')).toBeFalsy();
+      expect(lda.mod & modBit('defaultLibrary')).toBeTruthy();
+    });
+
+    it('classifies a macro call site as macro', () => {
+      const text = ['  DoThing $01', ''].join('\n');
+      const syms = resolver({macros: ['DoThing']});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const call = tokens.find(t => t.line === 0 && t.length === 7)!;
+      expect(call.type).toBe(idx('macro'));
+    });
+
+    it('marks a cheap local as a static function', () => {
+      const text = ['main:', '@loop:', '  bne @loop', ''].join('\n');
+      const syms = resolver({kinds: {main: 'label'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const def = at(tokens, 1, 0)!;
+      expect(def.type).toBe(idx('function'));
+      expect(def.mod & modBit('static')).toBeTruthy();
+    });
+
+    it('does not give a column-0 constant the function colour', () => {
+      const text = ['Speed = 5', ''].join('\n');
+      const syms = resolver({kinds: {Speed: 'constant'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const speed = at(tokens, 0, 0)!;
+      expect(speed.type).toBe(idx('variable'));
+      expect(speed.mod & modBit('readonly')).toBeTruthy();
+      expect(speed.mod & modBit('declaration')).toBeTruthy();
+    });
+
+    it('falls back to the lexical label type with no resolver', () => {
+      const text = ['main:', '  rts', ''].join('\n');
+      const tokens = decode(computeSemanticTokens(text).data);
+      expect(tokens[0].type).toBe(idx('label'));
+    });
+
+    it('every emitted modifier bit exists in the legend', () => {
+      const text = ['main:', '  lda #Color', '  jsr Foo::bar', ''].join('\n');
+      const syms = resolver({
+        kinds: {main: 'label', Color: 'enumMember', bar: 'label'},
+        scopes: ['Foo'],
+      });
+      const all = (1 << SEMANTIC_TOKEN_LEGEND.tokenModifiers.length) - 1;
+      for (const t of decode(computeSemanticTokens(text, syms).data)) {
+        expect(t.mod & ~all).toBe(0);
       }
     });
   });

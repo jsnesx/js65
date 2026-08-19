@@ -11,6 +11,7 @@ import { type Token } from './token.ts'
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { Linter, type RtsAnchor } from './lint.ts';
+import type { SymbolKind } from './lspindex.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from './options.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
@@ -1367,9 +1368,10 @@ export class Assembler {
     this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2), tokens[0]);
   }
 
-  assign(ident: string, expr: Expr|number, isLabel = false, token?: Token) {
+  assign(ident: string, expr: Expr|number, isLabel = false, token?: Token,
+         kind?: SymbolKind) {
     if (typeof expr !== 'number') expr = this.resolve(expr);
-    this.assignSymbol(ident, false, expr, token, isLabel);
+    this.assignSymbol(ident, false, expr, token, isLabel, kind);
     // TODO - no longer needed?
     if (this.opts.refExtractor?.assign && typeof expr === 'number') {
       this.opts.refExtractor.assign(ident, expr);
@@ -1396,7 +1398,7 @@ export class Assembler {
   }
 
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token,
-               isLabel = false) {
+               isLabel = false, kind?: SymbolKind) {
     // NOTE: * _will_ get current chunk!
 
     if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
@@ -1434,7 +1436,7 @@ export class Assembler {
     if (scope.collectRefs && token?.source) {
       sym.def = token.source;
     }
-    this.opts.symbolIndex?.recordSymbol(sym, ident, this.opts.moduleName);
+    this.opts.symbolIndex?.recordSymbol(sym, ident, this.opts.moduleName, kind);
 
     // Add cheap locals to debugLabels for MLB output.  Constant assignments
     // (`@temp = $05`) aren't positions, so they'd only add bogus entries.
@@ -1842,7 +1844,7 @@ export class Assembler {
       this.enumMember(name, ctx.offset, tokens[0]);
       return;
     }
-    this.assign(name, ctx.offset, false, tokens[0]);
+    this.assign(name, ctx.offset, false, tokens[0], 'structMember');
     const size = this.structMemberSize(tokens);
     // The member's own symbol holds its offset, so its width goes in a size symbol.
     this.defineSizeOfSymbol(this.currentScope, name, size);
@@ -1851,7 +1853,7 @@ export class Assembler {
 
   private enumMember(name: string, value: number, token?: Token) {
     const ctx = this.structContext[this.structContext.length - 1];
-    this.assign(name, value, false, token);
+    this.assign(name, value, false, token, 'enumMember');
     this.defineSizeOfSymbol(this.currentScope, name, 1);
     ctx.offset = value + 1;
     ctx.count++;

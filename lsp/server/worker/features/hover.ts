@@ -115,7 +115,10 @@ function symbolHoverLines(analysis: ProjectAnalysis, sym: Symbol): string[] {
     if (offset != null) lines.push(`**reloc:** offset $${hex(offset)}`);
   } else {
     const num = numericValue(expr);
-    if (num != null) lines.push(`**value:** \`$${hex(num)}\` (${num})`);
+    // `:=` marks the symbol as a location rather than a plain constant, so
+    // label the number as an address to match how it was declared.
+    const label = sym.isLabel ? 'addr' : 'value';
+    if (num != null) lines.push(`**${label}:** \`$${hex(num)}\` (${num})`);
     if (expr.meta?.zeropage) lines.push('**segment:** zeropage');
   }
 
