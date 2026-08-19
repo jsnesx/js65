@@ -37,7 +37,7 @@ import * as Exprs from './expr.ts';
 import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
-import type { MacroIndex, SymbolIndex } from './lspindex.ts';
+import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
 import { gzipCodec } from './driver/codec/codec.ts';
 
 // Re-export Assembler for direct programmatic use
@@ -128,6 +128,8 @@ export interface AssemblerOptions {
   symbolIndex?: SymbolIndex;
   /** Cache of all the macros/defines for the LSP */
   macroIndex?: MacroIndex;
+  /** Cache of the conditional branches this run skipped, for the LSP */
+  inactiveRegionIndex?: InactiveRegionIndex;
   errorLimit?: number;
   /** Lint rule configuration. Lints run by default. */
   lint?: LintOptions;
@@ -397,7 +399,8 @@ export function assemble(
               const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
               toks.enter(tokenizer);
               const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
-                                           options?.macroIndex);
+                                           options?.macroIndex,
+                                           options?.inactiveRegionIndex);
               applyDefines(asm, pre, options?.defines, opts);
               asm.tokens(pre, signal);
               break;
@@ -535,7 +538,8 @@ export function assemble(
       const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
       toks.enter(tokenizer);
       const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
-                                   options?.macroIndex);
+                                   options?.macroIndex,
+                                   options?.inactiveRegionIndex);
       applyDefines(asm, pre, options?.defines, opts);
       asm.tokens(pre, signal);
 

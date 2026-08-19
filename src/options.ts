@@ -4,7 +4,7 @@
 import { RecoverableError, type AssemblerMessage, type ErrorCollector } from './error.ts';
 import type { OverwriteMode } from './module.ts';
 import type { RefExtractor } from './assembler.ts';
-import type { MacroIndex, SymbolIndex } from './lspindex.ts';
+import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
 import type { LintPragmas } from './lint.ts';
 
 
@@ -85,6 +85,8 @@ export interface AssemblerOptions {
   symbolIndex?: SymbolIndex;
   /** Sink for the macros/defines found by the preprocessor */
   macroIndex?: MacroIndex;
+  /** Sink for the conditional branches the preprocessor skipped */
+  inactiveRegionIndex?: InactiveRegionIndex;
   errorLimit?: number;
 }
 

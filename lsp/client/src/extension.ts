@@ -14,11 +14,13 @@ import {
 } from 'vscode-languageclient/node';
 
 import { registerMacroExpansion } from './expandMacro';
+import { registerInactiveRegions, type RebindInactiveRegions } from './inactiveRegions';
 import { resolveServerModule, serverOptionsFor } from './server';
 
 let client: LanguageClient | undefined;
 let outputChannel: vscode.LogOutputChannel | undefined;
 let statusItem: vscode.StatusBarItem | undefined;
+let rebindInactiveRegions: RebindInactiveRegions | undefined;
 
 export interface Js65Api {
 	getClient(): LanguageClient | undefined;
@@ -35,6 +37,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Js65Ap
 		vscode.commands.registerCommand('js65.showOutput', () => outputChannel?.show(true)),
 	);
 	registerMacroExpansion(context, () => client);
+	rebindInactiveRegions = registerInactiveRegions(context);
 
 	// A change to how the server is launched only takes effect on restart, so do
 	// it for the user rather than making them find the command.
@@ -113,6 +116,9 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 
 	try {
 		await client.start();
+		// Only after `start()` resolves: notifications arriving on a client that
+		// has no handler yet are dropped, not queued.
+		rebindInactiveRegions?.(client);
 	} catch (err) {
 		outputChannel?.appendLine(`Failed to start: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
 		setStatus('$(error) js65', 'js65 language server failed to start. Click for output');

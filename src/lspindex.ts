@@ -179,3 +179,82 @@ export class SymbolIndex {
     return undefined;
   }
 }
+/** A half-open span of source lines that the preprocessor threw away. */
+export interface InactiveRegion {
+  /** File the lines came from, as the tokenizer named it. */
+  readonly file: string;
+  /** First skipped line, 1-based and inclusive. */
+  readonly startLine: number;
+  /** Last skipped line, 1-based and inclusive. */
+  readonly endLine: number;
+}
+
+export class InactiveRegionIndex {
+  private readonly regions: InactiveRegion[] = [];
+  /** Open run being accumulated, so adjacent skipped lines merge into one span. */
+  private open: {file: string, startLine: number, endLine: number} | undefined;
+  private readonly live = new Map<string, Set<number>>();
+
+  skipLine(source: SourceInfo | undefined): void {
+    if (!source) return;
+    const {file, line} = source;
+    if (this.open && this.open.file === file && line >= this.open.endLine &&
+        line <= this.open.endLine + 1) {
+      this.open.endLine = Math.max(this.open.endLine, line);
+      return;
+    }
+    this.flush();
+    this.open = {file, startLine: line, endLine: line};
+  }
+
+  keepLine(source: SourceInfo | undefined): void {
+    if (!source) return;
+    let lines = this.live.get(source.file);
+    if (!lines) this.live.set(source.file, lines = new Set());
+    lines.add(source.line);
+  }
+
+  flush(): void {
+    if (!this.open) return;
+    this.regions.push({...this.open});
+    this.open = undefined;
+  }
+
+  all(): readonly InactiveRegion[] {
+    this.flush();
+    return this.regions;
+  }
+
+  forFile(file: string): InactiveRegion[] {
+    const live = this.live.get(file);
+    const dead = new Set<number>();
+    for (const r of this.all()) {
+      if (r.file !== file) continue;
+      for (let line = r.startLine; line <= r.endLine; line++) {
+        if (!live?.has(line)) dead.add(line);
+      }
+    }
+    return coalesce(file, [...dead].sort((a, b) => a - b));
+  }
+
+  get size(): number { return this.all().length; }
+}
+
+/** Turn a sorted list of dead line numbers back into contiguous spans. */
+function coalesce(file: string, lines: readonly number[]): InactiveRegion[] {
+  const out: InactiveRegion[] = [];
+  let start: number | undefined;
+  let prev = 0;
+  for (const line of lines) {
+    if (start === undefined) {
+      start = prev = line;
+    } else if (line === prev + 1) {
+      prev = line;
+    } else {
+      out.push({file, startLine: start, endLine: prev});
+      start = prev = line;
+    }
+  }
+  if (start !== undefined) out.push({file, startLine: start, endLine: prev});
+  return out;
+}

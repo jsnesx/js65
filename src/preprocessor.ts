@@ -10,7 +10,8 @@ import type { Token } from './token.ts';
 import * as Tokens from './token.ts';
 import {TokenStream} from './tokenstream.ts';
 import { ErrorCollector, FatalError, RecoverableError, SourceError } from './error.ts';
-import type {MacroIndex} from './lspindex.ts';
+import type { SourceInfo } from './error.ts';
+import type {InactiveRegionIndex, MacroIndex} from './lspindex.ts';
 
 // TODO - figure out how to actually keep track of stack depth?
 //  - might need to insert a special token at the end of an expansion
@@ -108,11 +109,14 @@ export class Preprocessor implements Tokens.Source {
 
   /** Sink for the macros/defines found by the preprocessor. Only set by the LSP. */
   readonly macroIndex?: MacroIndex;
+  /** Sink for the conditional branches this run skipped. Only set by the LSP. */
+  readonly inactiveRegionIndex?: InactiveRegionIndex;
 
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor,
               readonly errorCollector?: ErrorCollector,
-              macroIndex?: MacroIndex) {
+              macroIndex?: MacroIndex,
+              inactiveRegionIndex?: InactiveRegionIndex) {
     this.macros = parent ? parent.macros : new Map();
     if (!errorCollector && parent?.errorCollector) {
       this.errorCollector = parent.errorCollector;
@@ -120,6 +124,7 @@ export class Preprocessor implements Tokens.Source {
     // Nested preprocessors share the parent's index, the same way they share
     // the macro map itself.
     this.macroIndex = macroIndex ?? parent?.macroIndex;
+    this.inactiveRegionIndex = inactiveRegionIndex ?? parent?.inactiveRegionIndex;
   }
 
 
@@ -921,13 +926,17 @@ export class Preprocessor implements Tokens.Source {
     let depth = 1;
     let done = false;
     const result: Token[][] = [];
+    // The LSP greys out the branches this run drops. Branch markers themselves
+    // (`.if`, `.elseif`, `.else`, `.endif`) stay lit, so switching branches
+    // ends the run rather than extending it across the directive line.
+    const dead = this.inactiveRegionIndex;
     Tokens.pullLines(this.stream, line => {
       // Report missing endif at the site of the starting .if
       if (!line) Tokens.fail(`EOF looking for .endif`, at);
       const front = line[0];
       if (Tokens.eq(front, Tokens.ENDIF)) {
         depth--;
-        if (!depth) return false;
+        if (!depth) { dead?.flush(); return false; }
       } else if (front.token === 'cs' && front.str.startsWith('.if')) {
         depth++;
       } else if (depth === 1 && !done) {
@@ -939,20 +948,31 @@ export class Preprocessor implements Tokens.Source {
           return true;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
+          dead?.flush();
           cond = this.condition(() => !!this.evaluateConst(
               parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
               front), front);
           return true;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
+          dead?.flush();
           cond = true;
           return true;
         }
       }
       // anything else on the line
-      if (cond) result.push(line);
+      if (cond) {
+        result.push(line);
+        // Only this level's verdict is final. A line inside a nested `.if` is
+        // re-decided when that block is unshifted and parsed in turn, so
+        // calling it live here would override the inner branch that drops it.
+        if (depth === 1) dead?.keepLine(sourceOfLine(line));
+      } else {
+        dead?.skipLine(sourceOfLine(line));
+      }
       return true;
     });
+    dead?.flush();
     // result has the expansion: unshift it
     this.stream.unshift(...result);
   }
@@ -1089,6 +1109,13 @@ export class Preprocessor implements Tokens.Source {
   //     }
   //   }
   // }
+}
+
+function sourceOfLine(line: Token[]): SourceInfo | undefined {
+  for (const t of line) {
+    if (t.source) return t.source;
+  }
+  return undefined;
 }
 
 // Handles scoped names, too.

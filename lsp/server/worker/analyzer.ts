@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import {assemble, link, searchFiles, type AssemblyInput, type AssemblerOptions, type CancelSignal,
         type FileCallbacks} from '../../../src/libassembler.ts';
 import type {AssemblerMessage, SourceInfo} from '../../../src/error.ts';
-import {MacroIndex, SymbolIndex} from '../../../src/lspindex.ts';
+import {InactiveRegionIndex, MacroIndex, SymbolIndex} from '../../../src/lspindex.ts';
 import type {Module, Segment} from '../../../src/module.ts';
 import {lowerLinkerConfig, parseLinkerConfig} from '../../../src/linkerconfig.ts';
 import {joinDir} from '../../../src/util.ts';
@@ -32,6 +32,8 @@ export interface ProjectAnalysis {
   readonly index: SymbolIndex;
   /** Macro/define table the run built for hover. */
   readonly macros: MacroIndex;
+  /** Conditional branches this run skipped, for greying them out in the editor. */
+  readonly inactiveRegions: InactiveRegionIndex;
   /** Every source/.include/.incbin path the run touched used for invalidation. */
   readonly touchedFiles: ReadonlySet<string>;
   /** True if the project was assembled in standalone (no `js65.json`) mode. */
@@ -376,6 +378,7 @@ export class Analyzer {
 
     const index = new SymbolIndex();
     const macros = new MacroIndex();
+    const inactiveRegions = new InactiveRegionIndex();
     const asmOpts: AssemblerOptions = {
       includePaths: project.includePaths,
       binIncludePaths: project.binIncludePaths,
@@ -384,6 +387,7 @@ export class Analyzer {
       collectReferences: true,
       symbolIndex: index,
       macroIndex: macros,
+      inactiveRegionIndex: inactiveRegions,
       // Without these every `.ifdef` guarded block is invisible to the LSP, so
       // whole banks go undeclared and the symbols inside them never resolve.
       defines: project.defines,
@@ -432,8 +436,8 @@ export class Analyzer {
     bucketMessages(messages.map(m => anchorToProject(m, project)),
                    diagnostics, touchedUris, uriOf);
 
-    return {project, index, macros, touchedFiles: touched, standalone, modules,
-            ramSegments: collectRamSegments(project, modules)};
+    return {project, index, macros, inactiveRegions, touchedFiles: touched, standalone,
+            modules, ramSegments: collectRamSegments(project, modules)};
   }
 
   /**
