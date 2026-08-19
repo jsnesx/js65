@@ -8,6 +8,12 @@ import type {Js65Config} from './project.ts';
 import {LSP_PROTOCOL_VERSION, fromLspError, isLspResponse, type FeatureMethod,
         type LspRes} from './worker/protocol.ts';
 
+/** One file's dimmed line spans, 0-based and end-exclusive. */
+export interface InactiveRegionsForUri {
+  uri: string;
+  spans: Array<{startLine: number, endLine: number}>;
+}
+
 /** What the host does with a diagnostics push. */
 export interface AnalyzerDiagnostics {
   diagnostics: Map<string, Diagnostic[]>;
@@ -29,6 +35,8 @@ export class LspWorkerClient {
   onDiagnostics?: (result: AnalyzerDiagnostics) => void;
   /** Called for analyzer log output, which the host frames as `window/logMessage`. */
   onLog?: (message: string) => void;
+  /** Called with the conditional branches the last pass skipped. */
+  onInactiveRegions?: (regions: InactiveRegionsForUri[]) => void;
 
   constructor(private readonly port: HostPort) {
     this.port.onMessage((message) => this.receive(message));
@@ -129,6 +137,8 @@ export class LspWorkerClient {
           diagnostics: new Map(res.diagnostics),
           touchedUris: new Set(res.touchedUris),
         });
+      } else if (res.kind === 'inactiveRegions') {
+        this.onInactiveRegions?.(res.regions.map(([uri, spans]) => ({uri, spans})));
       } else if (res.kind === 'log') {
         this.onLog?.(res.message);
       }

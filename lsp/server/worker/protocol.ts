@@ -97,6 +97,17 @@ export interface DiagnosticsNotification {
   touchedUris: string[];
 }
 
+/**
+ * Line ranges the preprocessor skipped, so the editor can grey them out the way
+ * a C editor greys out an untaken `#if`.
+ */
+export interface InactiveRegionsNotification {
+  v: typeof LSP_PROTOCOL_VERSION;
+  kind: 'inactiveRegions';
+  /** URI -> the 0-based, end-exclusive line spans to dim in that file. */
+  regions: [string, Array<{startLine: number, endLine: number}>][];
+}
+
 /** Analyzer log output, surfaced through the connection console on the host. */
 export interface LogNotification {
   v: typeof LSP_PROTOCOL_VERSION;
@@ -104,7 +115,8 @@ export interface LogNotification {
   message: string;
 }
 
-export type LspRes = LspOkResponse | LspErrResponse | DiagnosticsNotification | LogNotification;
+export type LspRes = LspOkResponse | LspErrResponse | DiagnosticsNotification
+                   | InactiveRegionsNotification | LogNotification;
 
 /** Narrows a worker message to a response with an `id`, i.e. not a notification. */
 export function isLspResponse(res: LspRes): res is LspOkResponse | LspErrResponse {

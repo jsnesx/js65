@@ -15,7 +15,8 @@ import {tmpdir} from 'node:os';
 import * as path from 'node:path';
 
 import {nodeHostPort, type HostPort, type WorkerPort} from '../../../src/worker/port.ts';
-import {LspWorkerClient, type AnalyzerDiagnostics} from '../workerclient.ts';
+import {LspWorkerClient, type AnalyzerDiagnostics,
+        type InactiveRegionsForUri} from '../workerclient.ts';
 import {FileSync, type FileSink} from '../filesync.ts';
 import {buildSnapshot, deltaForPath, watchedFilesGlob,
         isCachablePath} from '../filecachebuilder.ts';
@@ -218,6 +219,93 @@ describe('analyzer worker', () => {
     await client.terminate();
     await expect(pending).rejects.toThrow(/terminated/);
   }, 15000);
+});
+
+describe('inactive regions', () => {
+  /** Resolves on the first inactive-regions push. */
+  function nextRegions(client: LspWorkerClient): Promise<InactiveRegionsForUri[]> {
+    return new Promise((resolve) => { client.onInactiveRegions = resolve; });
+  }
+
+  it('pushes the untaken branch of an .if as 0-based, end-exclusive spans', async () => {
+    const {client} = inProcessAnalyzer();
+    const uri = pathToUri('/proj/main.s');
+    try {
+      client.setWorkspaceRoot('/proj');
+      const pending = nextRegions(client);
+      // 0:.if  1:lda  2:.else  3:lda  4:nop  5:.endif  6:rts
+      client.open(uri, [
+        '.if 1',
+        '  lda #1',
+        '.else',
+        '  lda #2',
+        '  nop',
+        '.endif',
+        '  rts',
+      ].join('\n'), 1);
+      const regions = await pending;
+      const forMain = regions.find(r => r.uri === uri);
+      // Lines 3 and 4 are dead, so the span covers [3, 5).
+      expect(forMain?.spans).toEqual([{startLine: 3, endLine: 5}]);
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('pushes an empty span list once the dead branch goes live', async () => {
+    // The client needs the empty push to clear a decoration it already painted.
+    const {client} = inProcessAnalyzer();
+    const uri = pathToUri('/proj/main.s');
+    const source = (cond: string) =>
+        [`.if ${cond}`, '  lda #1', '.else', '  lda #2', '.endif'].join('\n');
+    try {
+      client.setWorkspaceRoot('/proj');
+      const first = nextRegions(client);
+      client.open(uri, source('1'), 1);
+      expect((await first).find(r => r.uri === uri)?.spans)
+          .toEqual([{startLine: 3, endLine: 4}]);
+
+      // `.if 1` and `.else` both assemble across the two versions, but each
+      // analysis pass builds a fresh index, so the second sees only its own run.
+      const second = nextRegions(client);
+      client.change(uri, source('0'), 2);
+      expect((await second).find(r => r.uri === uri)?.spans)
+          .toEqual([{startLine: 1, endLine: 2}]);
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('dims nothing when the file has no conditionals', async () => {
+    const {client} = inProcessAnalyzer();
+    const uri = pathToUri('/proj/main.s');
+    try {
+      client.setWorkspaceRoot('/proj');
+      const pending = nextRegions(client);
+      client.open(uri, 'main:\n  lda #1\n  rts\n', 1);
+      expect((await pending).find(r => r.uri === uri)?.spans).toEqual([]);
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('dims a dead branch in an included file, not just the open one', async () => {
+    const {client} = inProcessAnalyzer();
+    const uri = pathToUri('/proj/main.s');
+    const incUri = pathToUri('/proj/defs.inc');
+    try {
+      client.setWorkspaceRoot('/proj');
+      client.setFiles(new Map([
+        ['/proj/defs.inc', ['.ifdef NEVER', 'BAD = 1', 'ALSO_BAD = 2', '.endif'].join('\n')],
+      ]));
+      const pending = nextRegions(client);
+      client.open(uri, '.include "defs.inc"\n  rts\n', 1);
+      const forInc = (await pending).find(r => r.uri === incUri);
+      expect(forInc?.spans).toEqual([{startLine: 1, endLine: 3}]);
+    } finally {
+      await client.terminate();
+    }
+  });
 });
 
 describe('analyzer worker client', () => {

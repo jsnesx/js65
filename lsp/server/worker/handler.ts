@@ -11,13 +11,37 @@ import {computeCompletion} from './features/completion.ts';
 import {computeFolding, computeSemanticTokens, type SymbolResolver}
     from './features/structure.ts';
 import {LSP_PROTOCOL_VERSION, toLspError, type DiagnosticsNotification, type FeatureRequest,
-        type LogNotification, type LspErrResponse, type LspOkResponse, type LspReq}
-    from './protocol.ts';
+        type InactiveRegionsNotification, type LogNotification, type LspErrResponse,
+        type LspOkResponse, type LspReq} from './protocol.ts';
+import {pathToUri} from '../convert.ts';
+import type {AnalysisResult} from './analyzer.ts';
 
 export interface ServeOptions {
   debounceMs?: number;
   workspaceRoot?: string;
   errorLimit?: number;
+}
+
+/**
+ * Turn sorted 1-based line numbers into 0-based, end-exclusive spans, which is
+ * what a `vscode.Range` over whole lines wants.
+ */
+function toSpans(lines: readonly number[]): Array<{startLine: number, endLine: number}> {
+  const out: Array<{startLine: number, endLine: number}> = [];
+  let start: number | undefined;
+  let prev = 0;
+  for (const line of lines) {
+    if (start === undefined) {
+      start = prev = line;
+    } else if (line === prev + 1) {
+      prev = line;
+    } else {
+      out.push({startLine: start - 1, endLine: prev});
+      start = prev = line;
+    }
+  }
+  if (start !== undefined) out.push({startLine: start - 1, endLine: prev});
+  return out;
 }
 
 function isRequest(message: unknown): message is LspReq {
@@ -49,7 +73,39 @@ export function serveLspWorker(port: WorkerPort, opts: ServeOptions = {}): Analy
       touchedUris: [...result.touchedUris],
     };
     port.post(note);
+    port.post(inactiveRegionsNote(result));
   };
+
+  /**
+   * Collect every project's skipped ranges into one per-URI map. A file included
+   * by two projects can be dead in one and live in the other.
+   * That way a line only dims when every project that read it skipped it.
+   */
+  function inactiveRegionsNote(result: AnalysisResult): InactiveRegionsNotification {
+    const perFile = new Map<string, Array<Set<number>>>();
+    for (const analysis of result.projects.values()) {
+      for (const file of analysis.touchedFiles) {
+        const dead = new Set<number>();
+        for (const r of analysis.inactiveRegions.forFile(file)) {
+          for (let line = r.startLine; line <= r.endLine; line++) dead.add(line);
+        }
+        const votes = perFile.get(file) ?? [];
+        perFile.set(file, votes);
+        votes.push(dead);
+      }
+    }
+
+    const regions: InactiveRegionsNotification['regions'] = [];
+    for (const [file, votes] of perFile) {
+      const [first, ...rest] = votes;
+      const agreed = [...first].filter(line => rest.every(v => v.has(line)))
+          .sort((a, b) => a - b);
+      // Always emit an entry, even an empty one: the client needs the empty
+      // list to clear decorations from a file whose `.if` just went live.
+      regions.push([pathToUri(file), toSpans(agreed)]);
+    }
+    return {v: LSP_PROTOCOL_VERSION, kind: 'inactiveRegions', regions};
+  }
 
   port.onMessage((message) => {
     if (!isRequest(message)) return;

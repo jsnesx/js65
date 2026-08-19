@@ -16,7 +16,8 @@ import {
 import {URI} from 'vscode-uri';
 
 import {findProjectFile, loadProject} from './project.ts';
-import {LspWorkerClient, type AnalyzerDiagnostics} from './workerclient.ts';
+import {LspWorkerClient, type AnalyzerDiagnostics,
+        type InactiveRegionsForUri} from './workerclient.ts';
 import {spawnAnalyzerWorker} from './spawnworker.ts';
 import {FileSync} from './filesync.ts';
 import {watchedFilesGlob} from './filecachebuilder.ts';
@@ -66,6 +67,23 @@ export async function main(opts: ServerOptions = {}): Promise<void> {
   let lastPublishedUris = new Set<string>();
   // Open documents we have already told the client are clean.
   const declaredClean = new Set<string>();
+
+  // URIs we last sent dimming for, so a file whose `.if` went live gets an
+  // explicit empty push instead of keeping stale grey text.
+  let lastDimmedUris = new Set<string>();
+
+  analyzer.onInactiveRegions = (regions: InactiveRegionsForUri[]) => {
+    const nextUris = new Set<string>();
+    for (const {uri, spans} of regions) {
+      if (spans.length) nextUris.add(uri);
+      connection.sendNotification('js65/inactiveRegions', {uri, regions: spans});
+    }
+    for (const uri of lastDimmedUris) {
+      if (nextUris.has(uri)) continue;
+      connection.sendNotification('js65/inactiveRegions', {uri, regions: []});
+    }
+    lastDimmedUris = nextUris;
+  };
 
   analyzer.onDiagnostics = (result: AnalyzerDiagnostics) => {
     const nextUris = new Set<string>();
