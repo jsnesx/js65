@@ -2,6 +2,7 @@
 
 
 import type {WorkerPort} from '../../../src/worker/port.ts';
+import type {Symbol} from '../../../src/assembler.ts';
 import {Analyzer} from './analyzer.ts';
 import {computeDefinition, computeDocumentSymbols, computeReferences,
         computeWorkspaceSymbols, projectForDoc} from './features/navigation.ts';
@@ -151,7 +152,7 @@ export function serveLspWorker(port: WorkerPort, opts: ServeOptions = {}): Analy
   function symbolResolver(uri: string): SymbolResolver | undefined {
     const analysis = projectForDoc(analyzer, uri);
     if (!analysis) return undefined;
-    const {index, macros} = analysis;
+    const {index, macros, ramSegments} = analysis;
     const kinds = new Map<string, ReturnType<SymbolResolver['kindOf']>>();
     const scopes = new Set<string>();
     for (const scope of index.walk()) {
@@ -162,8 +163,25 @@ export function serveLspWorker(port: WorkerPort, opts: ServeOptions = {}): Analy
       for (const [name, sym] of scope.symbols) {
         // First writer wins so an outer scope doesn't mask an inner one's kind
         // for a name that exists in both.
-        if (!kinds.has(name)) kinds.set(name, index.kindOf(sym));
+        if (kinds.has(name)) continue;
+        const kind = index.kindOf(sym);
+        kinds.set(name, kind === 'label' && inRamSegment(sym) ? 'ramLabel' : kind);
       }
+    }
+
+    /** True if the symbol's chunk can only land in segments that emit no bytes. */
+    function inRamSegment(sym: Symbol): boolean {
+      if (!ramSegments.size) return false;
+      const chunkIndex = sym.expr?.meta?.chunk;
+      if (chunkIndex == null) return false;
+      const moduleName = index.moduleOf(sym);
+      if (moduleName == null) return false;
+      const chunk = analysis!.modules.find(m => m.name === moduleName)
+          ?.chunks?.[chunkIndex];
+      // `segments` lists every segment the chunk *may* occupy, so it only names
+      // RAM if every candidate does. A chunk free to land in ROM is code.
+      return chunk != null && chunk.segments.length > 0 &&
+          chunk.segments.every(s => ramSegments.has(s));
     }
     return {
       kindOf: (name) => kinds.get(name),

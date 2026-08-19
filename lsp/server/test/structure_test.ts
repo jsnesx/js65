@@ -184,7 +184,8 @@ describe('structure', () => {
 
     /** A resolver standing in for a completed assemble. */
     function resolver(spec: {
-      kinds?: Record<string, 'label' | 'constant' | 'enumMember' | 'structMember'>,
+      kinds?: Record<string,
+          'label' | 'ramLabel' | 'constant' | 'enumMember' | 'structMember'>,
       macros?: string[],
       scopes?: string[],
     }): SymbolResolver {
@@ -289,6 +290,28 @@ describe('structure', () => {
       const text = ['main:', '  rts', ''].join('\n');
       const tokens = decode(computeSemanticTokens(text).data);
       expect(tokens[0].type).toBe(idx('label'));
+    });
+
+    // A label in a bss segment names storage, so it must not share the branch
+    // target colour. Without this the whole file reads as one colour.
+    it('separates a RAM label from a code label', () => {
+      const text = ['  jsr SwitchBank', '  lda ZoneIdx', ''].join('\n');
+      const syms = resolver({kinds: {SwitchBank: 'label', ZoneIdx: 'ramLabel'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const code = at(tokens, 0, 6)!;
+      const ram = at(tokens, 1, 6)!;
+      expect(code.type).toBe(idx('function'));
+      expect(ram.type).toBe(idx('variable'));
+      expect(ram.mod & modBit('readonly')).toBeFalsy();
+    });
+
+    it('declares a RAM label as a variable, not a function', () => {
+      const text = ['ZoneIdx: .res 1', ''].join('\n');
+      const syms = resolver({kinds: {ZoneIdx: 'ramLabel'}});
+      const tokens = decode(computeSemanticTokens(text, syms).data);
+      const def = at(tokens, 0, 0)!;
+      expect(def.type).toBe(idx('variable'));
+      expect(def.mod & modBit('declaration')).toBeTruthy();
     });
 
     it('every emitted modifier bit exists in the legend', () => {

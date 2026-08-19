@@ -292,6 +292,117 @@ describe('analyzer', () => {
   // Feature handlers await settled() before answering. A client caches an empty
   // answer against the document version, so answering early leaves an editor
   // showing a blank outline until the file is next edited.
+  describe('ramSegments', () => {
+    it('collects bss segments declared with js65 .segment syntax', async () => {
+      const fs = new MemFs();
+      const code = [
+        '.segment "BSS" :mem $0300 :size $100',
+        '.segment "CODE" :mem $8000 :size $100 :out "%O"',
+        '.segment "BSS"',
+        'ZoneIdx: .res 1',
+        '.segment "CODE"',
+        'SwitchBank:',
+        '  rts',
+      ].join('\n') + '\n';
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}]);
+      const analysis = [...result.projects.values()][0];
+      expect(analysis.ramSegments.has('BSS')).toBe(true);
+      expect(analysis.ramSegments.has('CODE')).toBe(false);
+    });
+
+    // A segment is declared once with its placement and then re-entered bare
+    // throughout the sources. Letting the bare re-entry win erased the `:out`
+    // from the real declaration and turned whole ROM banks into RAM.
+    it('keeps placement when a segment is re-entered bare', async () => {
+      const fs = new MemFs();
+      const code = [
+        '.segment "BANK5" :bank $05 :size $4000 :mem $8000 :out',
+        '.segment "RAM" :size $700 :mem $0100',
+        '',
+        '.segment "BANK5"',   // bare re-entry, carries no placement
+        'Routine:',
+        '  rts',
+        '.segment "RAM"',
+        'Var: .res 1',
+      ].join('\n') + '\n';
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}]);
+      const analysis = [...result.projects.values()][0];
+      expect(analysis.ramSegments.has('BANK5')).toBe(false);
+      expect(analysis.ramSegments.has('RAM')).toBe(true);
+    });
+
+    // `:load` points at the segment that actually holds the bytes, so a data
+    // segment loading into a ROM bank is ROM however bare its own declaration.
+    it('follows a :load chain to the segment that holds the bytes', async () => {
+      const fs = new MemFs();
+      const code = [
+        '.segment "BANK1" :bank $01 :size $4000 :mem $8000 :out',
+        '.segment "HIRAM" :size $2000 :mem $6000',
+        '.segment "TABLES" :load "BANK1"',
+        '.segment "VARS" :load "HIRAM"',
+      ].join('\n') + '\n';
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}]);
+      const analysis = [...result.projects.values()][0];
+      expect(analysis.ramSegments.has('TABLES')).toBe(false);
+      expect(analysis.ramSegments.has('VARS')).toBe(true);
+    });
+
+    // The analyzer never forwarded `defines`, so every `.ifdef`-guarded block
+    // was invisible: banks went undeclared and the labels in them never
+    // resolved, for navigation and diagnostics as much as for highlighting.
+    it('assembles ifdef-guarded segments using the project defines', async () => {
+      const fs = new MemFs();
+      const code = [
+        '.ifdef BIG_ROM',
+        '.segment "BANK1E" :bank $1e :size $2000 :mem $8000 :out',
+        '.endif',
+        '.segment "CODE" :load "BANK1E"',
+      ].join('\n') + '\n';
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}], {
+        rootDir: '/proj',
+        json: JSON.stringify({
+          projects: [{name: 'p', sources: ['main.s'], defines: {BIG_ROM: 1}}],
+        }),
+      });
+      const analysis = [...result.projects.values()][0];
+      // BANK1E only exists when the define is honoured, and CODE is only ROM
+      // when its load target resolves.
+      expect(analysis.ramSegments.has('BANK1E')).toBe(false);
+      expect(analysis.ramSegments.has('CODE')).toBe(false);
+    });
+
+    // A lowered SEGMENTS entry has no `out` of its own, so testing it in
+    // isolation called every code segment RAM and gave `jsr` targets the
+    // variable colour.
+    it('resolves a linker config segment through its load area', async () => {
+      const fs = new MemFs();
+      const cfg = [
+        'MEMORY {',
+        '  RAM: start = $0300, size = $500, type = rw;',
+        '  PRG: start = $8000, size = $4000, type = ro, file = %O;',
+        '}',
+        'SEGMENTS {',
+        '  BSS:    load = RAM, type = bss;',
+        '  VARS:   load = RAM;',
+        '  CODE:   load = PRG, type = ro;',
+        '  RODATA: load = PRG;',
+        '}',
+      ].join('\n') + '\n';
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: '  rts\n'}], {
+        rootDir: '/proj',
+        json: JSON.stringify({
+          projects: [{name: 'p', sources: ['main.s'], linkerConfig: 'l.cfg'}],
+        }),
+        extraFiles: {'l.cfg': cfg},
+      });
+      const analysis = [...result.projects.values()][0];
+      expect(analysis.ramSegments.has('BSS')).toBe(true);
+      expect(analysis.ramSegments.has('VARS')).toBe(true);
+      expect(analysis.ramSegments.has('CODE')).toBe(false);
+      expect(analysis.ramSegments.has('RODATA')).toBe(false);
+    });
+  });
+
   describe('settled()', () => {
     it('resolves immediately when nothing is scheduled', async () => {
       const analyzer = new Analyzer({workspaceRoot: '/proj', debounceMs: 0});

@@ -8,7 +8,8 @@ import {assemble, link, searchFiles, type AssemblyInput, type AssemblerOptions, 
         type FileCallbacks} from '../../../src/libassembler.ts';
 import type {AssemblerMessage, SourceInfo} from '../../../src/error.ts';
 import {MacroIndex, SymbolIndex} from '../../../src/lspindex.ts';
-import type {Module} from '../../../src/module.ts';
+import type {Module, Segment} from '../../../src/module.ts';
+import {lowerLinkerConfig, parseLinkerConfig} from '../../../src/linkerconfig.ts';
 import {joinDir} from '../../../src/util.ts';
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
@@ -40,6 +41,7 @@ export interface ProjectAnalysis {
    * without reassembling. Empty when the assemble failed outright.
    */
   readonly modules: readonly Module[];
+  readonly ramSegments: ReadonlySet<string>;
 }
 
 export interface AnalysisResult {
@@ -382,6 +384,9 @@ export class Analyzer {
       collectReferences: true,
       symbolIndex: index,
       macroIndex: macros,
+      // Without these every `.ifdef` guarded block is invisible to the LSP, so
+      // whole banks go undeclared and the symbols inside them never resolve.
+      defines: project.defines,
       errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
       // Workspace-wide, so a standalone file in a project folder lints the same
       // way the projects around it do.
@@ -427,7 +432,8 @@ export class Analyzer {
     bucketMessages(messages.map(m => anchorToProject(m, project)),
                    diagnostics, touchedUris, uriOf);
 
-    return {project, index, macros, touchedFiles: touched, standalone, modules};
+    return {project, index, macros, touchedFiles: touched, standalone, modules,
+            ramSegments: collectRamSegments(project, modules)};
   }
 
   /**
@@ -636,6 +642,54 @@ function hasMemoryLayout(analysis: ProjectAnalysis): boolean {
       s => s.size !== undefined || s.memory !== undefined ||
            s.offset !== undefined || s.out !== undefined ||
            s.free?.length));
+}
+
+function collectRamSegments(
+    project: Js65Project, modules: readonly Module[]): ReadonlySet<string> {
+  const byName = new Map<string, Segment>();
+  for (const m of modules) {
+    for (const seg of m.segments ?? []) mergeSegment(byName, seg);
+  }
+  if (project.linkerConfig) {
+    try {
+      const cfg = parseLinkerConfig(project.linkerConfig,
+                                    project.linkerConfigPath ?? 'linker.cfg');
+      for (const seg of lowerLinkerConfig(cfg)) mergeSegment(byName, seg);
+    } catch (_e) {
+      // A malformed config is already reported by the link pass. Highlighting
+      // just falls back to treating every label as code.
+    }
+  }
+
+  const out = new Set<string>();
+  for (const [name, seg] of byName) {
+    if (isRamSegment(seg, byName)) out.add(name);
+  }
+  return out;
+}
+
+function mergeSegment(byName: Map<string, Segment>, seg: Segment): void {
+  const prior = byName.get(seg.name);
+  if (!prior) {
+    byName.set(seg.name, {...seg});
+    return;
+  }
+  for (const [key, value] of Object.entries(seg)) {
+    if (value !== undefined && prior[key as keyof Segment] === undefined) {
+      (prior as Record<string, unknown>)[key] = value;
+    }
+  }
+}
+
+function isRamSegment(segment: Segment, byName: ReadonlyMap<string, Segment>,
+                      seen = new Set<string>()): boolean {
+  if (segment.bss != null) return segment.bss;
+  if (segment.load != null && !seen.has(segment.name)) {
+    seen.add(segment.name);
+    const target = byName.get(segment.load);
+    if (target) return isRamSegment(target, byName, seen);
+  }
+  return !segment.out && segment.offset == null;
 }
 
 /**
