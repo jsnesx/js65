@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(process.env.JS65_REPO ?? join(extensionRoot, '..', '..'));
-const bundleName = 'js65-lsp.cjs';
+// Two bundles: the server and the analyzer worker it spawns from the same directory.
+const bundleNames = ['js65-lsp.cjs', 'js65-lsp-worker.cjs'];
 
 if (!existsSync(join(repo, 'package.json'))) {
 	console.error(`js65 repo not found at ${repo}.`);
@@ -26,13 +27,14 @@ if (build.error || build.status !== 0) {
 	process.exit(build.status ?? 1);
 }
 
-const built = join(repo, 'build', bundleName);
-if (!existsSync(built)) {
-	console.error(`Build reported success but ${built} is missing.`);
-	process.exit(1);
-}
-
 const outDir = join(extensionRoot, 'server');
 mkdirSync(outDir, { recursive: true });
-copyFileSync(built, join(outDir, bundleName));
-console.log(`Copied ${built} -> ${join(outDir, bundleName)}`);
+for (const bundleName of bundleNames) {
+	const built = join(repo, 'build', bundleName);
+	if (!existsSync(built)) {
+		console.error(`Build reported success but ${built} is missing.`);
+		process.exit(1);
+	}
+	copyFileSync(built, join(outDir, bundleName));
+	console.log(`Copied ${built} -> ${join(outDir, bundleName)}`);
+}

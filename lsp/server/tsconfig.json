@@ -9,6 +9,7 @@
     "include": [
         "*.ts",
         "features/**/*.ts",
+        "worker/**/*.ts",
         "test/**/*.ts",
         "../src/**/*.ts",
     ],

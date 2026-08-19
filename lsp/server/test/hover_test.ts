@@ -3,8 +3,8 @@
 import {describe, it, expect} from 'bun:test';
 
 import {Cpu} from '../../../src/cpu.ts';
-import {Analyzer} from '../analyzer.ts';
-import {computeHover, expandMacroAt} from '../features/hover.ts';
+import {Analyzer} from '../worker/analyzer.ts';
+import {computeHover, expandMacroAt} from '../worker/features/hover.ts';
 import {pathToUri} from '../convert.ts';
 import {MemFs} from './memfs.ts';
 

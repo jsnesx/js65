@@ -2,7 +2,7 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import {computeFolding, computeSemanticTokens, SEMANTIC_TOKEN_LEGEND} from '../features/structure.ts';
+import {computeFolding, computeSemanticTokens, SEMANTIC_TOKEN_LEGEND} from '../worker/features/structure.ts';
 
 describe('structure', () => {
   describe('computeFolding', () => {

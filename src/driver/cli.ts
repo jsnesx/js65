@@ -353,8 +353,7 @@ export class Cli {
         baseRom = romData;
       }
 
-      const result =
-          await compile(inputs, args.options, this.session.fileCallbacks, baseRom);
+      const result = compile(inputs, args.options, this.session.fileCallbacks, baseRom);
 
       if (result.messages.length > 0) {
         this.printMessages(result.messages);

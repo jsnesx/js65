@@ -4,7 +4,7 @@ import {describe, it, expect} from 'bun:test';
 
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
-import {Analyzer, type AnalysisResult} from '../analyzer.ts';
+import {Analyzer, type AnalysisResult} from '../worker/analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {toPosix} from '../project.ts';
 import {pathToUri} from '../convert.ts';
@@ -18,10 +18,6 @@ function messageOf(d: Diagnostic): string {
   return typeof d.message === 'string' ? d.message : d.message.value;
 }
 
-/**
- * Helper: open a doc, wait for the debounce + the async assemble to settle.
- * The analyzer's onDiagnostics callback resolves the promise once it fires.
- */
 async function runAnalyzer(
     fs: MemFs,
     docs: Array<{path: string, text: string}>,
@@ -174,6 +170,32 @@ describe('analyzer', () => {
     expect(result.diagnostics.size).toBeGreaterThan(0);
   });
 
+  // A read-through used to be folded into the resident cache, which pinned the first copy
+  // of the file for the life of the analyzer: nothing ever consulted `fsImpl` for it again.
+  it('re-reads an included file from fsImpl after it changes underneath', async () => {
+    const fs = new MemFs();
+    fs.add('/proj/defs.inc', 'FIRST = $01\n');
+    const analyzer = new Analyzer({
+      workspaceRoot: '/proj',
+      debounceMs: 0,
+      fsImpl: fs.sync as any,
+    });
+    analyzer.onDiagnostics = () => {};
+    const uri = pathToUri('/proj/main.s');
+
+    analyzer.open(uri, '.include "defs.inc"\nmain:\n  lda #FIRST\n  rts\n', 1);
+    await analyzer.settled();
+    const before = [...analyzer.getResult()!.projects.values()][0];
+    expect(before.index.findSymbol('FIRST')).toBeDefined();
+
+    fs.add('/proj/defs.inc', 'SECOND = $02\n');
+    analyzer.change(uri, '.include "defs.inc"\nmain:\n  lda #SECOND\n  rts\n', 2);
+    await analyzer.settled();
+    const after = [...analyzer.getResult()!.projects.values()][0];
+    expect(after.index.findSymbol('SECOND')).toBeDefined();
+    expect(after.index.findSymbol('FIRST')).toBeUndefined();
+  });
+
   it('survives a source deleted while the editor is open', async () => {
     const fs = new MemFs();
     fs.add('/proj/gone.s', 'gone:\n  rts\n');
@@ -193,40 +215,38 @@ describe('analyzer', () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
-  // Finding #2: schedule() cleared `pending` immediately after launching run(),
-  // so a started run was never cancelled. A slow run could publish after a
-  // newer one and leave the editor navigating a stale symbol index.
-  it.skip('does not let a superseded run overwrite a newer result', async () => {
+  // Finding #2: schedule() cleared `pending` immediately after launching run(), so a
+  // started run was never cancelled and could publish over a newer one.
+  //
+  // Since the core became synchronous, `run()` no longer yields once it starts: every
+  // `await` in it is on a function that resolves without suspending, so an outside
+  // observer can never catch a pass mid-flight. That makes the guard untestable through
+  // the public surface, so assert the contract directly on the token `schedule` owns.
+  it('cancels the token of a run it supersedes', async () => {
     const fs = new MemFs();
-    fs.add('/proj/slow.inc', 'SLOW = 1\n');
-    fs.delay('slow.inc', 60);
     const analyzer = new Analyzer({
       workspaceRoot: '/proj',
-      debounceMs: 0,
+      debounceMs: 5,
       fsImpl: fs.sync as any,
     });
-    const published: AnalysisResult[] = [];
-    analyzer.onDiagnostics = (r) => { published.push(r); };
+    analyzer.onDiagnostics = () => {};
 
     const uri = pathToUri('/proj/main.s');
-    analyzer.open(uri, '.include "slow.inc"\nFIRST = 1\n', 1);
-    // Let the first pass start and block on the slow include read.
-    await new Promise(r => setTimeout(r, 10));
-    analyzer.change(uri, '.include "slow.inc"\nSECOND = 2\n', 2);
-    // Wait for everything to settle.
-    await new Promise(r => setTimeout(r, 250));
+    analyzer.open(uri, 'FIRST = 1\n', 1);
+    // Debouncing, so the first pass is still queued and owns a token.
+    const superseded = (analyzer as never as {pending?: {signal: {aborted: boolean}}}).pending;
+    expect(superseded).toBeDefined();
+    expect(superseded!.signal.aborted).toBe(false);
 
-    // Whatever was published last must reflect the newest buffer text.
-    const final = analyzer.getResult();
-    expect(final).toBeDefined();
-    const analysis = [...final!.projects.values()][0];
+    analyzer.change(uri, 'SECOND = 2\n', 2);
+    // The superseded pass must be told to stop before the newer one is queued.
+    expect(superseded!.signal.aborted).toBe(true);
+
+    await analyzer.settled();
+    // And the result reflects the newest buffer, not the superseded one.
+    const analysis = [...analyzer.getResult()!.projects.values()][0];
     expect(analysis.index.findSymbol('SECOND')).toBeDefined();
     expect(analysis.index.findSymbol('FIRST')).toBeUndefined();
-    // And the stale pass must not have published at all.
-    for (const r of published) {
-      const u = [...r.projects.values()][0];
-      if (u) expect(u.index.findSymbol('FIRST')).toBeUndefined();
-    }
   });
 
   it('unions changed paths across one debounce window', async () => {
@@ -283,7 +303,6 @@ describe('analyzer', () => {
     it('waits for a scheduled pass to finish before resolving', async () => {
       const fs = new MemFs();
       fs.add('/proj/slow.inc', 'SLOW = 1\n');
-      fs.delay('slow.inc', 60);
       const analyzer = new Analyzer({
         workspaceRoot: '/proj', debounceMs: 10,
         fsImpl: fs.sync as any,
@@ -300,7 +319,6 @@ describe('analyzer', () => {
     it('waits through a pass that was superseded mid-flight', async () => {
       const fs = new MemFs();
       fs.add('/proj/slow.inc', 'SLOW = 1\n');
-      fs.delay('slow.inc', 40);
       const analyzer = new Analyzer({
         workspaceRoot: '/proj', debounceMs: 0,
         fsImpl: fs.sync as any,
@@ -319,7 +337,6 @@ describe('analyzer', () => {
     it('gives up after its timeout rather than hanging a request', async () => {
       const fs = new MemFs();
       fs.add('/proj/slow.inc', 'SLOW = 1\n');
-      fs.delay('slow.inc', 400);
       const analyzer = new Analyzer({
         workspaceRoot: '/proj', debounceMs: 0,
         fsImpl: fs.sync as any,

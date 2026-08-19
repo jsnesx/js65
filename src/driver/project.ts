@@ -306,7 +306,10 @@ export function toPosix(p: string): string {
     const [, server, share, rest] = unc;
     return `//${server}/${share}${rest ? joinDir('', rest) : ''}`;
   }
-  return joinDir('', p);
+  const joined = joinDir('', p);
+  return /^[A-Za-z]:(\/|$)/.test(joined)
+      ? joined.charAt(0).toLowerCase() + joined.slice(1)
+      : joined;
 }
 
 /**

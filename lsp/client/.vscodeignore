@@ -1,7 +1,8 @@
 # The VSIX is just the esbuild bundle plus the language server bundle; the
 # extension is packaged with `--no-dependencies`, so node_modules never ships.
-# `dist/extension.js` and `server/js65-lsp.cjs` are deliberately absent from
-# this list
+# `dist/extension.js`, `server/js65-lsp.cjs` and `server/js65-lsp-worker.cjs`
+# are deliberately absent from this list. The server spawns the worker from
+# its own directory, so both have to ship.
 .vscode/**
 .vscode-test/**
 out/**

@@ -5,7 +5,7 @@ import {describe, it, expect} from 'bun:test';
 import type {CodeActionParams, Diagnostic, TextEdit} from 'vscode-languageserver-protocol';
 
 import {computeCodeActions} from '../features/codeactions.ts';
-import {Analyzer, type AnalysisResult} from '../analyzer.ts';
+import {Analyzer, type AnalysisResult} from '../worker/analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {pathToUri} from '../convert.ts';
 
