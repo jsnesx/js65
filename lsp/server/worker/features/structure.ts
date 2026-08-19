@@ -138,7 +138,8 @@ const MOD_DEFAULT_LIBRARY = 1 << 3;
 
 export interface SymbolResolver {
   /** How `name` was declared, or undefined if the name isn't known. */
-  kindOf(name: string): 'label' | 'constant' | 'enumMember' | 'structMember' | undefined;
+  kindOf(name: string):
+      'label' | 'ramLabel' | 'constant' | 'enumMember' | 'structMember' | undefined;
   /** True if `name` names a `.macro` or `.define`. */
   isMacro(name: string): boolean;
   /** True if `name` names a `.scope` or `.proc`, so it can qualify a `::`. */
@@ -313,6 +314,9 @@ function classifyIdent(name: string, syms: SymbolResolver | undefined,
   if (syms?.isMacro(name)) return {type: TYPE_MACRO, mod: 0};
   if (kind === 'enumMember') return {type: TYPE_ENUM_MEMBER, mod: MOD_READONLY};
   if (kind === 'structMember') return {type: TYPE_PROPERTY, mod: MOD_READONLY};
+  // A label in a bss segment is storage, so it reads as a variable even though
+  // the assembler declared it exactly the way a jump target is declared.
+  if (kind === 'ramLabel') return {type: TYPE_VARIABLE, mod: 0};
   if (kind === 'label') {
     return {type: TYPE_FUNCTION, mod: cheap ? MOD_STATIC : 0};
   }
@@ -356,6 +360,10 @@ function classifyFirstToken(t: Token, syms: SymbolResolver | undefined,
   // branch target, so it must not take the function colour.
   if (kind === 'constant') {
     return {type: TYPE_VARIABLE, mod: MOD_READONLY | MOD_DECLARATION};
+  }
+  // Likewise a `Var: .res 2` in a bss segment declares storage, not a target.
+  if (kind === 'ramLabel') {
+    return {type: TYPE_VARIABLE, mod: MOD_DECLARATION};
   }
   if (kind === 'label' || syms) {
     return {type: TYPE_FUNCTION, mod: MOD_DECLARATION | (cheap ? MOD_STATIC : 0)};

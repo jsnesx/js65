@@ -20,6 +20,7 @@ import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs
 import {tmpdir} from 'node:os';
 import * as path from 'node:path';
 import {URI} from 'vscode-uri';
+import {SEMANTIC_TOKEN_LEGEND} from '../worker/features/structure.ts';
 
 interface JsonRpcResponse { id?: number| string, result?: unknown, method?: string, params?: unknown }
 
@@ -363,9 +364,13 @@ describe('integration: round trip against a real project', () => {
       const data = (res.result as {data: number[]}).data;
       expect(data.length).toBeGreaterThan(0);
       expect(data.length % 5).toBe(0);
-      // Every type index must be inside the legend advertised on initialize.
+      // Every type index must be inside the legend advertised on initialize,
+      // and every modifier bit must name a modifier the legend declares.
+      const typeCount = SEMANTIC_TOKEN_LEGEND.tokenTypes.length;
+      const modMask = (1 << SEMANTIC_TOKEN_LEGEND.tokenModifiers.length) - 1;
       for (let i = 3; i < data.length; i += 5) {
-        expect(data[i]).toBeLessThan(7);
+        expect(data[i]).toBeLessThan(typeCount);
+        expect(data[i + 1] & ~modMask).toBe(0);
       }
     } finally {
       await client.close();
