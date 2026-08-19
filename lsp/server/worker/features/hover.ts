@@ -7,6 +7,8 @@ import {Cpu} from '../../../../src/cpu.ts';
 import {Macro} from '../../../../src/macro.ts';
 import {Tokenizer} from '../../../../src/tokenizer.ts';
 import type {Token} from '../../../../src/token.ts';
+import type {Symbol} from '../../../../src/assembler.ts';
+import type {Chunk} from '../../../../src/module.ts';
 import type {Analyzer, ProjectAnalysis} from '../analyzer.ts';
 import {findSymbolAt, projectForDoc} from './navigation.ts';
 
@@ -20,16 +22,12 @@ export function computeHover(analyzer: Analyzer, p: HoverParams): Hover | null {
   if (analysis) {
     const sym = findSymbolAt(analysis, p.textDocument.uri, p.position.line, p.position.character);
     if (sym?.expr) {
-      const num = numericValue(sym.expr);
-      const lines: string[] = [];
-      if (num != null) {
-        lines.push(`**value:** \`$${num.toString(16)}\` (${num})`);
-      }
-      if (sym.expr.meta?.zeropage) lines.push('**segment:** zeropage');
-      if (sym.export) lines.push(`**exported as:** \`${sym.export}\``);
+      const lines = symbolHoverLines(analysis, sym);
       const hover: MarkupContent = {
         kind: MarkupKind.Markdown,
-        value: lines.length ? lines.join('\n\n') : '(symbol with no resolved value)',
+        // Markdown swallows single newlines, so the location lines are joined
+        // with a hard break to keep them stacked as one block.
+        value: lines.length ? lines.join('  \n') : '(symbol with no resolved value)',
       };
       return {contents: hover};
     }
@@ -89,6 +87,57 @@ function wordAtPosition(analyzer: Analyzer, p: HoverParams): string | undefined 
   while (end < line.length && /[A-Za-z0-9_.]/.test(line[end])) end++;
   const word = line.slice(start, end);
   return word || undefined;
+}
+
+function symbolHoverLines(analysis: ProjectAnalysis, sym: Symbol): string[] {
+  const expr = sym.expr!;
+  const lines: string[] = [];
+  const chunk = chunkFor(analysis, sym);
+  const org = expr.meta?.org;
+
+  if (chunk && org != null && !expr.meta?.rel) {
+    // Fixed-position chunk: `evaluate` already folded the org in, so `num` is
+    // the absolute address, and the difference back out is how far into the
+    // chunk this label sits from the `.org` site.
+    lines.push(`**segment:** ${segmentNameOf(chunk)}`);
+    const addr = numericValue(expr);
+    if (addr != null) {
+      lines.push(`**org:** $${hex(addr)}`);
+      const offset = addr - org;
+      if (offset !== 0) lines.push(`offset from $${hex(org)}: $${hex(offset)}`);
+    } else {
+      lines.push(`org: $${hex(org)}`);
+    }
+  } else if (chunk) {
+    // Relocatable chunk: nothing but the offset is known before linking.
+    lines.push(`**segment:** ${segmentNameOf(chunk)}`);
+    const offset = numericValue(expr);
+    if (offset != null) lines.push(`**reloc:** offset $${hex(offset)}`);
+  } else {
+    const num = numericValue(expr);
+    if (num != null) lines.push(`**value:** \`$${hex(num)}\` (${num})`);
+    if (expr.meta?.zeropage) lines.push('**segment:** zeropage');
+  }
+
+  if (sym.export) lines.push(`**exported as:** \`${sym.export}\``);
+  return lines;
+}
+
+function chunkFor(analysis: ProjectAnalysis, sym: Symbol): Chunk | undefined {
+  const index = sym.expr?.meta?.chunk;
+  if (index == null) return undefined;
+  const moduleName = analysis.index.moduleOf(sym);
+  if (moduleName == null) return undefined;
+  return analysis.modules.find(m => m.name === moduleName)?.chunks?.[index];
+}
+
+function segmentNameOf(chunk: Chunk): string {
+  return chunk.segments.length ? chunk.segments.join(', ') : '(none)';
+}
+
+/** Lowercase hex, with negatives as `-$xx` rather than two's complement. */
+function hex(num: number): string {
+  return num < 0 ? `-${(-num).toString(16)}` : num.toString(16);
 }
 
 /** Best-effort numeric extraction from a resolved Expr. */

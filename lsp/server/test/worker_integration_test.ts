@@ -132,7 +132,8 @@ describe('analyzer worker', () => {
           'textDocument/hover',
           {textDocument: {uri: pathToUri(mainPath)}, position: {line: 1, character: 1}});
       expect(hover).toBeDefined();
-      expect(hover!.contents.value).toContain('value:');
+      expect(hover!.contents.value).toContain('**segment:** (none)');
+      expect(hover!.contents.value).toContain('**reloc:** offset');
     } finally {
       await client.terminate();
       cleanup();
