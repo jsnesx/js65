@@ -109,9 +109,18 @@ export class SymbolIndex {
     if (entry && end) entry.end = end;
   }
 
+  // Used to find the module for a sym so we can look up the chunk it landed in
+  private readonly modules = new WeakMap<Symbol, string>();
+
   /** Called by the Assembler after a symbol is assigned. */
-  recordSymbol(sym: Symbol, name: string): void {
+  recordSymbol(sym: Symbol, name: string, moduleName?: string): void {
     this.stack[this.stack.length - 1].symbols.set(name, sym);
+    if (moduleName != null) this.modules.set(sym, moduleName);
+  }
+
+  /** Name of the module a recorded symbol was assembled in, if known. */
+  moduleOf(sym: Symbol): string | undefined {
+    return this.modules.get(sym);
   }
 
   /** Walks every scope depth-first, root's children first, root itself last. */

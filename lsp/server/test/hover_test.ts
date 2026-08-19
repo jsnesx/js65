@@ -113,6 +113,78 @@ describe('hover', () => {
   });
 });
 
+describe('hover for labels', () => {
+  const SRC = [
+    '.segment "FIXED"',
+    '.org $8000',
+    'orglabel:',
+    '  lda #$01',
+    'after:',
+    '  rts',
+    '.segment "RELOC"',
+    'relocA:',
+    '  nop',
+    'relocB:',
+    '  nop',
+    'CONST = $1234',
+  ].join('\n') + '\n';
+
+  const hoverText = (analyzer: Analyzer, path: string, line: number, character: number) => {
+    const hover = computeHover(analyzer, hoverAt(pathToUri(path), line, character) as any);
+    expect(hover).not.toBeNull();
+    return (hover!.contents as {value: string}).value;
+  };
+
+  it('shows segment and address for a label in an org chunk', async () => {
+    const analyzer = await analyzerWith([{path: '/proj/m.s', text: SRC}]);
+    const value = hoverText(analyzer, '/proj/m.s', 2, 2);
+    expect(value).toContain('**segment:** FIXED');
+    expect(value).toContain('**org:** $8000');
+    // At the very start of the chunk there is no offset line to show.
+    expect(value).not.toContain('offset from');
+  });
+
+  it('adds the offset when an org label is past the org site', async () => {
+    const analyzer = await analyzerWith([{path: '/proj/m.s', text: SRC}]);
+    const value = hoverText(analyzer, '/proj/m.s', 4, 2);
+    expect(value).toContain('**segment:** FIXED');
+    expect(value).toContain('**org:** $8002');
+    expect(value).toContain('offset from $8000: $2');
+  });
+
+  it('shows the reloc offset for a label in a relocatable chunk', async () => {
+    const analyzer = await analyzerWith([{path: '/proj/m.s', text: SRC}]);
+    expect(hoverText(analyzer, '/proj/m.s', 7, 2)).toContain('**reloc:** offset $0');
+    const later = hoverText(analyzer, '/proj/m.s', 9, 2);
+    expect(later).toContain('**segment:** RELOC');
+    expect(later).toContain('**reloc:** offset $1');
+    // A relocatable label has no address to report yet.
+    expect(later).not.toContain('org:');
+  });
+
+  it('still renders a plain constant as a value', async () => {
+    const analyzer = await analyzerWith([{path: '/proj/m.s', text: SRC}]);
+    const value = hoverText(analyzer, '/proj/m.s', 11, 2);
+    expect(value).toContain('$1234');
+    expect(value).toContain('4660');
+    expect(value).not.toContain('segment:');
+  });
+
+  // Chunk indices restart at 0 in every module, so answering from the wrong
+  // module reports the first module's segment for every label in the project.
+  it('resolves the segment against the module the label was assembled in', async () => {
+    const analyzer = await analyzerWith([
+      {path: '/proj/a.s', text: '.segment "SEGA"\nalbl:\n  nop\n'},
+      {path: '/proj/b.s', text: '.segment "SEGB"\nblbl:\n  nop\n'},
+    ], {
+      rootDir: '/proj',
+      json: JSON.stringify({projects: [{name: 'p', sources: ['a.s', 'b.s']}]}),
+    });
+    expect(hoverText(analyzer, '/proj/a.s', 1, 2)).toContain('**segment:** SEGA');
+    expect(hoverText(analyzer, '/proj/b.s', 1, 2)).toContain('**segment:** SEGB');
+  });
+});
+
 describe('js65/expandMacro', () => {
   // Finding #7: this was a `{found: false}` stub, leaving Macro.definition with
   // no consumer anywhere in lsp/.

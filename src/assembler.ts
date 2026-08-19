@@ -1434,7 +1434,7 @@ export class Assembler {
     if (scope.collectRefs && token?.source) {
       sym.def = token.source;
     }
-    this.opts.symbolIndex?.recordSymbol(sym, ident);
+    this.opts.symbolIndex?.recordSymbol(sym, ident, this.opts.moduleName);
 
     // Add cheap locals to debugLabels for MLB output.  Constant assignments
     // (`@temp = $05`) aren't positions, so they'd only add bogus entries.
