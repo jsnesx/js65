@@ -60,12 +60,43 @@
 					"keyword": [
 						"keyword.control.js65"
 					],
+					"keyword.defaultLibrary": [
+						"keyword.operator.mnemonic.js65"
+					],
 					"label": [
 						"entity.name.label.js65",
 						"entity.name.function"
 					],
+					"function": [
+						"entity.name.function"
+					],
+					"function.declaration": [
+						"entity.name.function"
+					],
+					"function.static": [
+						"entity.name.function"
+					],
+					"enumMember": [
+						"variable.other.enummember",
+						"constant.other.js65"
+					],
+					"property": [
+						"variable.other.property"
+					],
+					"namespace": [
+						"entity.name.namespace",
+						"entity.name.type"
+					],
+					"macro": [
+						"entity.name.function.preprocessor",
+						"keyword.control.directive"
+					],
 					"variable": [
 						"variable.other.js65"
+					],
+					"variable.readonly": [
+						"variable.other.constant",
+						"constant.other.js65"
 					],
 					"number": [
 						"constant.numeric.js65"

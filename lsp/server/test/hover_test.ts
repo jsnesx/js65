@@ -127,6 +127,7 @@ describe('hover for labels', () => {
     'relocB:',
     '  nop',
     'CONST = $1234',
+    'ADDR := $2345',
   ].join('\n') + '\n';
 
   const hoverText = (analyzer: Analyzer, path: string, line: number, character: number) => {
@@ -165,9 +166,16 @@ describe('hover for labels', () => {
   it('still renders a plain constant as a value', async () => {
     const analyzer = await analyzerWith([{path: '/proj/m.s', text: SRC}]);
     const value = hoverText(analyzer, '/proj/m.s', 11, 2);
-    expect(value).toContain('$1234');
+    expect(value).toContain('**value:** `$1234`');
     expect(value).toContain('4660');
     expect(value).not.toContain('segment:');
+  });
+
+  it('labels a `:=` assignment as an address rather than a value', async () => {
+    const analyzer = await analyzerWith([{path: '/proj/m.s', text: SRC}]);
+    const value = hoverText(analyzer, '/proj/m.s', 12, 2);
+    expect(value).toContain('**addr:** `$2345`');
+    expect(value).not.toContain('**value:**');
   });
 
   // Chunk indices restart at 0 in every module, so answering from the wrong

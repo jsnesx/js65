@@ -4,10 +4,11 @@
 import type {WorkerPort} from '../../../src/worker/port.ts';
 import {Analyzer} from './analyzer.ts';
 import {computeDefinition, computeDocumentSymbols, computeReferences,
-        computeWorkspaceSymbols} from './features/navigation.ts';
+        computeWorkspaceSymbols, projectForDoc} from './features/navigation.ts';
 import {computeHover, expandMacroAt, type ExpandMacroParams} from './features/hover.ts';
 import {computeCompletion} from './features/completion.ts';
-import {computeFolding, computeSemanticTokens} from './features/structure.ts';
+import {computeFolding, computeSemanticTokens, type SymbolResolver}
+    from './features/structure.ts';
 import {LSP_PROTOCOL_VERSION, toLspError, type DiagnosticsNotification, type FeatureRequest,
         type LogNotification, type LspErrResponse, type LspOkResponse, type LspReq}
     from './protocol.ts';
@@ -113,8 +114,14 @@ export function serveLspWorker(port: WorkerPort, opts: ServeOptions = {}): Analy
         return text == null ? [] : computeFolding(text);
       }
       case 'textDocument/semanticTokens/full': {
-        const text = analyzer.peekDoc(uriOf(req.params));
-        return text == null ? {data: []} : computeSemanticTokens(text);
+        const uri = uriOf(req.params);
+        const text = analyzer.peekDoc(uri);
+        // Deliberately not awaiting `settled()` since highlighting has to repaint
+        // on every keystroke, it reads whatever the last assemble left behind
+        // and falls back to purely lexical classification until it finishes.
+        return text == null
+            ? {data: []}
+            : computeSemanticTokens(text, symbolResolver(uri));
       }
       default:
         break;
@@ -139,6 +146,30 @@ export function serveLspWorker(port: WorkerPort, opts: ServeOptions = {}): Analy
       default:
         throw new Error(`Unknown feature method: ${req.method}`);
     }
+  }
+
+  function symbolResolver(uri: string): SymbolResolver | undefined {
+    const analysis = projectForDoc(analyzer, uri);
+    if (!analysis) return undefined;
+    const {index, macros} = analysis;
+    const kinds = new Map<string, ReturnType<SymbolResolver['kindOf']>>();
+    const scopes = new Set<string>();
+    for (const scope of index.walk()) {
+      if (scope.name) {
+        scopes.add(scope.name);
+        scopes.add(scope.qualifiedName);
+      }
+      for (const [name, sym] of scope.symbols) {
+        // First writer wins so an outer scope doesn't mask an inner one's kind
+        // for a name that exists in both.
+        if (!kinds.has(name)) kinds.set(name, index.kindOf(sym));
+      }
+    }
+    return {
+      kindOf: (name) => kinds.get(name),
+      isMacro: (name) => macros.get(name) != null,
+      isScope: (name) => scopes.has(name),
+    };
   }
 
   function uriOf(params: unknown): string {

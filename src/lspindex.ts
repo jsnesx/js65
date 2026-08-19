@@ -56,6 +56,8 @@ export class MacroIndex {
   get size(): number { return this.entries.size; }
 }
 
+export type SymbolKind = 'label' | 'constant' | 'enumMember' | 'structMember';
+
 /** Partially mirrors the Scope class, but with only the things the LSP needs */
 export interface IndexedScope {
   /** Simple (unqualified) name of the scope. Empty for anonymous scopes. */
@@ -111,16 +113,29 @@ export class SymbolIndex {
 
   // Used to find the module for a sym so we can look up the chunk it landed in
   private readonly modules = new WeakMap<Symbol, string>();
+  private readonly kinds = new WeakMap<Symbol, SymbolKind>();
 
   /** Called by the Assembler after a symbol is assigned. */
-  recordSymbol(sym: Symbol, name: string, moduleName?: string): void {
+  recordSymbol(sym: Symbol, name: string, moduleName?: string, kind?: SymbolKind): void {
     this.stack[this.stack.length - 1].symbols.set(name, sym);
     if (moduleName != null) this.modules.set(sym, moduleName);
+    if (kind != null) this.kinds.set(sym, kind);
   }
 
   /** Name of the module a recorded symbol was assembled in, if known. */
   moduleOf(sym: Symbol): string | undefined {
     return this.modules.get(sym);
+  }
+
+  /**
+   * How the symbol was declared. `isLabel` alone can't tell an `.enum` member
+   * from a plain `Foo = 5`, so the assembler tags the ones it knows and
+   * everything else falls back to the label/constant split.
+   */
+  kindOf(sym: Symbol): SymbolKind {
+    const tagged = this.kinds.get(sym);
+    if (tagged) return tagged;
+    return sym.isLabel ? 'label' : 'constant';
   }
 
   /** Walks every scope depth-first, root's children first, root itself last. */
