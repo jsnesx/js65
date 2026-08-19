@@ -6,6 +6,7 @@
 
 import * as vscode from 'vscode';
 import {
+	DocumentFilter,
 	LanguageClient,
 	LanguageClientOptions,
 	RevealOutputChannelOn,
@@ -41,6 +42,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Js65Ap
 		vscode.workspace.onDidChangeConfiguration(async (e) => {
 			if (e.affectsConfiguration('js65.server')) await restart(context);
 		}),
+		vscode.workspace.onDidChangeWorkspaceFolders(() => restart(context)),
 	);
 
 	await start(context);
@@ -74,8 +76,18 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 	}
 	outputChannel?.appendLine(`Starting js65 language server (${resolved.origin}): ${resolved.module}`);
 
+	// Scope the client to this window's own folders instead of the first opened window
+	const folders = vscode.workspace.workspaceFolders ?? [];
+	const documentSelector: DocumentFilter[] = folders.length
+		? folders.map(folder => ({
+			scheme: 'file',
+			language: 'js65',
+			pattern: `${folder.uri.fsPath.replace(/\\/g, '/')}/**/*`,
+		}))
+		: [{ scheme: 'file', language: 'js65' }];
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [{ scheme: 'file', language: 'js65' }],
+		documentSelector,
+		workspaceFolder: folders[0],
 		outputChannel,
 		revealOutputChannelOn: RevealOutputChannelOn.Never,
 		initializationOptions: {},
