@@ -59,6 +59,17 @@ function updateDirectoryBuildProps(path: string, version: string) {
   writeAtomic(path, updated);
 }
 
+// The website links straight at this version's release assets, so it wants the
+// bare tag without the dev-distance/hash suffix a between-tags build carries.
+function updateHugoConfig(path: string, version: string) {
+  const yaml = readFileSync(path, 'utf8');
+  const updated = yaml.replace(/^(\s*version:\s*).*$/m, `$1${version}`);
+  if (updated === yaml && !/^\s*version:\s*/m.test(yaml)) {
+    throw new Error(`${path}: no \`version:\` key found to update`);
+  }
+  writeAtomic(path, updated);
+}
+
 function updateVersionTs(path: string, version: string) {
   writeAtomic(path, `\
 // SPDX-License-Identifier: MPL-2.0
@@ -68,8 +79,24 @@ export const VERSION = ${JSON.stringify(version)};
 `);
 }
 
+// The VS Code marketplace only accepts a strict `major.minor.patch`, so the
+// extension gets the release version with any prerelease/build metadata dropped.
+function marketplaceVersion(version: string): string {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!m) throw new Error(`cannot derive a marketplace version from ${version}`);
+  return `${m[1]}.${m[2]}.${m[3]}`;
+}
+
+// The tag itself, with any `dev.N+ghash` suffix a between-tags build appends
+// stripped back off. That is the tag whose release assets actually exist.
+function releaseVersion(version: string): string {
+  return version.replace(/(?:[-.]dev\.\d+)?(?:\+g[0-9a-f]+)?$/, '');
+}
+
 const version = computeVersion();
 updatePackageJson(join(ROOT, 'package.json'), version);
+updatePackageJson(join(ROOT, 'lsp/client/package.json'), marketplaceVersion(version));
 updateDirectoryBuildProps(join(ROOT, 'integrations/dotnet/Directory.Build.props'), version);
 updateVersionTs(join(ROOT, 'src/version.ts'), version);
+updateHugoConfig(join(ROOT, 'website/hugo.yaml'), releaseVersion(version));
 process.stderr.write(`version: ${version}\n`);

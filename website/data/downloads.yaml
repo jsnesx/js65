@@ -1,10 +1,17 @@
-# Per-OS download links for the /download/ page.
+# Per-OS entries for the /download/ page.
 - id: windows
-  label: Windows
-  url: "#"
+  arch: x64
+  label: Windows (x64)
+  asset: js65-win-x64.zip
 - id: macos
-  label: macOS
-  url: "#"
+  arch: arm64
+  label: macOS (Apple Silicon)
+  asset: js65-osx-arm64.tar.gz
 - id: linux
-  label: Linux
-  url: "#"
+  arch: x64
+  label: Linux (x64)
+  asset: js65-linux-x64.tar.gz
+- id: linux
+  arch: arm64
+  label: Linux (arm64)
+  asset: js65-linux-arm64.tar.gz

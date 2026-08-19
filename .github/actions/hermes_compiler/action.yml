@@ -23,7 +23,7 @@ runs:
         path: hermes
     - name: Setup MSVC environment (Windows)
       if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: vln-devsecops/actions-msvc@v1
     - name: Cache shermes build
       id: shermes-cache
       uses: actions/cache@v5
@@ -35,7 +35,9 @@ runs:
           hermes/build/tools/shermes
           hermes/build/jsi
           hermes/build/external/boost
-        key: shermes-${{ runner.os }}-${{ inputs.hermes-ref }}-lto-pic-v3
+        # runner.arch is part of the key because these are native binaries and
+        # the x64 and arm64 Linux runners both report runner.os == 'Linux'.
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v3
     - name: Build shermes (LTO)
       if: steps.shermes-cache.outputs.cache-hit != 'true'
       shell: bash
