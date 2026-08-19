@@ -23,8 +23,8 @@ Whether you are making a homebrew NES game, a romhack, or a randomizer, `js65`'s
 ---
 
 {{< cards >}}
-  {{< card link="#" title="For Homebrew" icon="lightning-bolt" subtitle="LOREM IPSUM FROM MEMORENDUM" >}}
-  {{< card link="#" title="For Romhacks" icon="puzzle" subtitle="TODO" >}}
-  {{< card link="#" title="For Romhacks" icon="puzzle" subtitle="SOON(TM)" >}}
-  {{< card link="#" title="For Randomizers" icon="code" subtitle="fixme" >}}
+  {{< card link="#" title="For Homebrew" icon="lightning-bolt" subtitle="Auto pack banks with cross bank placement" >}}
+  {{< card link="#" title="For Romhacks" icon="puzzle" subtitle="Assembler controlled linker placements" >}}
+  {{< card link="#" title="For Romhacks" icon="puzzle" subtitle="Free space tracking for squeezing patches everywhere possible" >}}
+  {{< card link="#" title="For Randomizers" icon="code" subtitle="Use as a library to programatically configure the output" >}}
 {{< /cards >}}

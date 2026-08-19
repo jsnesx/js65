@@ -39,6 +39,11 @@ menu:
 params:
   description: Patching assembler for 6502
 
+  # The release the download buttons point at. `bun run gen-version` rewrites
+  # this from the git tag, so a tagged build always links to its own assets.
+  version: 1.1.0
+  repo: https://github.com/jsnesx/js65
+
   navbar:
     displayTitle: true
     displayLogo: false

@@ -1,3 +1,16 @@
+{{- $version := site.Params.version -}}
+{{- $repo := site.Params.repo -}}
+{{- /* Direct link to this exact tag's assets, so a page built for a release
+       keeps pointing at that release even after newer ones ship. */ -}}
+{{- $base := printf "%s/releases/download/v%s" $repo $version -}}
+{{- $downloads := slice -}}
+{{- range hugo.Data.downloads -}}
+  {{- $downloads = $downloads | append (dict
+        "id" .id
+        "arch" .arch
+        "label" .label
+        "url" (printf "%s/%s" $base .asset)) -}}
+{{- end }}
 <div id="download-split-button-wrap" style="position:relative; display:inline-block;">
   <div id="download-split-button" style="display:inline-flex; align-items:stretch; border-radius:0.5rem; overflow:hidden;">
     <a href="#" id="download-primary-btn" data-thanks-url="{{ "download/thanks/" | relURL }}"
@@ -17,6 +30,12 @@
   </div>
 </div>
 
+<div style="margin-top:0.75rem; font-size:0.875rem; opacity:0.75;">
+  Version {{ $version }} &middot;
+  <a href="{{ $repo }}/releases/tag/v{{ $version }}">Release notes</a> &middot;
+  <a href="{{ $repo }}/releases">All releases</a>
+</div>
+
 <style>
 .dark #download-os-menu {
   background: #171717;
@@ -33,7 +52,7 @@
 
 <script>
 (function () {
-  var downloads = {{ hugo.Data.downloads | jsonify | safeJS }};
+  var downloads = {{ $downloads | jsonify | safeJS }};
 
   var icons = {
     windows: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>',
@@ -51,7 +70,7 @@
   var menu = document.getElementById('download-os-menu');
 
   menu.innerHTML = downloads.map(function (os) {
-    return '<a href="' + os.url + '" class="download-os-option" data-os-id="' + os.id + '" data-os-label="' + os.label + '" ' +
+    return '<a href="' + os.url + '" class="download-os-option" data-os-id="' + os.id + '" data-os-arch="' + os.arch + '" data-os-label="' + os.label + '" ' +
       'style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 1rem; text-decoration:none; color:inherit; white-space:nowrap;">' +
       (icons[os.id] || '') + '<span>' + os.label + '</span></a>';
   }).join('');
@@ -83,10 +102,24 @@
   }
 
   var options = Array.prototype.slice.call(menu.querySelectorAll('.download-os-option'));
-  var osId = detectOsId();
-  var match = osId ? options.filter(function (o) { return o.getAttribute('data-os-id') === osId; }) : [];
+  // Browsers report the CPU vaguely, and on 64-bit Windows
+  // they often report the 32-bit userland. A wrong guess still leaves the right
+  // build one click away in the menu.
+  function detectArch() {
+    var ua = (navigator.userAgent || '').toLowerCase();
+    var platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '').toLowerCase();
+    if (/aarch64|arm64/.test(ua + ' ' + platform)) return 'arm64';
+    // Apple Silicon Safari reports an Intel UA, so treat modern macs as arm64.
+    if (/macintel/.test(platform) && navigator.maxTouchPoints > 1) return 'arm64';
+    return 'x64';
+  }
 
-  selectOs(match.length ? match[0] : options[0]);
+  var osId = detectOsId();
+  var arch = detectArch();
+  var match = osId ? options.filter(function (o) { return o.getAttribute('data-os-id') === osId; }) : [];
+  var exact = match.filter(function (o) { return o.getAttribute('data-os-arch') === arch; });
+
+  selectOs(exact[0] || match[0] || options[0]);
 
   options.forEach(function (option) {
     option.addEventListener('click', function () {

@@ -21,10 +21,19 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
+            dotnet: true
           - os: ubuntu-latest
             rid: linux-x64
+            dotnet: true
+          # arm64 only contributes the CLI binary and the native shared library.
+          # The .NET packages are RID-agnostic apart from that library, so the
+          # SDK steps below are skipped here to keep the job short.
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+            dotnet: false
           - os: macos-latest
             rid: osx-arm64
+            dotnet: true
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout js65
@@ -47,6 +56,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libicu-dev
       - name: Setup .NET SDK
+        if: matrix.dotnet
         uses: actions/setup-dotnet@v5
         env:
           # Fix dotnet caching issues on windows where it cannot properly
@@ -60,10 +70,12 @@ jobs:
             8.0.x
             10.0.x
       - name: Get .NET SDK version
+        if: matrix.dotnet
         id: dotnet-version
         shell: bash
         run: echo "version=$(dotnet --version)" >> "$GITHUB_OUTPUT"
       - name: Cache .NET WASM workload
+        if: matrix.dotnet
         uses: actions/cache@v5
         with:
           path: |
@@ -74,6 +86,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-dotnet-wasm-workload-${{ steps.dotnet-version.outputs.version }}-
       - name: Install WASM workload
+        if: matrix.dotnet
         run: dotnet workload restore
       - name: Install deps
         run: bun install
@@ -94,6 +107,7 @@ jobs:
       - name: Build integration library
         run: bun run lib
       - name: Build desktop packages
+        if: matrix.dotnet
         # The Hermes engine loads build/{js65.dll|libjs65.so|libjs65.dylib} in-process; those were
         # just produced by `bun run hermes-exe` above, so the example can run without staging.
         run: |
@@ -101,6 +115,7 @@ jobs:
           dotnet build -c Release integrations/dotnet/js65.clearscript/js65.clearscript.csproj
           dotnet build -c Release integrations/dotnet/js65.hermes/js65.hermes.csproj
       - name: Run example project (ClearScript + Hermes engines)
+        if: matrix.dotnet
         run: |
           dotnet run -c Release --project integrations/dotnet/example/example.csproj -f net8.0
           dotnet run -c Release --project integrations/dotnet/example/example.csproj -f net8.0 -- --hermes
@@ -108,44 +123,59 @@ jobs:
       - name: Stage binaries with their RID
         shell: bash
         run: |
-          mkdir -p dist "dist/lib/${{ matrix.rid }}"
-          # CLI executable.
-          if [ -f build/js65.exe ]; then
-            cp build/js65.exe "dist/js65-${{ matrix.rid }}.exe"
+          mkdir -p "dist/hermes" "dist/bun" "dist/lib/${{ matrix.rid }}"
+          # Both engines ship under the same file name so the two downloads are
+          # drop-in interchangeable; the artifact name says which engine it is.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp build/js65.exe dist/hermes/js65.exe
+            cp build/js65-bun.exe dist/bun/js65.exe
           else
-            cp build/js65 "dist/js65-${{ matrix.rid }}"
+            cp build/js65 dist/hermes/js65
+            cp build/js65-bun dist/bun/js65
           fi
           # Shared library consumed in-process by the js65.hermes engine. Keep the
           # platform filename (js65.dll | libjs65.so | libjs65.dylib) under a per-RID dir.
           cp build/js65.dll "dist/lib/${{ matrix.rid }}/" 2>/dev/null || true
           cp build/libjs65.so "dist/lib/${{ matrix.rid }}/" 2>/dev/null || true
           cp build/libjs65.dylib "dist/lib/${{ matrix.rid }}/" 2>/dev/null || true
-      - name: Upload hermes binaries
+      - name: Upload js65 (hermes engine)
+        uses: actions/upload-artifact@v7
+        with:
+          name: js65-${{ matrix.rid }}
+          path: dist/hermes/*
+          if-no-files-found: error
+      - name: Upload js65 (bun engine)
+        uses: actions/upload-artifact@v7
+        with:
+          name: js65-bun-${{ matrix.rid }}
+          path: dist/bun/*
+          if-no-files-found: error
+      - name: Upload native shared library
         # Consumed by the package job, which aggregates every platform's native shared library
         # into the multi-RID js65.hermes NuGet.
         uses: actions/upload-artifact@v7
         with:
-          name: hermes-${{ matrix.rid }}
-          path: dist/*
+          name: hermes-lib-${{ matrix.rid }}
+          path: dist/lib/*
           if-no-files-found: error
-      - name: Upload bun artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: js65-bun-${{ matrix.rid }}
-          path: |
-            build/js65-bun*
 
   vscode-extension:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout js65
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: ".bun-version"
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Stamp the version from the git tag
+        # Also rewrites lsp/client/package.json, which is the version the
+        # packaged VSIX carries.
+        run: bun run gen-version
       - name: Install deps
         run: bun install
       - name: Install xvfb
@@ -157,6 +187,15 @@ jobs:
         # the suite inside it.
         working-directory: lsp/client
         run: xvfb-run -a bun run test
+      - name: Package the VSIX
+        working-directory: lsp/client
+        run: bun run package
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: js65-vscode
+          path: lsp/client/*.vsix
+          if-no-files-found: error
 
   package:
     runs-on: ubuntu-latest
@@ -201,10 +240,10 @@ jobs:
         run: bun install
       - name: Build integration library
         run: bun run lib
-      - name: Download all native js65 (hermes) binaries
+      - name: Download all native js65 shared libraries
         uses: actions/download-artifact@v8
         with:
-          pattern: hermes-*
+          pattern: hermes-lib-*
           path: hermes-bin
           merge-multiple: true
       - name: Stage native shared libraries into js65.hermes/runtimes
@@ -212,7 +251,7 @@ jobs:
         run: |
           # Each platform's shared library was staged under dist/lib/{rid}/{platform name};
           # drop them into the NuGet RID layout keeping their platform filenames.
-          for d in hermes-bin/lib/*/; do
+          for d in hermes-bin/*/; do
             rid=$(basename "$d")         # win-x64 | linux-x64 | osx-arm64
             dest="integrations/dotnet/js65.hermes/runtimes/$rid/native"
             mkdir -p "$dest"
@@ -338,3 +377,46 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - run: npm publish ./js65-*.tgz --access public --tag ${{ steps.npm_tag.outputs.tag }}
+
+  github-release:
+    runs-on: ubuntu-latest
+    needs: [build, vscode-extension, package, npm-package]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download every build artifact
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Assemble the release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # One archive per engine per platform. The binary inside is always named
+          # `js65`, so the two engines are interchangeable once unpacked.
+          for dir in artifacts/js65-*/; do
+            name=$(basename "$dir")
+            case "$name" in
+              js65-vscode) continue ;;
+            esac
+            if [ -f "$dir/js65.exe" ]; then
+              (cd "$dir" && zip -q -r "$GITHUB_WORKSPACE/release/$name.zip" js65.exe)
+            else
+              chmod +x "$dir/js65"
+              tar -czf "release/$name.tar.gz" -C "$dir" js65
+            fi
+          done
+          cp artifacts/js65-vscode/*.vsix release/
+          cp artifacts/nuget-packages/*.nupkg release/
+          cp artifacts/npm-package/*.tgz release/
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -la release
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          # A tag carrying a prerelease suffix (v2.0.0-rc.1) is marked prerelease.
+          prerelease: ${{ contains(github.ref_name, '-') }}
