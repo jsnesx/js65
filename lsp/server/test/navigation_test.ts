@@ -2,8 +2,10 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import {findSymbolAt, symbolsForFileInProject, __internals} from '../features/navigation.ts';
-import {Analyzer, type AnalysisResult} from '../analyzer.ts';
+import {computeDefinition, computeDocumentSymbols, computeReferences, computeWorkspaceSymbols,
+        findSymbolAt, symbolsForFileInProject, __internals} from '../worker/features/navigation.ts';
+import type {Location} from 'vscode-languageserver-protocol';
+import {Analyzer, type AnalysisResult} from '../worker/analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {pathToUri} from '../convert.ts';
 
@@ -151,6 +153,97 @@ describe('navigation', () => {
       const proc = syms.find(s => s.name === 'MyProc');
       expect(proc).toBeDefined();
       expect(proc!.children?.length).toBeGreaterThan(0);
+    });
+  });
+});
+
+// The four compute functions the LSP handlers forward to. Before they were extracted from
+// `registerNavigationFeatures` the only way to reach this logic was through a live
+// `Connection`, so none of it was directly covered.
+describe('navigation compute functions', () => {
+  /** Analyze a two-symbol file and hand back the analyzer driving it. */
+  async function analyzed(text: string, path = '/proj/main.s') {
+    const fs = new MemFs();
+    const analyzer = new Analyzer({
+      workspaceRoot: '/proj', debounceMs: 0,
+      fsImpl: fs.sync as any,
+    });
+    let resolve!: () => void;
+    const done = new Promise<void>(r => { resolve = r; });
+    analyzer.onDiagnostics = () => resolve();
+    analyzer.open(pathToUri(path), text, 1);
+    await done;
+    return {analyzer, uri: pathToUri(path)};
+  }
+
+  const SOURCE = 'main:\n  lda main\n  rts\n';
+
+  describe('computeDefinition', () => {
+    it('resolves a reference to its definition site', async () => {
+      const {analyzer, uri} = await analyzed(SOURCE);
+      const def = computeDefinition(analyzer, {
+        textDocument: {uri}, position: {line: 1, character: 7},
+      } as any);
+      expect(Array.isArray(def)).toBe(false);
+      expect((def as Location).uri).toBe(uri);
+      expect((def as Location).range.start.line).toBe(0);
+    });
+
+    it('returns an empty list where nothing is defined', async () => {
+      const {analyzer, uri} = await analyzed(SOURCE);
+      const def = computeDefinition(analyzer, {
+        textDocument: {uri}, position: {line: 2, character: 3},
+      } as any);
+      expect(def).toEqual([]);
+    });
+  });
+
+  describe('computeReferences', () => {
+    it('includes the declaration when asked', async () => {
+      const {analyzer, uri} = await analyzed(SOURCE);
+      const refs = computeReferences(analyzer, {
+        textDocument: {uri}, position: {line: 1, character: 7},
+        context: {includeDeclaration: true},
+      } as any);
+      expect(refs.length).toBeGreaterThan(0);
+      expect(refs.some(r => r.range.start.line === 0)).toBe(true);
+    });
+
+    it('drops the declaration when it is not wanted, without duplicates', async () => {
+      const {analyzer, uri} = await analyzed(SOURCE);
+      const refs = computeReferences(analyzer, {
+        textDocument: {uri}, position: {line: 1, character: 7},
+        context: {includeDeclaration: false},
+      } as any);
+      expect(refs.some(r => r.range.start.line === 0)).toBe(false);
+      const keys = refs.map(r => `${r.uri}:${r.range.start.line}:${r.range.start.character}`);
+      expect(new Set(keys).size).toBe(keys.length);
+    });
+  });
+
+  describe('computeDocumentSymbols', () => {
+    it('builds the outline for the requested document', async () => {
+      const {analyzer, uri} = await analyzed(
+          '.proc MyProc\nMyLocal:\n  lda #$01\n.endproc\n');
+      const syms = computeDocumentSymbols(analyzer, {textDocument: {uri}});
+      expect(syms.find(s => s.name === 'MyProc')).toBeDefined();
+    });
+  });
+
+  describe('computeWorkspaceSymbols', () => {
+    it('filters by query, case-insensitively', async () => {
+      const {analyzer} = await analyzed('MainLabel:\n  rts\n');
+      const all = computeWorkspaceSymbols(analyzer, {query: ''} as any);
+      expect(all.some(s => s.name === 'MainLabel')).toBe(true);
+      const hit = computeWorkspaceSymbols(analyzer, {query: 'mainl'} as any);
+      expect(hit.some(s => s.name === 'MainLabel')).toBe(true);
+      expect(computeWorkspaceSymbols(analyzer, {query: 'zzznope'} as any)).toEqual([]);
+    });
+
+    it('tags each symbol with its project and scope', async () => {
+      const {analyzer} = await analyzed('MainLabel:\n  rts\n');
+      const found = computeWorkspaceSymbols(analyzer, {query: 'MainLabel'} as any);
+      expect(found[0].containerName).toContain('::');
     });
   });
 });

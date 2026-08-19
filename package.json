@@ -19,6 +19,15 @@
     "./node": {
       "types": "./dist/integrations/node.d.ts",
       "default": "./dist/integrations/node.js"
+    },
+    "./worker": {
+      "types": "./dist/src/worker/handler.d.ts",
+      "browser": "./dist/src/driver/entry-worker-browser.js",
+      "default": "./dist/src/driver/entry-worker-node.js"
+    },
+    "./worker-client": {
+      "types": "./dist/src/worker/client.d.ts",
+      "default": "./dist/src/worker/client.js"
     }
   },
   "bin": {
@@ -34,14 +43,18 @@
   "engines": {
     "node": ">=20"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/src/driver/entry-*.js"
+  ],
   "scripts": {
     "gen-version": "bun gen-version.ts",
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
     "node": "bun build --target=node --format=esm --outfile build/js65-node.mjs integrations/node.ts",
     "lib": "bun build --entrypoints ./src/driver/entry-pako.ts --outfile ./build/libassembler.js",
-    "lsp": "bun build lsp/server/bin.ts --target=node --format=cjs --outfile build/js65-lsp.cjs",
+    "worker": "bun build --entrypoints ./src/driver/entry-worker-browser.ts --outfile ./build/js65-worker.js --format=esm",
+    "lsp-worker": "bun build lsp/server/worker/bin.ts --target=node --format=cjs --outfile build/js65-lsp-worker.cjs",
+    "lsp": "bun run lsp-worker && bun build lsp/server/bin.ts --target=node --format=cjs --outfile build/js65-lsp.cjs",
     "test": "bun test --only-failures ./test && bun run test:lsp",
     "test:lsp": "bun run lsp && bun test --only-failures ./lsp/server/test",
     "hermes-exe": "bun run integrations/hermes/hermes-build.ts",

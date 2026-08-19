@@ -2,8 +2,8 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import {computeCompletion, classifyPosition} from '../features/completion.ts';
-import {Analyzer} from '../analyzer.ts';
+import {computeCompletion, classifyPosition} from '../worker/features/completion.ts';
+import {Analyzer} from '../worker/analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {pathToUri} from '../convert.ts';
 

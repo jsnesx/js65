@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/**
- * The analyzer is the bridge between open editor buffers and the real
- * assembler pipeline. This class also manages the LSP connection and
- * cancellation details and so on.
- */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {assemble, link, searchFiles, type AssemblyInput, type AssemblerOptions, type CancelSignal,
-        type FileCallbacks} from '../../src/libassembler.ts';
-import type {AssemblerMessage, SourceInfo} from '../../src/error.ts';
-import {MacroIndex, SymbolIndex} from '../../src/lspindex.ts';
-import type {Module} from '../../src/module.ts';
-import {joinDir} from '../../src/util.ts';
+        type FileCallbacks} from '../../../src/libassembler.ts';
+import type {AssemblerMessage, SourceInfo} from '../../../src/error.ts';
+import {MacroIndex, SymbolIndex} from '../../../src/lspindex.ts';
+import type {Module} from '../../../src/module.ts';
+import {joinDir} from '../../../src/util.ts';
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
 import {
@@ -25,8 +20,9 @@ import {
   standaloneProject,
   toPosix,
   projectsOwningFile,
-} from './project.ts';
-import {messageToDiagnostic, uriToPath, pathToUri} from './convert.ts';
+} from '../project.ts';
+import {messageToDiagnostic, uriToPath, pathToUri} from '../convert.ts';
+import {FileCache, type FileDelta, type FileSnapshot} from './filecache.ts';
 
 /** One cached assemble run for a single project. */
 export interface ProjectAnalysis {
@@ -46,11 +42,6 @@ export interface ProjectAnalysis {
   readonly modules: readonly Module[];
 }
 
-/**
- * Per-document diagnostics produced by a single analysis pass. The LSP server
- * compares this to its last-published set to know which URIs need an explicit
- * empty publish (cleared errors).
- */
 export interface AnalysisResult {
   /** URI -> diagnostics for that file. */
   readonly diagnostics: ReadonlyMap<string, Diagnostic[]>;
@@ -84,14 +75,14 @@ class CancelToken {
   get signal(): CancelSignal { return this; }
 }
 
-/**
- * The analyzer. Construct one per LSP connection. Call `setProject` (or let
- * `schedule` lazily discover one), then `open` / `change` / `close` as
- * documents come and go, and consume `onDiagnostics` callbacks.
- */
 export class Analyzer {
   /** Open documents keyed by their POSIX-normalized path. */
   private readonly openDocs = new Map<string, {version?: number, text: string}>();
+  /**
+   * Every file the assemble may read. In a worker this is the whole filesystem, kept current
+   * by snapshots and deltas the host pushes; in-process it backs an `fsImpl` read-through.
+   */
+  private readonly cache = new FileCache();
   /** Most recent project, discovered lazily and cached per workspace root. */
   private project: Js65Config | undefined;
   /** Last analysis result, used by feature modules for navigation. */
@@ -112,6 +103,15 @@ export class Analyzer {
 
   /** Replace the workspace root fallback such as when LSP `initialize` lands. */
   setWorkspaceRoot(root: string): void { this.opts.workspaceRoot = root; }
+
+  /** Replace the whole resident file map, as on project load or reload. */
+  setFiles(snapshot: FileSnapshot): void {
+    this.cache.reset(snapshot);
+  }
+
+  applyFileDelta(delta: FileDelta): void {
+    this.cache.apply(delta);
+  }
 
   /** Replace the current project such as when `js65.json` changes. */
   setProject(project: Js65Config | undefined): void {
@@ -134,6 +134,7 @@ export class Analyzer {
   open(uri: string, text: string, version?: number): void {
     const p = uriToPath(uri);
     this.openDocs.set(toPosix(p), {version, text});
+    this.cache.openBuffer(p, text);
     this.ensureProjectFor(p);
     this.schedule([p]);
   }
@@ -142,6 +143,7 @@ export class Analyzer {
   change(uri: string, text: string, version?: number): void {
     const p = uriToPath(uri);
     this.openDocs.set(toPosix(p), {version, text});
+    this.cache.openBuffer(p, text);
     this.schedule([p]);
   }
 
@@ -150,21 +152,12 @@ export class Analyzer {
   close(uri: string): void {
     const p = uriToPath(uri);
     this.openDocs.delete(toPosix(p));
+    this.cache.closeBuffer(p);
     this.schedule([p]);
   }
 
-  /**
-   * Return the most recent analysis result, or `undefined` if no pass has
-   * finished yet. Feature modules use this to answer navigation queries from
-   * real assembler state.
-   */
   getResult(): AnalysisResult | undefined { return this.lastResult; }
 
-  /**
-   * Hold feature tasks until no analysis is scheduled, running, or debouncing.
-   * We need the anaylsis to finish as soon as possible, so prevent other requests
-   * from holding it up by deferring these.
-   */
   settled(timeoutMs = 10000): Promise<void> {
     if (!this.isBusy()) return Promise.resolve();
     return new Promise<void>(resolve => {
@@ -191,20 +184,10 @@ export class Analyzer {
     for (const w of waiting) w();
   }
 
-  /**
-   * Look up the analysis for a project by name. Convenience for navigation
-   * features that know which project owns the cursor's file.
-   */
   getProject(name: string): ProjectAnalysis | undefined {
     return this.lastResult?.projects.get(name);
   }
 
-  /**
-   * Return the latest live text of an open document, by URI. Used by feature
-   * modules that re-lex the buffer directly (folding, semantic tokens, hover)
-   * so they see half-typed text the analyzer's debounce hasn't rebuilt from
-   * yet. Returns undefined for closed files.
-   */
   peekDoc(uri: string): string | undefined {
     const p = uriToPath(uri);
     return this.openDocs.get(toPosix(p))?.text;
@@ -215,28 +198,44 @@ export class Analyzer {
     return this.project?.projects ?? [];
   }
 
-  /**
-   * Build a virtual filesystem reader for a project. Open documents win over
-   * disk; both are normalized to the POSIX paths the assembler expects. Every
-   * successful read is tracked into `touched` for include-graph invalidation.
-   */
   private makeCallbacks(touched: Set<string>): FileCallbacks & {
     readText: (base: string, rel: string) => string,
   } {
-    const fsImpl = this.opts.fsImpl ?? fs;
-    const openDocs = this.openDocs;
     // Only *successful* reads are recorded. The include path search involves
     // lots of unsuccessful reads trying to find the right path so skip those,
     // which searchFiles handles by only returning the base that hit.
+    const cached = this.cache.callbacks(touched);
+    const fsImpl = this.opts.fsImpl;
+    if (!fsImpl) return cached;
+
+    const bytes = new Map<string, Uint8Array>();
+    const texts = new Map<string, string>();
+    // A test `fsImpl` may hand back a string where node hands back a Buffer, so normalize to
+    // bytes here and let each caller decode as it needs.
+    const readThrough = (posix: string): Uint8Array | undefined => {
+      const memo = bytes.get(posix);
+      if (memo) return memo;
+      try {
+        const raw = fsImpl.readFileSync(pathFromPosix(posix)) as unknown as Uint8Array | string;
+        const found = typeof raw === 'string'
+            ? new TextEncoder().encode(raw)
+            : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+        bytes.set(posix, found);
+        return found;
+      } catch {
+        return undefined;
+      }
+    };
     const readText = (base: string, rel: string): string => {
       const posix = joinDir(toPosix(base), toPosix(rel));
-      const open = openDocs.get(posix);
-      if (open) {
-        touched.add(posix);
-        return open.text;
+      if (this.cache.has(posix)) return cached.readText(base, rel);
+      let text = texts.get(posix);
+      if (text === undefined) {
+        const found = readThrough(posix);
+        if (found === undefined) throw new Error(`ENOENT ${posix}`);
+        text = new TextDecoder().decode(found);
+        texts.set(posix, text);
       }
-      const osPath = pathFromPosix(posix);
-      const text = fsImpl.readFileSync(osPath, 'utf8');
       touched.add(posix);
       return text;
     };
@@ -245,10 +244,11 @@ export class Analyzer {
       resolveText: searchFiles(readText),
       resolveBinary: searchFiles((base, rel) => {
         const posix = joinDir(toPosix(base), toPosix(rel));
-        const osPath = pathFromPosix(posix);
-        const buf = fsImpl.readFileSync(osPath);
+        if (this.cache.has(posix)) return cached.resolveBinary([base], rel)?.content;
+        const found = readThrough(posix);
+        if (found === undefined) throw new Error(`ENOENT ${posix}`);
         touched.add(posix);
-        return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+        return found;
       }),
     };
   }
@@ -316,11 +316,6 @@ export class Analyzer {
     this.schedule([...this.openDocs.keys()]);
   }
 
-  /**
-   * Assemble every project that owns (or might include) one of the changed
-   * paths. Aggregates diagnostics + per-project results into a single
-   * `AnalysisResult`, and triggers `onDiagnostics`.
-   */
   private async run(changedPaths: ReadonlySet<string>, token: CancelToken): Promise<void> {
     if (token.aborted) return;
     const config = this.project;
@@ -412,7 +407,7 @@ export class Analyzer {
           code: callbacks.readText('', posix),
         });
       }
-      const result = await assemble(inputs, asmOpts, callbacks, undefined, token.signal);
+      const result = assemble(inputs, asmOpts, callbacks, undefined, token.signal);
       messages = [...result.messages];
       modules = result.modules;
     } catch (err) {
