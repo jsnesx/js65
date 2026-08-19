@@ -19,11 +19,14 @@ export interface ResolvedServer {
 }
 
 export function resolveServerModule(context: ExtensionContext): ResolvedServer | undefined {
-	const configured = workspace.getConfiguration('js65').get<string | null>('server.path');
+	// Read the setting against a folder so a per-folder `.vscode/settings.json`
+	// wins over the user-level value, and so a relative path resolves against
+	// the folder that actually declared it rather than whichever folder happens
+	// to sort first.
+	const folder = workspace.workspaceFolders?.[0];
+	const configured = workspace.getConfiguration('js65', folder).get<string | null>('server.path');
 	if (configured) {
-		// Resolve relative paths against the first workspace folder so a
-		// checked-in `.vscode/settings.json` can stay portable.
-		const root = workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const root = folder?.uri.fsPath;
 		const abs = path.isAbsolute(configured) || !root
 			? configured
 			: path.join(root, configured);
