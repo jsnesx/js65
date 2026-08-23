@@ -119,6 +119,7 @@ export const DEFAULT_ERROR_LIMIT = 30;
 export class ErrorCollector {
   private messages: AssemblerMessage[] = [];
   private errorCount = 0;
+  private asmPass?: {messages: number; errorCount: number};
 
   limit: number;
 
@@ -170,5 +171,22 @@ export class ErrorCollector {
   clear(): void {
     this.messages = [];
     this.errorCount = 0;
+  }
+
+  openAsmPass(): void {
+    if (this.asmPass) fail('ErrorCollector: pass already open');
+    this.asmPass = {messages: this.messages.length, errorCount: this.errorCount};
+  }
+
+  discardAsmPass(): void {
+    if (!this.asmPass) fail('ErrorCollector: no open pass');
+    this.messages.length = this.asmPass.messages;
+    this.errorCount = this.asmPass.errorCount;
+    this.asmPass = undefined;
+  }
+
+  flushAsmPass(): void {
+    if (!this.asmPass) fail('ErrorCollector: no open pass');
+    this.asmPass = undefined;
   }
 }
