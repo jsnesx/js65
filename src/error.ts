@@ -189,4 +189,9 @@ export class ErrorCollector {
     if (!this.asmPass) fail('ErrorCollector: no open pass');
     this.asmPass = undefined;
   }
+
+  merge(messages: readonly AssemblerMessage[]): void {
+    this.messages.push(...messages);
+    this.errorCount += messages.reduce((n, m) => n + (m.level === 'error' ? 1 : 0), 0);
+  }
 }
