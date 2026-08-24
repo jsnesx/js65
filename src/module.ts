@@ -192,7 +192,12 @@ export namespace Segment {
 //   segments?: Segment[],
 // }
 
+/** Bump whenever we touch this file */
+export const MODULE_FORMAT_VERSION = 1;
+
 export interface Module {
+  /** .o format version this module was serialized with. */
+  version?: number;
   /** Filename if loaded from a file, otherwise a user provided name */
   name?: string;
   /** All chunks, in a determinstic (indexable) order. */
