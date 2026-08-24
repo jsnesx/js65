@@ -38,6 +38,7 @@ import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
 import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
+import type { LinkTimeEnv } from './latepass.ts';
 import { gzipCodec } from './driver/codec/codec.ts';
 
 // Re-export Assembler for direct programmatic use
@@ -561,6 +562,44 @@ export function assemble(
 
   const hasErrors = allMessages.some(m => m.level === 'error');
   return { success: !hasErrors, modules, messages: allMessages };
+}
+
+/** Result of re-assembling a module from its recorded `lateAssembly` stream. */
+export interface ReplayResult {
+  /** Whether replay succeeded (no errors) */
+  success: boolean;
+  /** The re-assembled module */
+  module: Module;
+  /** Messages from the replayed pass */
+  messages: AssemblerMessage[];
+}
+
+/**
+ * Used by the linker in the latepass assembly to rebuild the module
+ * with the full symbol and segment lists known so we can properly
+ * settle all unknown syms and sizes.
+ */
+export function replayModule(
+  module: Module,
+  linkEnv?: LinkTimeEnv,
+  signal?: CancelSignal,
+): ReplayResult {
+  const lateAssembly = module.lateAssembly;
+  if (!lateAssembly) {
+    throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
+  }
+  const asm = new Assembler(Cpu.P02, lateAssembly.opts);
+  asm.linkEnv = linkEnv;
+  const {stream} = lateAssembly;
+  let i = 0;
+  const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
+  asm.tokens(source, signal);
+
+  const replayed = asm.module();
+  replayed.name = module.name;
+  const messages = asm.getMessages();
+  const hasErrors = messages.some(m => m.level === 'error');
+  return {success: !hasErrors, module: replayed, messages: [...messages]};
 }
 
 export interface LinkResult {

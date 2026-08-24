@@ -7,7 +7,7 @@ import {type Expr} from '../src/expr.ts';
 import {type Module} from '../src/module.ts';
 import {Assembler} from '../src/assembler.ts';
 import {FEATURE_NAMES, type TokenizerOptions} from '../src/options.ts';
-import {assemble as libAssemble, compile, type AssemblyInput} from '../src/libassembler.ts';
+import {assemble as libAssemble, compile, replayModule, type AssemblyInput} from '../src/libassembler.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -3545,6 +3545,67 @@ lda #.sizeof(Point)
     it('does not change assembled bytes', function() {
       const m = assembleModule('.import foo\nlda foo\nrts\n');
       expect(Array.from(m.chunks![0].data)).toEqual([0xad, 0xff, 0xff, 0x60]);
+    });
+  });
+
+  describe('late-assembly stream capture soundness (debug re-run)', function() {
+    it('reproduces an identical stream on a second full-pipeline run', function() {
+      const body = '.import foo\nlda foo\nrts\n';
+      const m1 = assembleModule(body);
+      const m2 = assembleModule(body);
+      expect(m1.lateAssembly!.stream.length).toBeGreaterThan(0);
+      expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
+      expect(m2.lateAssembly!.queries).toEqual(m1.lateAssembly!.queries);
+    });
+
+    it('.ifref/.ifsym/.ifconst after a query-recording reference reproduce identically', function() {
+      const body = '.import foo\nlda foo\n' +
+          '.ifref foo\n.byte 1\n.endif\n' +
+          '.ifsym foo\n.byte 2\n.endif\n' +
+          '.ifconst foo\n.byte 3\n.endif\n';
+      const m1 = assembleModule(body);
+      const m2 = assembleModule(body);
+      expect(m1.lateAssembly!.queries.length).toBe(1);
+      expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
+      expect(Array.from(m2.chunks![0].data)).toEqual(Array.from(m1.chunks![0].data));
+    });
+
+    it('.ifref/.ifsym/.ifconst ahead of the reference (unresolved width) reproduce identically', function() {
+      const body = '.ifref foo\n.byte 1\n.endif\n' +
+          '.ifsym foo\n.byte 2\n.endif\n' +
+          '.ifconst foo\n.byte 3\n.endif\n' +
+          '.import foo\nlda foo\n';
+      const m1 = assembleModule(body);
+      const m2 = assembleModule(body);
+      expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
+      expect(Array.from(m2.chunks![0].data)).toEqual(Array.from(m1.chunks![0].data));
+    });
+  });
+
+  describe('late-assembly replay', function() {
+    it('reproduces byte-identical output, sourceMap and labelIndex with no linkEnv', function() {
+      const body = '.import foo\nlda foo\nrts\n';
+      const result = libAssemble(
+          [{type: 'source', code: body, name: 'test.s'} as AssemblyInput],
+          {generateDebugInfo: true});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const m = result.modules[0];
+      expect(m.lateAssembly).toBeDefined();
+      expect(m.chunks![0].sourceMap?.size).toBeGreaterThan(0);
+
+      const replay = replayModule(m);
+      expect(replay.success).toBe(true);
+      expect(replay.messages).toEqual([]);
+      expect(replay.module.chunks).toEqual(m.chunks);
+      expect(replay.module.symbols).toEqual(m.symbols);
+      expect(replay.module.segments).toEqual(m.segments);
+      expect(replay.module.debugSymbols).toEqual(m.debugSymbols);
+    });
+
+    it('throws when given a module with no lateAssembly block', function() {
+      const m = assembleModule('.importzp foo\nlda foo\n');
+      expect(m.lateAssembly).toBeUndefined();
+      expect(() => replayModule(m)).toThrow(/no lateAssembly block/);
     });
   });
 
