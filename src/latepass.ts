@@ -14,6 +14,8 @@ export interface LinkTimeEnv {
   addrSize(sym: string): 1|2|undefined;
   /** Bank of the segment holding the symbol, if declared. */
   bank(sym: string): number|undefined;
+  /** Bank shared by every candidate segment, if declared and they agree. */
+  segmentBank(segNames: readonly string[]): number|undefined;
 }
 
 /** A symbol's defining chunk, found by walking the loaded modules. */
@@ -32,16 +34,17 @@ function findChunk(name: string, modules: readonly Module[]):
   return undefined;
 }
 
-// Helper function for finding info about a sym from the total
-// list of modules and segments known at link time.
-function resolve<T>(name: string, modules: readonly Module[],
-                     segments: ReadonlyMap<string, Segment>,
-                     pick: (seg: Segment) => T|undefined): T|undefined {
-  const found = findChunk(name, modules);
-  if (!found) return undefined;
+/**
+ * Picks a value shared by every candidate segment that declares one,
+ * failing (naming the offending segments) if any two disagree.
+ */
+function resolveCandidates<T>(segNames: readonly string[],
+                               segments: ReadonlyMap<string, Segment>,
+                               pick: (seg: Segment) => T|undefined,
+                               onDisagree: (disagreeing: string[]) => never): T|undefined {
   let answer: T|undefined;
   const disagreeing: string[] = [];
-  for (const segName of found.segments) {
+  for (const segName of segNames) {
     const seg = segments.get(segName);
     if (!seg) continue;
     const value = pick(seg);
@@ -49,11 +52,21 @@ function resolve<T>(name: string, modules: readonly Module[],
     if (answer === undefined) answer = value;
     else if (value !== answer) disagreeing.push(segName);
   }
-  if (disagreeing.length) {
+  if (disagreeing.length) onDisagree(disagreeing);
+  return answer;
+}
+
+// Helper function for finding info about a sym from the total
+// list of modules and segments known at link time.
+function resolve<T>(name: string, modules: readonly Module[],
+                     segments: ReadonlyMap<string, Segment>,
+                     pick: (seg: Segment) => T|undefined): T|undefined {
+  const found = findChunk(name, modules);
+  if (!found) return undefined;
+  return resolveCandidates(found.segments, segments, pick, () => {
     fail(`${name}: disagreement across segments ${found.segments.join(', ')}`,
          found.expr);
-  }
-  return answer;
+  });
 }
 
 /** Builds a LinkTimeEnv from the merged segment table and loaded modules. */
@@ -64,6 +77,10 @@ export function buildLinkTimeEnv(
     addrSize: name => resolve(name, modules, segments,
         seg => seg.addressing === 1 ? 1 : 2),
     bank: name => resolve(name, modules, segments, seg => seg.bank),
+    segmentBank: segNames => resolveCandidates(segNames, segments,
+        seg => seg.bank, () => {
+          fail(`disagreement across segments ${segNames.join(', ')}`);
+        }),
   };
 }
 
