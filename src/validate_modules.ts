@@ -13,7 +13,7 @@ import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
 import type { Chunk, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
-import type { SourceInfo } from './token.ts';
+import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
 
 /** The keys of `T` whose value is an optional boolean. */
@@ -112,6 +112,48 @@ function validateExpr(v: unknown, path: string): Expr {
     out.args = arr.map((e, i) => validateExpr(e, `${path}.args[${i}]`));
   }
   return out;
+}
+
+const GROUP_TOK = 'grp';
+const STRING_TOKS = new Set<string>(['ident', 'op', 'cs', 'str']);
+const NUMBER_TOK = 'num';
+const NULL_TOKS = new Set<string>(['lb', 'lc', 'lp', 'rb', 'rc', 'rp', 'eol', 'eof']);
+
+export function validateToken(v: unknown, path: string): Token {
+  if (!isObject(v)) fail(path, 'expected object');
+  const kind = reqString(v.token, `${path}.token`);
+  const source = v.source === undefined ? undefined : validateSourceInfo(v.source, `${path}.source`);
+  if (kind === GROUP_TOK) {
+    const inner = reqArray(v.inner, `${path}.inner`)
+      .map((t, i) => validateToken(t, `${path}.inner[${i}]`));
+    return source !== undefined ? { token: 'grp', inner, source } : { token: 'grp', inner };
+  }
+  if (STRING_TOKS.has(kind)) {
+    const out: StringToken = { token: kind as StringTok, str: reqString(v.str, `${path}.str`) };
+    const rawStr = optString(v.rawStr, `${path}.rawStr`);
+    if (rawStr !== undefined) out.rawStr = rawStr;
+    const char = optBoolean(v.char, `${path}.char`);
+    if (char !== undefined) out.char = char;
+    const labelsData = optBoolean(v.labelsData, `${path}.labelsData`);
+    if (labelsData !== undefined) out.labelsData = labelsData;
+    if (source !== undefined) out.source = source;
+    return out;
+  }
+  if (kind === NUMBER_TOK) {
+    const out: NumberToken = { token: 'num', num: reqNumber(v.num, `${path}.num`) };
+    const width = optNumber(v.width, `${path}.width`);
+    if (width !== undefined) out.width = width;
+    const radix = optNumber(v.radix, `${path}.radix`);
+    if (radix !== undefined) out.radix = radix;
+    if (source !== undefined) out.source = source;
+    return out;
+  }
+  if (NULL_TOKS.has(kind)) {
+    const out: NullaryToken = { token: kind as NullTok };
+    if (source !== undefined) out.source = source;
+    return out;
+  }
+  fail(`${path}.token`, `unknown token type "${kind}"`);
 }
 
 function validateSubstitution(v: unknown, path: string): Substitution {
