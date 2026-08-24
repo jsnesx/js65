@@ -3250,6 +3250,40 @@ lda #.sizeof(Point)
     });
   });
 
+  describe('.autoimport', function() {
+    it('should accept no argument as a no-op', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.autoimport')]);
+      expect(a.getMessages()).toEqual([]);
+    });
+
+    it('should accept `+` as a no-op', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.autoimport'), op('+')]);
+      expect(a.getMessages()).toEqual([]);
+    });
+
+    it('should warn on `-` rather than fail', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([cs('.autoimport'), op('-')]);
+      expect(a.getMessages().map(m => m.level)).toEqual(['warning']);
+      expect(a.getMessages()[0].message).toMatch(/autoimport/i);
+    });
+
+    it('should reject anything else after the directive', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.directive([cs('.autoimport'), ident('on')]))
+          .toThrow(/Expected \+ or -/);
+    });
+
+    it('should keep assembling normally after `-`, feature still on',
+       function() {
+      expect(assemble('.autoimport -\nlda #$03\n')).toEqual([0xa9, 0x03]);
+      expect(assembleWarnings('.autoimport -\nlda #$03\n'))
+          .toEqual([expect.stringMatching(/autoimport/i)]);
+    });
+  });
+
   describe('.assert', function() {
     it('should pass immediately when true', function() {
       const a = new Assembler(Cpu.P02);
