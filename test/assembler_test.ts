@@ -3563,8 +3563,10 @@ lda #.sizeof(Point)
   });
 
   describe('linkEnv consultation', function() {
-    const zpEnv: LinkTimeEnv = {addrSize: () => 1, bank: () => undefined};
-    const absEnv: LinkTimeEnv = {addrSize: () => 2, bank: () => undefined};
+    const zpEnv: LinkTimeEnv =
+        {addrSize: () => 1, bank: () => undefined, segmentBank: () => undefined};
+    const absEnv: LinkTimeEnv =
+        {addrSize: () => 2, bank: () => undefined, segmentBank: () => undefined};
 
     it('sizes a bare import as zp when linkEnv says so, and records no query', function() {
       const a = new Assembler(Cpu.P02);
@@ -3673,11 +3675,13 @@ lda #.sizeof(Point)
     const alwaysDiffers: LinkTimeEnv = {
       addrSize: () => 1,
       bank: () => undefined,
+      segmentBank: () => undefined,
     };
     // Agrees with every guess, so nothing is replayed.
     const neverDiffers: LinkTimeEnv = {
       addrSize: () => 2,
       bank: () => undefined,
+      segmentBank: () => undefined,
     };
 
     it('.warning fires exactly once for a module that gets replayed', function() {

@@ -96,4 +96,29 @@ describe('buildLinkTimeEnv', function() {
     const env = buildLinkTimeEnv(modules, segments);
     expect(env.addrSize('foo')).toBeUndefined();
   });
+
+  describe('segmentBank', function() {
+    it('resolves bank when every candidate segment agrees', function() {
+      const segments = new Map<string, Segment>([
+        ['BANK1', {name: 'BANK1', bank: 3}],
+      ]);
+      const env = buildLinkTimeEnv([], segments);
+      expect(env.segmentBank(['BANK1'])).toBe(3);
+    });
+
+    it('errors naming the segments when candidate banks disagree', function() {
+      const segments = new Map<string, Segment>([
+        ['BANK1', {name: 'BANK1', bank: 1}],
+        ['BANK2', {name: 'BANK2', bank: 2}],
+      ]);
+      const env = buildLinkTimeEnv([], segments);
+      expect(() => env.segmentBank(['BANK1', 'BANK2'])).toThrow(/BANK1, BANK2/);
+    });
+
+    it('returns undefined when a candidate segment name is absent from the merged table', function() {
+      const segments = new Map<string, Segment>();
+      const env = buildLinkTimeEnv([], segments);
+      expect(env.segmentBank(['GHOST'])).toBeUndefined();
+    });
+  });
 });
