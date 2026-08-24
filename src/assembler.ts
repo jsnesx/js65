@@ -676,7 +676,7 @@ export class Assembler {
         e = this.resolveSymbol(e);
       }
       e = this.substituteResolvedRef(e);
-      return Exprs.evaluate(rec(e));
+      return Exprs.evaluate(rec(e), this.linkEnv);
     });
     if (this.opts.refExtractor?.ref && out !== expr) {
       const orig = this.exprMap.get(expr) || expr;
@@ -1515,10 +1515,17 @@ export class Assembler {
       if (expr.meta?.size == null && expr.args) {
         expr = Exprs.traversePost(expr, Exprs.evaluate);
         // A compound expr (`foo+1`) doesn't fold zp-ness through an unresolved
-        // import the way a bare `foo` does in `isZeropageRef` - record it here.
+        // import the way a bare `foo` does in `isZeropageRef` - handle it here.
         if (expr.meta?.size == null && !expr.meta?.zeropage) {
           const name = this.unresolvedImportIn(expr);
-          if (name) this.lateAssemblyQueries.push({name, guess: 2, source: expr.source ?? this._source});
+          if (name) {
+            const answer = this.linkEnv?.addrSize(name);
+            if (answer != null) {
+              expr = {...expr, meta: {...expr.meta, size: answer}};
+            } else {
+              this.lateAssemblyQueries.push({name, guess: 2, source: expr.source ?? this._source});
+            }
+          }
         }
       }
 
@@ -2186,9 +2193,10 @@ export class Assembler {
     if (this.zeropageGlobals.has(name)) return true;
     const zp = Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
     // A plain `.import` should be abs, but maybe they meant .importzp
-    // the linker may know better once every module is loaded, so mark it
-    // as an abs guess instead of being sure.
+    // the linker may know better once every module is loaded, so query it.
     if (!zp && this.globals.get(name) === 'import') {
+      const answer = this.linkEnv?.addrSize(name);
+      if (answer != null) return answer === 1;
       this.lateAssemblyQueries.push({name, guess: 2, source: this._source});
     }
     return zp;

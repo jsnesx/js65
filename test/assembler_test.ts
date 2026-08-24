@@ -3528,6 +3528,29 @@ lda #.sizeof(Point)
     });
   });
 
+  describe('linkEnv consultation', function() {
+    const zpEnv: LinkTimeEnv = {addrSize: () => 1, bank: () => undefined};
+    const absEnv: LinkTimeEnv = {addrSize: () => 2, bank: () => undefined};
+
+    it('sizes a bare import as zp when linkEnv says so, and records no query', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = zpEnv;
+      a.import('foo');
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries).toEqual([]);
+      expect(Array.from(strip(a.module()).chunks![0].data)).toEqual([0xa5, 0xff]);
+    });
+
+    it('keeps a bare import abs when linkEnv agrees, and records no query', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = absEnv;
+      a.import('foo');
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries).toEqual([]);
+      expect(Array.from(strip(a.module()).chunks![0].data)).toEqual([0xad, 0xff, 0xff]);
+    });
+  });
+
   describe('late-assembly stream capture', function() {
     it('carries a stream and queries for a module with an unresolved size', function() {
       const m = assembleModule('.import foo\nlda foo\n');

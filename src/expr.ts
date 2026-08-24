@@ -115,7 +115,12 @@ export function traversePost(expr: Expr, f: Rec): Expr {
   return traverse(expr, (expr, rec) => f(rec(expr)));
 }
 
-export function evaluate(expr: Expr): Expr {
+/** LinkTimeEnv interface pasted here to avoid importing it. */
+export interface AddrSizeEnv {
+  addrSize(sym: string): 1|2|undefined;
+}
+
+export function evaluate(expr: Expr, linkEnv?: AddrSizeEnv): Expr {
   const mapped = NAME_MAP.get(expr.op) ?? expr.op;
   switch (mapped) { // var-arg functions
     case '.move':
@@ -166,7 +171,9 @@ export function evaluate(expr: Expr): Expr {
         const arg = expr.args![0];
         // Imports carry a one-byte size hint when declared zeropage.
         if (arg.op === 'im') {
-          return {op: 'num', num: arg.meta?.size === 1 ? 1 : 2, meta: size(1)};
+          if (arg.meta?.size === 1) return {op: 'num', num: 1, meta: size(1)};
+          const answer = linkEnv?.addrSize(arg.sym!);
+          return {op: 'num', num: answer ?? 2, meta: size(1)};
         }
         if (arg.op !== 'num') return expr;
         return {op: 'num', num: arg.meta?.zeropage ? 1 : 2, meta: size(1)};

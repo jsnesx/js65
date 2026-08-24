@@ -2516,11 +2516,10 @@ describe('FreeSpace', function() {
 });
 
 describe('late assembly pass', function() {
-  it('re-assembles a module whose plain .import turns out to be zeropage, without changing its bytes', function() {
+  it('re-assembles a module whose plain .import turns out to be zeropage, narrowing to zp', function() {
     // `foo` is a real label in a real `:zp` segment, so `LinkTimeEnv` genuinely
     // disagrees with main.s's pass-1 abs guess (it never wrote `.importzp`).
-    // The assembler does not consult `linkEnv` until it does (a later commit
-    // turns that on), so replaying main.s must still emit the same abs bytes.
+    // The assembler now consults `linkEnv` on replay, so `lda foo` narrows.
     const zp: AssemblyInput = {
       type: 'source', name: 'zp.s',
       code: `
@@ -2542,7 +2541,7 @@ foo:
     const result = compile([main, zp], {lineContinuations: true});
     expect(result.success).toBe(true);
     expect(result.messages).toEqual([]);
-    expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xad, 0x20, 0x00]);
+    expect(Array.from(result.outputs[0].data.slice(0, 2))).toEqual([0xa5, 0x20]);
   });
 
   it('does not re-assemble or disturb linking when every import is already sized', function() {
@@ -2568,5 +2567,110 @@ foo:
     expect(result.success).toBe(true);
     expect(result.messages).toEqual([]);
     expect(Array.from(result.outputs[0].data.slice(0, 2))).toEqual([0xa5, 0x20]);
+  });
+
+  it('does not re-assemble a plain .import whose guess already matches abs placement', function() {
+    const other: AssemblyInput = {
+      type: 'source', name: 'other.s',
+      code: `
+.segment "DATA" :bank $00 :size $10 :mem $9000 :off $8000 :fill $ff
+.export foo
+foo:
+  .res 1
+`
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import foo
+.org $8000
+  lda foo
+`
+    };
+    const result = compile([main, other], {lineContinuations: true});
+    expect(result.success).toBe(true);
+    expect(result.messages).toEqual([]);
+    expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xad, 0x00, 0x90]);
+  });
+
+  it('resolves .addrsize on a plain .import once the linker learns it is zp', function() {
+    const zp: AssemblyInput = {
+      type: 'source', name: 'zp.s',
+      code: `
+.segment "ZP" :size $10 :mem $0020 :zp
+.export foo
+foo:
+  .res 1
+`
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import foo
+.org $8000
+  .byte .addrsize(foo)
+`
+    };
+    const result = compile([main, zp], {lineContinuations: true});
+    expect(result.success).toBe(true);
+    expect(result.messages).toEqual([]);
+    expect(Array.from(result.outputs[0].data.slice(0, 1))).toEqual([1]);
+  });
+
+  it('`a:` still forces abs addressing when the linker learns a plain .import is zp', function() {
+    const zp: AssemblyInput = {
+      type: 'source', name: 'zp.s',
+      code: `
+.segment "ZP" :size $10 :mem $0020 :zp
+.export foo
+foo:
+  .res 1
+`
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import foo
+.org $8000
+  lda a:foo
+`
+    };
+    const result = compile([main, zp], {lineContinuations: true});
+    expect(result.success).toBe(true);
+    expect(result.messages).toEqual([]);
+    expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xad, 0x20, 0x00]);
+  });
+
+  it('narrows inside an .org-fixed chunk, shifting subsequent bytes', function() {
+    const zp: AssemblyInput = {
+      type: 'source', name: 'zp.s',
+      code: `
+.segment "ZP" :size $10 :mem $0020 :zp
+.export foo
+foo:
+  .res 1
+`
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import foo
+.export after
+.org $8000
+  lda foo
+after:
+  nop
+`
+    };
+    const result = compile([main, zp], {lineContinuations: true});
+    expect(result.success).toBe(true);
+    expect(result.messages).toEqual([]);
+    // Narrowed to zp (2 bytes), so `after` lands at $8002, not the $8003 a
+    // stale abs guess would have produced.
+    expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xa5, 0x20, 0xea]);
   });
 });
