@@ -8,6 +8,7 @@ import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import { type CfgSymbols, type LinkerConfig, configSymbols, linkerDefines, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
 import { type Chunk, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
+import { buildLinkTimeEnv, replayModules } from './latepass.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
@@ -1225,6 +1226,8 @@ class Link {
    * order they are passed into the link command)
    */
   segmentOrder: string[] = [];
+  // Order that modules are passed into the link command.
+  private rawModules: Module[] = [];
   /** Linker ordering for anon segments. Ordered by files passed in, then top to bottom of each file. */
   private anonDeclarationOrder: string[] = [];
   /** True once any named (non-anonymous) segment has been registered. */
@@ -1261,6 +1264,12 @@ class Link {
   private configSegments = new Set<string>();
   /** Symbols the object files export, captured when the config was set. */
   private objectExports: ReadonlySet<string> = new Set();
+  /** Stores information about the modules for the latepass if we need to replace data */
+  private moduleRanges: Array<{
+    chunkStart: number; chunkCount: number;
+    symbolStart: number; symbolCount: number;
+    debugStart: number; debugCount: number;
+  }> = [];
 
   watches: number[] = []; // debugging aid: offsets to watch.
   placed: Array<[number, LinkChunk]> = [];
@@ -1319,6 +1328,7 @@ class Link {
   readFile(file: Module) {
     const dc = this.chunks.length;
     const ds = this.symbols.length;
+    const dd = this.debugSymbols?.length ?? 0;
     // segments come first, since LinkChunk constructor needs them
     for (const segment of file.segments || []) {
       this.addRawSegment(segment);
@@ -1337,6 +1347,12 @@ class Link {
         this.debugSymbols.push(translateSymbol(symbol, dc, ds));
       }
     }
+    this.rawModules.push(file);
+    this.moduleRanges.push({
+      chunkStart: dc, chunkCount: file.chunks?.length ?? 0,
+      symbolStart: ds, symbolCount: file.symbols?.length ?? 0,
+      debugStart: dd, debugCount: file.debugSymbols?.length ?? 0,
+    });
     // TODO - what the heck do we do with segments?
     //      - in particular, who is responsible for defining them???
 
@@ -1430,6 +1446,13 @@ class Link {
     // Resolve unmapped segments and hand out file offsets, so that everything
     // below sees plain memory/offset/size.
     this.lowerSegments(merged);
+
+    // Run the late asm pass and if it changes something, we need to relower
+    // the segments to lay them out tighter if the size changed.
+    if (this.lateAssemblyPass(merged, signal)) {
+      this.stopIfFailed('the late assembly pass failed');
+      this.lowerSegments(merged);
+    }
 
     // Build up the LinkSegment objects
     this.collect(merged, ([name, s]) => {
@@ -1596,6 +1619,52 @@ class Link {
     }
     if (DEBUG) console.log(this.report(true));
     return patch;
+  }
+
+  /** Replays modules whose late-assembly guesses disagree with `linkEnv`. */
+  private lateAssemblyPass(merged: Map<string, Segment>,
+                            signal?: {readonly aborted: boolean}): boolean {
+    if (!this.rawModules.some(m => m.lateAssembly?.queries.length)) return false;
+    const linkEnv = buildLinkTimeEnv(this.rawModules, merged);
+    const noMessages = this.rawModules.map(() => []);
+    const replayed = replayModules(this.rawModules, noMessages, linkEnv, signal);
+    if (this.errorCollector) this.errorCollector.merge(replayed.messages);
+    let didReplace = false;
+    for (let i = 0; i < this.rawModules.length; i++) {
+      const module = replayed.modules[i];
+      if (module === this.rawModules[i]) continue;
+      this.replaceModule(module, this.moduleRanges[i]);
+      this.rawModules[i] = module;
+      didReplace = true;
+    }
+    return didReplace;
+  }
+
+  /** Overwrites one module's slice of `chunks`/`symbols`/`debugSymbols`. */
+  private replaceModule(module: Module, at: Link['moduleRanges'][number]): void {
+    const chunks = module.chunks ?? [];
+    if (chunks.length !== at.chunkCount)
+      impossible(`late assembly changed chunk count for ${module.name ?? 'module'}`);
+    for (let k = 0; k < at.chunkCount; k++) {
+      this.chunks[at.chunkStart + k] = new LinkChunk(
+          this, at.chunkStart + k, chunks[k], at.chunkStart, at.symbolStart);
+    }
+    const symbols = module.symbols ?? [];
+    if (symbols.length !== at.symbolCount)
+      impossible(`late assembly changed symbol count for ${module.name ?? 'module'}`);
+    for (let k = 0; k < at.symbolCount; k++) {
+      this.symbols[at.symbolStart + k] =
+          translateSymbol(symbols[k], at.chunkStart, at.symbolStart);
+    }
+    if (at.debugCount) {
+      const debugSymbols = module.debugSymbols ?? [];
+      if (debugSymbols.length !== at.debugCount)
+        impossible(`late assembly changed debug symbol count for ${module.name ?? 'module'}`);
+      for (let k = 0; k < at.debugCount; k++) {
+        this.debugSymbols![at.debugStart + k] =
+            translateSymbol(debugSymbols[k], at.chunkStart, at.symbolStart);
+      }
+    }
   }
 
   /**

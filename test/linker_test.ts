@@ -5,6 +5,7 @@ import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
 import {ErrorCollector} from '../src/error.ts';
 import {FreeSpace, Linker} from '../src/linker.ts';
+import {compile, type AssemblyInput} from '../src/libassembler.ts';
 import {type Module, type Segment} from '../src/module.ts';
 import {SourceError} from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -2511,5 +2512,61 @@ describe('FreeSpace', function() {
     free.add(40, 48);   // 8 bytes, 4-aligned from the start
     expect(free.bestFit(0, 100, 4, 4, 0)).toBe(40);
     expect(free.bestFit(0, 100, 3, 4, 0)).toBe(12);
+  });
+});
+
+describe('late assembly pass', function() {
+  it('re-assembles a module whose plain .import turns out to be zeropage, without changing its bytes', function() {
+    // `foo` is a real label in a real `:zp` segment, so `LinkTimeEnv` genuinely
+    // disagrees with main.s's pass-1 abs guess (it never wrote `.importzp`).
+    // The assembler does not consult `linkEnv` until it does (a later commit
+    // turns that on), so replaying main.s must still emit the same abs bytes.
+    const zp: AssemblyInput = {
+      type: 'source', name: 'zp.s',
+      code: `
+.segment "ZP" :size $10 :mem $0020 :zp
+.export foo
+foo:
+  .res 1
+`
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import foo
+.org $8000
+  lda foo
+`
+    };
+    const result = compile([main, zp], {lineContinuations: true});
+    expect(result.success).toBe(true);
+    expect(result.messages).toEqual([]);
+    expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xad, 0x20, 0x00]);
+  });
+
+  it('does not re-assemble or disturb linking when every import is already sized', function() {
+    const zp: AssemblyInput = {
+      type: 'source', name: 'zp.s',
+      code: `
+.segment "ZP" :size $10 :mem $0020 :zp
+.exportzp foo
+foo:
+  .res 1
+`
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.importzp foo
+.org $8000
+  lda foo
+`
+    };
+    const result = compile([main, zp], {lineContinuations: true});
+    expect(result.success).toBe(true);
+    expect(result.messages).toEqual([]);
+    expect(Array.from(result.outputs[0].data.slice(0, 2))).toEqual([0xa5, 0x20]);
   });
 });
