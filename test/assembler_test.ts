@@ -3489,6 +3489,44 @@ lda #.sizeof(Point)
     });
   });
 
+  describe('late-assembly query recording', function() {
+    it('records one query for a plain .import used as an address', function() {
+      const a = new Assembler(Cpu.P02);
+      a.import('foo');
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries).toEqual([{name: 'foo', guess: 2, source: undefined}]);
+    });
+
+    it('records no query for .importzp', function() {
+      const a = new Assembler(Cpu.P02);
+      a.importzp('foo');
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries).toEqual([]);
+    });
+
+    it('records no query for a local zeropage symbol', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('foo', 5);
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries).toEqual([]);
+    });
+
+    it('records no query for a local in-module symbol', function() {
+      const a = new Assembler(Cpu.P02);
+      a.assign('foo', 0x1234);
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries).toEqual([]);
+    });
+
+    it('does not change assembled bytes', function() {
+      const a = new Assembler(Cpu.P02);
+      a.import('foo');
+      a.instruction([ident('lda'), ident('foo')]);
+      expect(a.lateAssemblyQueries.length).toBe(1);
+      expect(Array.from(strip(a.module()).chunks![0].data)).toEqual([0xad, 0xff, 0xff]);
+    });
+  });
+
   describe('.export', function() {
     it('should export a later value', function() {
       const a = new Assembler(Cpu.P02);

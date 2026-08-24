@@ -275,6 +275,13 @@ export interface RefExtractor {
   assign?(name: string, value: number): void;
 }
 
+/** A first pass size guess for an import whose addrsize the linker may know better. */
+export interface LateAssemblyQuery {
+  name: string;
+  guess: 1|2;
+  source?: Tokens.SourceInfo;
+}
+
 export class Assembler {
 
   /** The currently-open segment(s). */
@@ -407,6 +414,9 @@ export class Assembler {
 
   /** Collector for errors and messages */
   readonly errorCollector = new ErrorCollector();
+
+  /** Recorded whenever an imported symbol's zp/abs size falls back to a guess. */
+  readonly lateAssemblyQueries: LateAssemblyQuery[] = [];
 
   /** Runs the lint rules, unless linting was turned off. */
   readonly linter?: Linter;
@@ -1498,6 +1508,12 @@ export class Assembler {
       // $80 + $8000 will end up in ABS still.
       if (expr.meta?.size == null && expr.args) {
         expr = Exprs.traversePost(expr, Exprs.evaluate);
+        // A compound expr (`foo+1`) doesn't fold zp-ness through an unresolved
+        // import the way a bare `foo` does in `isZeropageRef` - record it here.
+        if (expr.meta?.size == null && !expr.meta?.zeropage) {
+          const name = this.unresolvedImportIn(expr);
+          if (name) this.lateAssemblyQueries.push({name, guess: 2, source: expr.source ?? this._source});
+        }
       }
 
       // If the size is unknown, fall back to the operand's address size, which
@@ -2162,7 +2178,30 @@ export class Assembler {
    */
   private isZeropageRef(name: string): boolean {
     if (this.zeropageGlobals.has(name)) return true;
-    return Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
+    const zp = Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
+    // A plain `.import` should be abs, but maybe they meant .importzp
+    // the linker may know better once every module is loaded, so mark it
+    // as an abs guess instead of being sure.
+    if (!zp && this.globals.get(name) === 'import') {
+      this.lateAssemblyQueries.push({name, guess: 2, source: this._source});
+    }
+    return zp;
+  }
+
+  /** The name of an unresolved `.import` reachable through +/- from `expr`, if any. */
+  private unresolvedImportIn(expr: Expr): string|undefined {
+    if (expr.op === 'sym' || expr.op === 'im') {
+      const name = expr.sym;
+      return name && this.globals.get(name) === 'import' && !this.zeropageGlobals.has(name) ?
+          name : undefined;
+    }
+    if (expr.op === '+' || expr.op === '-') {
+      for (const a of expr.args ?? []) {
+        const name = this.unresolvedImportIn(a);
+        if (name) return name;
+      }
+    }
+    return undefined;
   }
 
   /**
