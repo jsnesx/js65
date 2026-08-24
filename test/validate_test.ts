@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { describe, it, expect } from 'bun:test';
-import { parseModule, parseActionModules } from '../src/validate_modules.ts';
+import { parseModule, parseActionModules, validateToken } from '../src/validate_modules.ts';
 import { Base64 } from '../src/base64.ts';
 import { assemble, compile, deserializeObjectFile, isGzip, link, serializeObjectFile, type Module } from '../src/libassembler.ts';
 
@@ -276,6 +276,52 @@ start:
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('labelIndex');
+  });
+});
+
+describe('validateToken', () => {
+  it('round-trips each token variant', () => {
+    const cases: unknown[] = [
+      { token: 'ident', str: 'foo' },
+      { token: 'op', str: '+', source: { file: 'f.s', line: 1, column: 0 } },
+      { token: 'cs', str: '.byte', rawStr: '.BYTE' },
+      { token: 'str', str: 'hi', char: false },
+      { token: 'ident', str: 'lbl', labelsData: true },
+      { token: 'num', num: 42, width: 1, radix: 16 },
+      { token: 'lb' }, { token: 'lc' }, { token: 'lp' },
+      { token: 'rb' }, { token: 'rc' }, { token: 'rp' },
+      { token: 'eol' }, { token: 'eof' },
+      { token: 'grp', inner: [{ token: 'num', num: 1 }, { token: 'eol' }] },
+    ];
+    for (const c of cases) {
+      expect(validateToken(c, 't')).toEqual(c);
+    }
+  });
+
+  it('recurses through nested groups', () => {
+    const nested = {
+      token: 'grp',
+      inner: [{ token: 'grp', inner: [{ token: 'ident', str: 'x' }] }],
+    };
+    expect(validateToken(nested, 't')).toEqual(nested);
+  });
+
+  it('rejects an unknown token discriminant', () => {
+    expect(() => validateToken({ token: 'bogus' }, 't')).toThrow(/t\.token: unknown token type "bogus"/);
+  });
+
+  it('rejects a non-array inner on a group token', () => {
+    expect(() => validateToken({ token: 'grp', inner: 'nope' }, 't')).toThrow(/t\.inner: expected array/);
+  });
+
+  it('rejects a missing required field', () => {
+    expect(() => validateToken({ token: 'ident' }, 't')).toThrow(/t\.str: expected string/);
+    expect(() => validateToken({ token: 'num' }, 't')).toThrow(/t\.num: expected number/);
+  });
+
+  it('rejects a malformed token deep inside a group, with a path-qualified message', () => {
+    const bad = { token: 'grp', inner: [{ token: 'grp', inner: [{ token: 'ident' }] }] };
+    expect(() => validateToken(bad, 't')).toThrow(/t\.inner\[0\]\.inner\[0\]\.str: expected string/);
   });
 });
 
