@@ -10,6 +10,7 @@
  */
 
 import { Base64 } from './base64.ts';
+import { MODULE_FORMAT_VERSION } from './module.ts';
 import type { Chunk, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { SourceInfo } from './token.ts';
@@ -262,6 +263,8 @@ export function parseModule(obj: unknown): Validated<Module> {
   try {
     if (!isObject(obj)) fail('module', 'expected object');
     const out: Module = {};
+    const version = optNumber(obj.version, 'module.version');
+    if (version !== undefined) out.version = version;
     const name = optString(obj.name, 'module.name');
     if (name !== undefined) out.name = name;
     if (obj.chunks !== undefined) {
@@ -285,6 +288,13 @@ export function parseModule(obj: unknown): Validated<Module> {
     if (err instanceof ValidationError) return { ok: false, error: err.message };
     throw err;
   }
+}
+
+/** Error message if `m` is not the current .o format version; undefined if current. */
+export function staleModuleVersion(m: Module): string | undefined {
+  if (m.version === MODULE_FORMAT_VERSION) return undefined;
+  const got = m.version ?? 'none';
+  return `stale module format (got ${got}, need ${MODULE_FORMAT_VERSION}); rebuild the .o file`;
 }
 
 function validateActionSource(v: unknown, path: string): ActionSource {

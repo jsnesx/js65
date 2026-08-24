@@ -278,3 +278,23 @@ start:
     if (!r.ok) expect(r.error).toContain('labelIndex');
   });
 });
+
+describe('module format version', () => {
+  it('round-trips the current format version', async () => {
+    const m: Module = { name: 'm', chunks: [{ segments: ['CODE'], data: new Uint8Array([0x60]) }] };
+    const back = await deserializeObjectFile(await serializeObjectFile(m));
+    expect(back.name).toBe('m');
+  });
+
+  it('refuses a hand-edited stale version', () => {
+    const stale = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ version: 0, chunks: [] })));
+    expect(() => deserializeObjectFile(stale, 'stale.o'))
+      .toThrow(/stale\.o: stale module format \(got 0, need 1\); rebuild the \.o file/);
+  });
+
+  it('treats a missing version as stale', () => {
+    const noVersion = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ chunks: [] })));
+    expect(() => deserializeObjectFile(noVersion, 'noversion.o'))
+      .toThrow(/noversion\.o: stale module format \(got none, need 1\); rebuild the \.o file/);
+  });
+});

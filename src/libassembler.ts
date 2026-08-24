@@ -31,8 +31,8 @@ import { applyFeatures,
 import { LintPragmas } from './lint.ts';
 import * as Tokens from './token.ts';
 import { TokenStream, SourceContents, type ResolvedFile } from './tokenstream.ts';
-import { type Module, type Segment } from "./module.ts";
-import { parseModule, parseRequest } from "./validate_modules.ts";
+import { MODULE_FORMAT_VERSION, type Module, type Segment } from "./module.ts";
+import { parseModule, parseRequest, staleModuleVersion } from "./validate_modules.ts";
 import * as Exprs from './expr.ts';
 import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
@@ -727,7 +727,7 @@ function messageFromException(err: unknown): AssemblerMessage {
  */
 function serializeModule(m: Module, keepDebugInfo = true): string {
   const base64 = new Base64();
-  return JSON.stringify(m, (k, v) => {
+  return JSON.stringify({...m, version: MODULE_FORMAT_VERSION}, (k, v) => {
     if (k === 'data' && v instanceof Uint8Array) {
       return base64.encode(v);
     }
@@ -779,6 +779,8 @@ export function deserializeObjectFile(data: Uint8Array, name = 'object file'): M
   }
   const validated = parseModule(parsed);
   if (!validated.ok) throw new Error(`${name}: not a valid object file: ${validated.error}`);
+  const stale = staleModuleVersion(validated.value);
+  if (stale) throw new Error(`${name}: ${stale}`);
   return validated.value;
 }
 
