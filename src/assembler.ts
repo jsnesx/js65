@@ -14,6 +14,7 @@ import { Linter, type RtsAnchor } from './lint.ts';
 import type { SymbolKind } from './lspindex.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from './options.ts';
+import type { LinkTimeEnv } from './latepass.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 import { createHash } from 'sha1-uint8array';
 
@@ -413,6 +414,9 @@ export class Assembler {
 
   /** Replayed tokenstream in the latepass. */
   private readonly lateAssemblyStream: Token[][] = [];
+
+  /** Set by the late pass on replay; undefined (and unconsulted) on pass 1. */
+  linkEnv?: LinkTimeEnv;
 
   /** Runs the lint rules, unless linting was turned off. */
   readonly linter?: Linter;
