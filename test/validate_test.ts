@@ -256,6 +256,42 @@ start:
     expect(chunk.sourceMap!.get(0)).toEqual({ file: 'a.s', line: 1, column: 0 });
   });
 
+  it('a module with a size guess carries a lateAssembly block that round-trips through a .o', async () => {
+    const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "CODE"
+.import foo
+.org $8000
+    lda foo
+    rts
+`;
+    const asm = await assemble([{ type: 'source', code: source, name: 't.s' }], { lineContinuations: true });
+    expect(asm.success).toBe(true);
+    const m = asm.modules[0];
+    expect(m.lateAssembly?.queries.length).toBe(1);
+    expect(m.lateAssembly?.stream.length).toBeGreaterThan(0);
+
+    const roundTripped = await deserializeObjectFile(await serializeObjectFile(m));
+    expect(roundTripped.lateAssembly?.queries).toEqual(m.lateAssembly?.queries);
+    expect(roundTripped.lateAssembly?.stream).toEqual(m.lateAssembly?.stream);
+  });
+
+  it('a fully .importzp-annotated module carries no lateAssembly block through a .o', async () => {
+    const source = `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.segment "CODE"
+.importzp foo
+.org $8000
+    lda foo
+    rts
+`;
+    const asm = await assemble([{ type: 'source', code: source, name: 't.s' }], { lineContinuations: true });
+    expect(asm.success).toBe(true);
+    expect(asm.modules[0].lateAssembly).toBeUndefined();
+    const roundTripped = await deserializeObjectFile(await serializeObjectFile(asm.modules[0]));
+    expect(roundTripped.lateAssembly).toBeUndefined();
+  });
+
   it('reports a useful error for a corrupt .o', () => {
     const truncated = serializeObjectFile({ name: 'm' }).slice(0, 8);
     expect(() => deserializeObjectFile(truncated, 'bad.o')).toThrow(/bad\.o: could not decompress/);
@@ -277,6 +313,38 @@ start:
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('labelIndex');
+  });
+
+  it('accepts a well-formed lateAssembly block', () => {
+    const r = parseModule({
+      lateAssembly: {
+        queries: [{ name: 'foo', guess: 2, source: { file: 'a.s', line: 1, column: 0 } }],
+        stream: [[{ token: 'ident', str: 'lda' }, { token: 'eol' }]],
+        opts: { generateDebugInfo: true },
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.lateAssembly!.queries[0].name).toBe('foo');
+  });
+
+  it('rejects a lateAssembly.queries guess outside 1|2', () => {
+    const r = parseModule({ lateAssembly: { queries: [{ name: 'foo', guess: 3 }], stream: [], opts: {} } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('lateAssembly.queries[0].guess');
+  });
+
+  it('rejects a malformed lateAssembly.stream token', () => {
+    const r = parseModule({
+      lateAssembly: { queries: [], stream: [[{ token: 'bogus' }]], opts: {} },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('lateAssembly.stream[0][0]');
+  });
+
+  it('rejects a truncated (non-array) lateAssembly.stream', () => {
+    const r = parseModule({ lateAssembly: { queries: [], stream: 'nope', opts: {} } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('lateAssembly.stream');
   });
 });
 

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { Expr } from './expr.ts';
-import type { SourceInfo } from './token.ts';
+import type { SourceInfo, Token } from './token.ts';
+import type { AssemblerOptions } from './options.ts';
 
 
 // export interface Substitution {
@@ -195,6 +196,20 @@ export namespace Segment {
 /** Bump whenever we touch this file */
 export const MODULE_FORMAT_VERSION = 1;
 
+/** A first pass size guess for an import whose addrsize the linker may know better. */
+export interface LateAssemblyQuery {
+  name: string;
+  guess: 1|2;
+  source?: SourceInfo;
+}
+
+/** Everything needed to re-assemble a module once the linker runs the late pass. */
+export interface LateAssembly {
+  queries: LateAssemblyQuery[];
+  stream: Token[][];
+  opts: AssemblerOptions;
+}
+
 export interface Module {
   /** .o format version this module was serialized with. */
   version?: number;
@@ -208,4 +223,6 @@ export interface Module {
   segments?: Segment[];
   /** All symbols from all scopes for debug purposes. */
   debugSymbols?: Symbol[];
+  /** Present only when a symbol's zp/abs size guess needs confirming. */
+  lateAssembly?: LateAssembly;
 }

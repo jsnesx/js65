@@ -3527,6 +3527,27 @@ lda #.sizeof(Point)
     });
   });
 
+  describe('late-assembly stream capture', function() {
+    it('carries a stream and queries for a module with an unresolved size', function() {
+      const m = assembleModule('.import foo\nlda foo\n');
+      expect(m.lateAssembly).toBeDefined();
+      expect(m.lateAssembly!.queries.length).toBe(1);
+      expect(m.lateAssembly!.queries[0].name).toBe('foo');
+      expect(m.lateAssembly!.queries[0].guess).toBe(2);
+      expect(m.lateAssembly!.stream.length).toBeGreaterThan(0);
+    });
+
+    it('carries no block when every import is sized', function() {
+      const m = assembleModule('.importzp foo\nlda foo\n');
+      expect(m.lateAssembly).toBeUndefined();
+    });
+
+    it('does not change assembled bytes', function() {
+      const m = assembleModule('.import foo\nlda foo\nrts\n');
+      expect(Array.from(m.chunks![0].data)).toEqual([0xad, 0xff, 0xff, 0x60]);
+    });
+  });
+
   describe('.export', function() {
     it('should export a later value', function() {
       const a = new Assembler(Cpu.P02);

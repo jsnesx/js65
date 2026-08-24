@@ -275,13 +275,6 @@ export interface RefExtractor {
   assign?(name: string, value: number): void;
 }
 
-/** A first pass size guess for an import whose addrsize the linker may know better. */
-export interface LateAssemblyQuery {
-  name: string;
-  guess: 1|2;
-  source?: Tokens.SourceInfo;
-}
-
 export class Assembler {
 
   /** The currently-open segment(s). */
@@ -416,7 +409,10 @@ export class Assembler {
   readonly errorCollector = new ErrorCollector();
 
   /** Recorded whenever an imported symbol's zp/abs size falls back to a guess. */
-  readonly lateAssemblyQueries: LateAssemblyQuery[] = [];
+  readonly lateAssemblyQueries: mod.LateAssemblyQuery[] = [];
+
+  /** Replayed tokenstream in the latepass. */
+  private readonly lateAssemblyStream: Token[][] = [];
 
   /** Runs the lint rules, unless linting was turned off. */
   readonly linter?: Linter;
@@ -1100,7 +1096,12 @@ export class Assembler {
       }
     }
 
-    return {chunks, symbols, segments, debugSymbols};
+    // Only annotated-abs modules need to re-assemble, so skip the block otherwise.
+    const lateAssembly: mod.LateAssembly | undefined = this.lateAssemblyQueries.length ?
+        {queries: this.lateAssemblyQueries, stream: this.lateAssemblyStream, opts: this.opts} :
+        undefined;
+
+    return {chunks, symbols, segments, debugSymbols, lateAssembly};
   }
 
   // Assemble from a list of tokens
@@ -1160,6 +1161,7 @@ export class Assembler {
       const line = source.next();
       if (!line) break;
       if (signal?.aborted) throw new FatalError('Compilation cancelled');
+      this.lateAssemblyStream.push(line);
       this.line(line);
     }
   }
