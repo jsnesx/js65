@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import { parseModule, parseActionModules, validateToken } from '../src/validate_modules.ts';
+import type { Token } from '../src/token.ts';
 import { Base64 } from '../src/base64.ts';
 import { assemble, compile, deserializeObjectFile, isGzip, link, serializeObjectFile, type Module } from '../src/libassembler.ts';
 
@@ -294,7 +295,7 @@ describe('validateToken', () => {
       { token: 'grp', inner: [{ token: 'num', num: 1 }, { token: 'eol' }] },
     ];
     for (const c of cases) {
-      expect(validateToken(c, 't')).toEqual(c);
+      expect(validateToken(c, 't')).toEqual(c as Token);
     }
   });
 
@@ -303,7 +304,7 @@ describe('validateToken', () => {
       token: 'grp',
       inner: [{ token: 'grp', inner: [{ token: 'ident', str: 'x' }] }],
     };
-    expect(validateToken(nested, 't')).toEqual(nested);
+    expect(validateToken(nested, 't')).toEqual(nested as unknown as Token);
   });
 
   it('rejects an unknown token discriminant', () => {
