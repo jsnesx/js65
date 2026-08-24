@@ -38,7 +38,6 @@ import type { Expr } from './expr.ts';
 import { MaxKeySizeCacheMap } from './util.ts';
 import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
 import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
-import type { LinkTimeEnv } from './latepass.ts';
 import { gzipCodec } from './driver/codec/codec.ts';
 
 // Re-export Assembler for direct programmatic use
@@ -265,6 +264,7 @@ export interface AssembleResult {
   modules: Module[];
   /** All messages (errors, warnings, info) from assembly */
   messages: AssemblerMessage[];
+  moduleMessages: AssemblerMessage[][];
 }
 
 // Helper to convert ActionSource to SourceInfo
@@ -316,6 +316,7 @@ export function assemble(
   signal?: CancelSignal
 ): AssembleResult {
   const modules: Module[] = [];
+  const moduleMessages: AssemblerMessage[][] = [];
   const allMessages: AssemblerMessage[] = [];
 
   const baseOpts: TokenizerOptions = {
@@ -344,7 +345,7 @@ export function assemble(
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
   allMessages.push(...featureMessages);
   if (featureMessages.some(m => m.level === 'error')) {
-    return { success: false, modules, messages: allMessages };
+    return { success: false, modules, messages: allMessages, moduleMessages };
   }
   /**
    * Set up the options so that the same TokenizerOptions object is passed to all preprocessor instances
@@ -370,6 +371,7 @@ export function assemble(
       if (input.type === 'module') {
         // Already compiled module, just add it
         modules.push(input.module);
+        moduleMessages.push([]);
         continue;
       }
 
@@ -519,6 +521,7 @@ export function assemble(
         const module = asm.module();
         module.name = module_name;
         modules.push(module);
+        moduleMessages.push([...asm.getMessages()]);
         allMessages.push(...asm.getMessages());
         currentAssembler = undefined;
         continue;
@@ -547,6 +550,7 @@ export function assemble(
       const module = asm.module();
       module.name = input.name;
       modules.push(module);
+      moduleMessages.push([...asm.getMessages()]);
 
       // Collect messages from this assembler
       allMessages.push(...asm.getMessages());
@@ -557,49 +561,11 @@ export function assemble(
     // so grab whatever messages we can scavenge
     if (currentAssembler) allMessages.push(...currentAssembler.getMessages());
     pushException(allMessages, err);
-    return { success: false, modules, messages: allMessages };
+    return { success: false, modules, messages: allMessages, moduleMessages };
   }
 
   const hasErrors = allMessages.some(m => m.level === 'error');
-  return { success: !hasErrors, modules, messages: allMessages };
-}
-
-/** Result of re-assembling a module from its recorded `lateAssembly` stream. */
-export interface ReplayResult {
-  /** Whether replay succeeded (no errors) */
-  success: boolean;
-  /** The re-assembled module */
-  module: Module;
-  /** Messages from the replayed pass */
-  messages: AssemblerMessage[];
-}
-
-/**
- * Used by the linker in the latepass assembly to rebuild the module
- * with the full symbol and segment lists known so we can properly
- * settle all unknown syms and sizes.
- */
-export function replayModule(
-  module: Module,
-  linkEnv?: LinkTimeEnv,
-  signal?: CancelSignal,
-): ReplayResult {
-  const lateAssembly = module.lateAssembly;
-  if (!lateAssembly) {
-    throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
-  }
-  const asm = new Assembler(Cpu.P02, lateAssembly.opts);
-  asm.linkEnv = linkEnv;
-  const {stream} = lateAssembly;
-  let i = 0;
-  const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
-  asm.tokens(source, signal);
-
-  const replayed = asm.module();
-  replayed.name = module.name;
-  const messages = asm.getMessages();
-  const hasErrors = messages.some(m => m.level === 'error');
-  return {success: !hasErrors, module: replayed, messages: [...messages]};
+  return { success: !hasErrors, modules, messages: allMessages, moduleMessages };
 }
 
 export interface LinkResult {

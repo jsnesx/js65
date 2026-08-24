@@ -7,7 +7,8 @@ import {type Expr} from '../src/expr.ts';
 import {type Module} from '../src/module.ts';
 import {Assembler} from '../src/assembler.ts';
 import {FEATURE_NAMES, type TokenizerOptions} from '../src/options.ts';
-import {assemble as libAssemble, compile, replayModule, type AssemblyInput} from '../src/libassembler.ts';
+import {assemble as libAssemble, compile, type AssemblyInput} from '../src/libassembler.ts';
+import {replayModule, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -3606,6 +3607,66 @@ lda #.sizeof(Point)
       const m = assembleModule('.importzp foo\nlda foo\n');
       expect(m.lateAssembly).toBeUndefined();
       expect(() => replayModule(m)).toThrow(/no lateAssembly block/);
+    });
+  });
+
+  describe('late-assembly re-assembly side-effect safety', function() {
+    // A `LinkTimeEnv` that always disagrees with pass 1's guess, so every
+    // query'd module is replayed.
+    const alwaysDiffers: LinkTimeEnv = {
+      addrSize: () => 1,
+      bank: () => undefined,
+    };
+    // Agrees with every guess, so nothing is replayed.
+    const neverDiffers: LinkTimeEnv = {
+      addrSize: () => 2,
+      bank: () => undefined,
+    };
+
+    it('.warning fires exactly once for a module that gets replayed', function() {
+      const body = '.import foo\nlda foo\n.warning "hi"\n';
+      const result = libAssemble(
+          [{type: 'source', code: body, name: 'test.s'} as AssemblyInput], {});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      expect(result.modules[0].lateAssembly).toBeDefined();
+      expect(result.moduleMessages[0].filter(m => m.message === 'hi').length).toBe(1);
+
+      const replayed = replayModules(result.modules, result.moduleMessages, alwaysDiffers);
+      expect(replayed.messages.filter(m => m.message === 'hi').length).toBe(1);
+    });
+
+    it('.out fires exactly once for a module that gets replayed', function() {
+      const body = '.import foo\nlda foo\n.out "hi"\n';
+      const result = libAssemble(
+          [{type: 'source', code: body, name: 'test.s'} as AssemblyInput], {});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+
+      const replayed = replayModules(result.modules, result.moduleMessages, alwaysDiffers);
+      expect(replayed.messages.filter(m => m.message === 'hi').length).toBe(1);
+    });
+
+    it('a lint finding reports once for a module that gets replayed', function() {
+      const body = '.import foo\nlda foo\njsr bar\nrts\nbar:\nrts\n';
+      const result = libAssemble(
+          [{type: 'source', code: body, name: 'test.s'} as AssemblyInput], {});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const findings = (msgs: readonly {code?: string}[]) =>
+          msgs.filter(m => m.code === 'jsr-rts-tail-call');
+      expect(findings(result.moduleMessages[0]).length).toBe(1);
+
+      const replayed = replayModules(result.modules, result.moduleMessages, alwaysDiffers);
+      expect(findings(replayed.messages).length).toBe(1);
+    });
+
+    it('a module whose guesses already match linkEnv is not replayed, and keeps its pass-1 messages', function() {
+      const body = '.import foo\nlda foo\n.warning "hi"\n';
+      const result = libAssemble(
+          [{type: 'source', code: body, name: 'test.s'} as AssemblyInput], {});
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+
+      const replayed = replayModules(result.modules, result.moduleMessages, neverDiffers);
+      expect(replayed.modules[0]).toBe(result.modules[0]);
+      expect(replayed.messages.filter(m => m.message === 'hi').length).toBe(1);
     });
   });
 

@@ -1,9 +1,13 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import { fail } from './error.ts';
+import { Assembler } from './assembler.ts';
+import { Cpu } from './cpu.ts';
+import { ErrorCollector, fail, type AssemblerMessage } from './error.ts';
 import type { Expr } from './expr.ts';
 import type { Module, Segment } from './module.ts';
+import * as Tokens from './token.ts';
+import type { CancelSignal } from './libassembler.ts';
 
 export interface LinkTimeEnv {
   /** 1 for zeropage, 2 for absolute, undefined if unknown. */
@@ -61,4 +65,91 @@ export function buildLinkTimeEnv(
         seg => seg.addressing === 1 ? 1 : 2),
     bank: name => resolve(name, modules, segments, seg => seg.bank),
   };
+}
+
+/** Result of re-assembling a module from its recorded `lateAssembly` stream. */
+export interface ReplayResult {
+  /** Whether replay succeeded (no errors) */
+  success: boolean;
+  /** The re-assembled module */
+  module: Module;
+  /** Messages from the replayed pass */
+  messages: AssemblerMessage[];
+}
+
+/**
+ * Rebuilds a module from its recorded `lateAssembly` stream, with the full
+ * symbol and segment lists known so it can settle all unknown syms and sizes.
+ */
+export function replayModule(
+  module: Module,
+  linkEnv?: LinkTimeEnv,
+  signal?: CancelSignal,
+): ReplayResult {
+  const lateAssembly = module.lateAssembly;
+  if (!lateAssembly) {
+    throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
+  }
+  const asm = new Assembler(Cpu.P02, lateAssembly.opts);
+  asm.linkEnv = linkEnv;
+  const {stream} = lateAssembly;
+  let i = 0;
+  const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
+  asm.tokens(source, signal);
+
+  const replayed = asm.module();
+  replayed.name = module.name;
+  const messages = asm.getMessages();
+  const hasErrors = messages.some(m => m.level === 'error');
+  return {success: !hasErrors, module: replayed, messages: [...messages]};
+}
+
+/** Result of replaying whichever modules a `LinkTimeEnv` disagrees with. */
+export interface ReplayModulesResult {
+  success: boolean;
+  modules: Module[];
+  messages: AssemblerMessage[];
+}
+
+/** Whether any query in `module`'s `lateAssembly` block gets a different answer from `linkEnv`. */
+function needsReplay(module: Module, linkEnv: LinkTimeEnv): boolean {
+  const queries = module.lateAssembly?.queries;
+  if (!queries?.length) return false;
+  return queries.some(q => {
+    const answer = linkEnv.addrSize(q.name);
+    return answer !== undefined && answer !== q.guess;
+  });
+}
+
+/**
+ * Replays each module whose recorded guesses disagree with `linkEnv`,
+ * replacing it in the result. `moduleMessages` (from `assemble()`) must be
+ * aligned with `modules`. A replayed module's pass-1 messages are discarded
+ * wholesale via `ErrorCollector`'s provisional scope (never merged with
+ * pass-2's), so nothing reports twice.
+ */
+export function replayModules(
+  modules: Module[],
+  moduleMessages: readonly (readonly AssemblerMessage[])[],
+  linkEnv: LinkTimeEnv,
+  signal?: CancelSignal,
+): ReplayModulesResult {
+  const collector = new ErrorCollector();
+  const outModules: Module[] = [];
+  for (let i = 0; i < modules.length; i++) {
+    const module = modules[i];
+    collector.openAsmPass();
+    if (!needsReplay(module, linkEnv)) {
+      collector.merge(moduleMessages[i] ?? []);
+      collector.flushAsmPass();
+      outModules.push(module);
+      continue;
+    }
+    collector.discardAsmPass();
+    const replay = replayModule(module, linkEnv, signal);
+    collector.merge(replay.messages);
+    outModules.push(replay.module);
+  }
+  const messages = [...collector.getMessages()];
+  return {success: !collector.hasErrors(), modules: outModules, messages};
 }
