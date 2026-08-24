@@ -1228,6 +1228,7 @@ export class Assembler {
         case '.error': return this.log('error', tokens);
         case '.fatal': return this.log('error', tokens, true);
         case '.feature': return this.feature(tokens);
+        case '.autoimport': return this.autoimport(tokens);
 
         case '.a8':
         case '.i8':
@@ -1254,7 +1255,6 @@ export class Assembler {
         case '.linecont':
         case '.localchar':
         case '.case':
-        case '.autoimport':
         // Probably not going to add these.
         case '.condes':
         case '.constructor':
@@ -2438,6 +2438,19 @@ export class Assembler {
 
   move(size: number, source: Expr) {
     this.append({op: '.move', args: [source], meta: {size}}, size);
+  }
+
+  autoimport(tokens: Token[]) {
+    if (tokens.length === 1) return;
+    const tok = tokens[1];
+    if (tokens.length === 2 && tok.token === 'op' && tok.str === '+') return;
+    if (tokens.length === 2 && tok.token === 'op' && tok.str === '-') {
+      this.errorCollector.add(
+          'warning', `.autoimport - has no effect; late-pass sizing is always on`,
+          tok.source);
+      return;
+    }
+    this.fail(`Expected + or - after .autoimport`, tok);
   }
 
   log(level: 'info'|'warn'|'error', line: Token[], fatal = false) {
