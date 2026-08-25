@@ -427,6 +427,15 @@ export class Assembler {
   /** Set by the late pass on replay; undefined (and unconsulted) on pass 1. */
   linkEnv?: LinkTimeEnv;
 
+  /** Names a deferred `.if` condition bank-queried during replay. */
+  readonly localRefQueries = new Set<string>();
+
+  /** Count of conditionals this replay guessed false rather than failing. */
+  toleratedIfs = 0;
+
+  /** Set while evaluating a deferred `.if`/`.elseif` condition. */
+  private inCondition = false;
+
   /** Set by first pass to note whether a global was import or export */
   globalKinds?: Record<string, 'import'|'export'>;
 
@@ -709,10 +718,12 @@ export class Assembler {
       // that placeholder only resolves once the label is *actually* defined
       // later in this pass, which is too late for an `.if` that needs the
       // answer right now.
-      if ((e.op === '^' || e.op === '.bankbyte' || e.op === '.addrsize') &&
-          e.args?.length === 1 && e.args[0].op === 'sym' && e.args[0].sym != null &&
-          this.linkEnv?.localForwardRefs?.has(e.args[0].sym)) {
-        return Exprs.evaluate(e, this.evalEnv());
+      if (DEFERRABLE_LINK_OPS.has(e.op) && e.args?.length === 1 &&
+          e.args[0].op === 'sym' && e.args[0].sym != null) {
+        if (this.inCondition) this.localRefQueries.add(e.args[0].sym);
+        if (this.linkEnv?.localForwardRefs?.has(e.args[0].sym)) {
+          return Exprs.evaluate(e, this.evalEnv());
+        }
       }
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
@@ -1438,9 +1449,19 @@ export class Assembler {
   }
 
   private evalCond(at: Token, expr: Expr): boolean {
-    const value = this.evaluate(expr);
+    const prev = this.inCondition;
+    this.inCondition = true;
+    let value;
+    try {
+      value = this.evaluate(expr);
+    } finally {
+      this.inCondition = prev;
+    }
     if (value == null) {
-      if (this.linkEnv?.tolerateUnresolvedIf) return false;
+      if (this.linkEnv?.tolerateUnresolvedIf) {
+        this.toleratedIfs++;
+        return false;
+      }
       this.fail(`Expected a constant`, at);
     }
     return value !== 0;
