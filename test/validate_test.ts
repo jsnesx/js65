@@ -268,11 +268,11 @@ start:
     const asm = await assemble([{ type: 'source', code: source, name: 't.s' }], { lineContinuations: true });
     expect(asm.success).toBe(true);
     const m = asm.modules[0];
-    expect(m.lateAssembly?.queries.length).toBe(1);
+    expect(m.lateAssembly?.sizeQueries.length).toBe(1);
     expect(m.lateAssembly?.stream.length).toBeGreaterThan(0);
 
     const roundTripped = await deserializeObjectFile(await serializeObjectFile(m));
-    expect(roundTripped.lateAssembly?.queries).toEqual(m.lateAssembly?.queries);
+    expect(roundTripped.lateAssembly?.sizeQueries).toEqual(m.lateAssembly?.sizeQueries);
     expect(roundTripped.lateAssembly?.stream).toEqual(m.lateAssembly?.stream);
   });
 
@@ -318,33 +318,47 @@ start:
   it('accepts a well-formed lateAssembly block', () => {
     const r = parseModule({
       lateAssembly: {
-        queries: [{ name: 'foo', guess: 2, source: { file: 'a.s', line: 1, column: 0 } }],
+        sizeQueries: [{ name: 'foo', guess: 2, source: { file: 'a.s', line: 1, column: 0 } }],
+        condQueries: [{ source: { file: 'a.s', line: 2, column: 0 } }],
         stream: [[{ token: 'ident', str: 'lda' }, { token: 'eol' }]],
         opts: { generateDebugInfo: true },
       },
     });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.value.lateAssembly!.queries[0].name).toBe('foo');
+    if (r.ok) expect(r.value.lateAssembly!.sizeQueries[0].name).toBe('foo');
+    if (r.ok) expect(r.value.lateAssembly!.condQueries.length).toBe(1);
   });
 
-  it('rejects a lateAssembly.queries guess outside 1|2', () => {
-    const r = parseModule({ lateAssembly: { queries: [{ name: 'foo', guess: 3 }], stream: [], opts: {} } });
+  it('rejects a lateAssembly.sizeQueries guess outside 1|2', () => {
+    const r = parseModule({
+      lateAssembly: { sizeQueries: [{ name: 'foo', guess: 3 }], condQueries: [], stream: [], opts: {} },
+    });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('lateAssembly.queries[0].guess');
+    if (!r.ok) expect(r.error).toContain('lateAssembly.sizeQueries[0].guess');
   });
 
   it('rejects a malformed lateAssembly.stream token', () => {
     const r = parseModule({
-      lateAssembly: { queries: [], stream: [[{ token: 'bogus' }]], opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: [], stream: [[{ token: 'bogus' }]], opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.stream[0][0]');
   });
 
   it('rejects a truncated (non-array) lateAssembly.stream', () => {
-    const r = parseModule({ lateAssembly: { queries: [], stream: 'nope', opts: {} } });
+    const r = parseModule({
+      lateAssembly: { sizeQueries: [], condQueries: [], stream: 'nope', opts: {} },
+    });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.stream');
+  });
+
+  it('rejects a truncated (non-array) lateAssembly.condQueries', () => {
+    const r = parseModule({
+      lateAssembly: { sizeQueries: [], condQueries: 'nope', stream: [], opts: {} },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('lateAssembly.condQueries');
   });
 });
 

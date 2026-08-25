@@ -413,10 +413,10 @@ export class Assembler {
   readonly errorCollector = new ErrorCollector();
 
   /** Recorded whenever an imported symbol's zp/abs size falls back to a guess. */
-  readonly lateAssemblyQueries: mod.LateAssemblyQuery[] = [];
+  readonly lateAssemblyQueries: mod.LateAssemblySizeQuery[] = [];
 
   /** Recorded for every `.if`/`.elseif` that can't be decided without a linker */
-  readonly lateAssemblyCondQueries: Array<{source?: Tokens.SourceInfo}> = [];
+  readonly lateAssemblyCondQueries: mod.LateAssemblyCondQuery[] = [];
 
   /** Replayed tokenstream in the latepass. */
   private readonly lateAssemblyStream: Token[][] = [];
@@ -1138,7 +1138,8 @@ export class Assembler {
 
     // Only annotated-abs modules need to re-assemble, so skip the block otherwise.
     const lateAssembly: mod.LateAssembly | undefined = this.lateAssemblyQueries.length ?
-        {queries: this.lateAssemblyQueries, stream: this.lateAssemblyStream, opts: this.opts} :
+        {sizeQueries: this.lateAssemblyQueries, condQueries: this.lateAssemblyCondQueries,
+         stream: this.lateAssemblyStream, opts: this.opts} :
         undefined;
 
     return {chunks, symbols, segments, debugSymbols, lateAssembly};

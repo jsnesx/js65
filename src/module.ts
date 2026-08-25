@@ -197,15 +197,21 @@ export namespace Segment {
 export const MODULE_FORMAT_VERSION = 1;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
-export interface LateAssemblyQuery {
+export interface LateAssemblySizeQuery {
   name: string;
   guess: 1|2;
   source?: SourceInfo;
 }
 
+/** Recorded for a `.if`/`.elseif` that couldn't be decided without a linker. */
+export interface LateAssemblyCondQuery {
+  source?: SourceInfo;
+}
+
 /** Everything needed to re-assemble a module once the linker runs the late pass. */
 export interface LateAssembly {
-  queries: LateAssemblyQuery[];
+  sizeQueries: LateAssemblySizeQuery[];
+  condQueries: LateAssemblyCondQuery[];
   stream: Token[][];
   opts: AssemblerOptions;
 }

@@ -11,7 +11,7 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { Chunk, LateAssembly, LateAssemblyQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
+import type { Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -299,12 +299,19 @@ function validateSegment(v: unknown, path: string): Segment {
   return out;
 }
 
-function validateLateAssemblyQuery(v: unknown, path: string): LateAssemblyQuery {
+function validateLateAssemblySizeQuery(v: unknown, path: string): LateAssemblySizeQuery {
   if (!isObject(v)) fail(path, 'expected object');
   const name = reqString(v.name, `${path}.name`);
   const guess = reqNumber(v.guess, `${path}.guess`);
   if (guess !== 1 && guess !== 2) fail(`${path}.guess`, 'expected 1 or 2');
-  const out: LateAssemblyQuery = { name, guess };
+  const out: LateAssemblySizeQuery = { name, guess };
+  if (v.source !== undefined) out.source = validateSourceInfo(v.source, `${path}.source`);
+  return out;
+}
+
+function validateLateAssemblyCondQuery(v: unknown, path: string): LateAssemblyCondQuery {
+  if (!isObject(v)) fail(path, 'expected object');
+  const out: LateAssemblyCondQuery = {};
   if (v.source !== undefined) out.source = validateSourceInfo(v.source, `${path}.source`);
   return out;
 }
@@ -316,13 +323,15 @@ function validateAssemblerOptions(v: unknown, path: string): AssemblerOptions {
 
 function validateLateAssembly(v: unknown, path: string): LateAssembly {
   if (!isObject(v)) fail(path, 'expected object');
-  const queries = reqArray(v.queries, `${path}.queries`)
-    .map((q, i) => validateLateAssemblyQuery(q, `${path}.queries[${i}]`));
+  const sizeQueries = reqArray(v.sizeQueries, `${path}.sizeQueries`)
+    .map((q, i) => validateLateAssemblySizeQuery(q, `${path}.sizeQueries[${i}]`));
+  const condQueries = reqArray(v.condQueries, `${path}.condQueries`)
+    .map((q, i) => validateLateAssemblyCondQuery(q, `${path}.condQueries[${i}]`));
   const stream = reqArray(v.stream, `${path}.stream`).map((line, i) =>
     reqArray(line, `${path}.stream[${i}]`)
       .map((t, j) => validateToken(t, `${path}.stream[${i}][${j}]`)));
   const opts = validateAssemblerOptions(v.opts, `${path}.opts`);
-  return { queries, stream, opts };
+  return { sizeQueries, condQueries, stream, opts };
 }
 
 /**
