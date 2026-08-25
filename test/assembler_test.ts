@@ -3951,6 +3951,21 @@ lda #.sizeof(Point)
       expect(replayed.modules[0]).toBe(result.modules[0]);
       expect(replayed.messages.filter(m => m.message === 'hi').length).toBe(1);
     });
+
+    it('a module with only a deferred `.if` (no size disagreement) is still replayed', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.endif')],
+      ]));
+      const m = a.module();
+      expect(m.lateAssembly!.sizeQueries.length).toBe(0);
+      expect(m.lateAssembly!.condQueries.length).toBe(1);
+
+      const replayed = replayModules([m], [[]], neverDiffers);
+      expect(replayed.modules[0]).not.toBe(m);
+    });
   });
 
   describe('.export', function() {

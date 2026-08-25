@@ -130,6 +130,7 @@ export interface ReplayModulesResult {
 
 /** Whether any query in `module`'s `lateAssembly` block gets a different answer from `linkEnv`. */
 function needsReplay(module: Module, linkEnv: LinkTimeEnv): boolean {
+  if ((module.lateAssembly?.condQueries.length ?? 0) > 0) return true;
   const queries = module.lateAssembly?.sizeQueries;
   if (!queries?.length) return false;
   return queries.some(q => {
