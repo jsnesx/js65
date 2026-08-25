@@ -3587,6 +3587,84 @@ lda #.sizeof(Point)
     });
   });
 
+  describe('.bank via evalEnv (linkEnv + live chunk state)', function() {
+    // An import only becomes an `im` expr once `module()` closes scopes at the
+    // very end of the stream (`declareGlobal`, src/assembler.ts:961-974), so a
+    // mid-stream `.bank(import)` can't fold there yet - `resolveDeferredOps`
+    // retries it once every symbol has a final expr (see `deferredOps`).
+    it('resolves .bank(import) via linkEnv.bank once closeScopes settles it', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = {addrSize: () => undefined,
+                   bank: sym => sym === 'Target' ? 4 : undefined,
+                   segmentBank: () => undefined};
+      a.import('Target');
+      a.directive([cs('.byte'), cs('.bankbyte'), LP, ident('Target'), RP]);
+      // An import folds too late for `append()` to write the byte directly
+      // (it's already committed a placeholder + Substitution by the time
+      // `resolveDeferredOps` runs) - same as an ordinary cross-module import,
+      // the Substitution's `expr` is what the linker actually reads. Checking
+      // it folded to a plain number is what confirms `linkEnv.bank` got used.
+      const sub = strip(a.module()).chunks![0].subs![0];
+      expect(sub.expr).toEqual({op: 'num', num: 4, meta: {size: 1}});
+    });
+
+    it('leaves .bank(import) as an unresolved Substitution without a linkEnv', function() {
+      const a = new Assembler(Cpu.P02);
+      a.import('Target');
+      a.directive([cs('.byte'), cs('.bankbyte'), LP, ident('Target'), RP]);
+      const chunk = strip(a.module()).chunks![0];
+      expect(chunk.subs?.length).toBe(1);
+    });
+
+    it('resolves .bank(*) via linkEnv.segmentBank on the current chunk', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = {addrSize: () => undefined, bank: () => undefined,
+                   segmentBank: segs => segs.includes('BANK1') ? 9 : undefined};
+      a.segment({name: 'BANK1'});
+      a.directive([cs('.byte'), cs('.bankbyte'), LP, Tokens.STAR, RP]);
+      expect(Array.from(strip(a.module()).chunks![0].data)).toEqual([9]);
+    });
+
+    it('resolves .bank(localLabel) via linkEnv.segmentBank, without an export', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = {addrSize: () => undefined, bank: () => undefined,
+                   segmentBank: segs => segs.includes('BANK1') ? 6 : undefined};
+      a.segment({name: 'BANK1'});
+      a.label('localLabel');
+      a.directive([cs('.byte'), cs('.bankbyte'), LP, ident('localLabel'), RP]);
+      expect(Array.from(strip(a.module()).chunks![0].data)).toEqual([6]);
+    });
+
+    it('leaves .bank(*) unresolved without a linkEnv (pass 1 unaffected)', function() {
+      const a = new Assembler(Cpu.P02);
+      a.segment({name: 'BANK1'});
+      a.directive([cs('.byte'), cs('.bankbyte'), LP, Tokens.STAR, RP]);
+      const chunk = strip(a.module()).chunks![0];
+      expect(chunk.subs?.length).toBe(1);
+    });
+
+    it('resolves .bank(forwardLabel) once the label is defined later in the module', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = {addrSize: () => undefined, bank: () => undefined,
+                   segmentBank: segs => segs.includes('BANK1') ? 7 : undefined};
+      a.directive([cs('.byte'), cs('.bankbyte'), LP, ident('forwardLabel'), RP]);
+      a.segment({name: 'BANK1'});
+      a.label('forwardLabel');
+      const sub = strip(a.module()).chunks![0].subs![0];
+      expect(sub.expr).toEqual({op: 'num', num: 7, meta: {size: 1}});
+    });
+
+    it('resolves .addrsize(import) the same way, once closeScopes settles it', function() {
+      const a = new Assembler(Cpu.P02);
+      a.linkEnv = {addrSize: sym => sym === 'Target' ? 1 : undefined,
+                   bank: () => undefined, segmentBank: () => undefined};
+      a.import('Target');
+      a.directive([cs('.byte'), cs('.addrsize'), LP, ident('Target'), RP]);
+      const sub = strip(a.module()).chunks![0].subs![0];
+      expect(sub.expr).toEqual({op: 'num', num: 1, meta: {size: 1}});
+    });
+  });
+
   describe('late-assembly stream capture', function() {
     it('carries a stream and queries for a module with an unresolved size', function() {
       const m = assembleModule('.import foo\nlda foo\n');

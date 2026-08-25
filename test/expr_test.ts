@@ -195,7 +195,44 @@ describe('Expr', function() {
       const arg = {op: 'num', num: 1, meta: {bank: 2}};
       expect(Exprs.evaluate(op('^', arg))).toEqual(num(2));
     });
-  
+
+    it('should evaluate .bank(import) via a linkEnv', function() {
+      const arg: Expr = {op: 'im', sym: 'Target'};
+      const env: Exprs.LinkTimeEvalEnv = {
+        addrSize: () => undefined,
+        bank: sym => sym === 'Target' ? 4 : undefined,
+        chunkBank: () => undefined,
+      };
+      expect(Exprs.evaluate(op('^', arg), env)).toEqual(num(4));
+    });
+
+    it('should evaluate .bank(*) (chunk-relative) via a linkEnv', function() {
+      const arg: Expr = {op: 'num', num: 0, meta: {rel: true, chunk: 2}};
+      const env: Exprs.LinkTimeEvalEnv = {
+        addrSize: () => undefined,
+        bank: () => undefined,
+        chunkBank: chunkIndex => chunkIndex === 2 ? 5 : undefined,
+      };
+      expect(Exprs.evaluate(op('^', arg), env)).toEqual(num(5));
+    });
+
+    it('should evaluate .bank(localLabel), same chunk-relative shape as *', function() {
+      const arg: Expr = {op: 'num', num: 3, meta: {rel: true, chunk: 1, org: 0x8000}};
+      const env: Exprs.LinkTimeEvalEnv = {
+        addrSize: () => undefined,
+        bank: () => undefined,
+        chunkBank: chunkIndex => chunkIndex === 1 ? 7 : undefined,
+      };
+      expect(Exprs.evaluate(op('^', arg), env)).toEqual(num(7));
+    });
+
+    it('leaves .bank(import) and .bank(*) unresolved without a linkEnv', function() {
+      const importArg: Expr = {op: 'im', sym: 'Target'};
+      expect(Exprs.evaluate(op('^', importArg))).toEqual(op('^', importArg));
+      const relArg: Expr = {op: 'num', num: 0, meta: {rel: true, chunk: 2}};
+      expect(Exprs.evaluate(op('^', relArg))).toEqual(op('^', relArg));
+    });
+
     it('should evaluate match', function() {
       // Str type matches
       let expr = Exprs.evaluate(Exprs.parseOnly([
