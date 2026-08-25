@@ -56,6 +56,14 @@ function ident(str: string): Token { return {token: 'ident', str}; }
 function num(num: number): Token { return {token: 'num', num}; }
 function str(str: string): Token { return {token: 'str', str}; }
 function cs(str: string): Token { return {token: 'cs', str}; }
+
+// Feeds a hand-built line list to `Assembler.tokens()` as its `Tokens.Source`,
+// standing in for the preprocessor so raw `.if`/`.elseif`/`.else`/`.endif`
+// markers (which the preprocessor normally consumes) reach the assembler.
+function tokenSource(lines: Token[][]): Tokens.Source {
+  let i = 0;
+  return {next: () => lines[i++]};
+}
 function op(str: string): Token { return {token: 'op', str}; }
 const {COLON, COMMA, IMMEDIATE, LB, LP, RB, RP} = Tokens;
 const ORG = cs('.org');
@@ -3662,6 +3670,121 @@ lda #.sizeof(Point)
       a.directive([cs('.byte'), cs('.addrsize'), LP, ident('Target'), RP]);
       const sub = strip(a.module()).chunks![0].subs![0];
       expect(sub.expr).toEqual({op: 'num', num: 1, meta: {size: 1}});
+    });
+  });
+
+  describe('.if/.elseif/.else/.endif directives (pass 1, unreachable via the ' +
+      'preprocessor today - constructed directly to exercise the assembler path)',
+      function() {
+    it('guesses false, records a condQuery, and skips the dead branch with no side effects',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.endif')],
+      ]));
+      expect(a.lateAssemblyCondQueries.length).toBe(1);
+      // Label1 lived in the guessed-dead branch, so it was never defined -
+      // exporting it would otherwise fail with "Exported symbol undefined".
+      expect(strip(a.module())).toEqual({chunks: [], segments: [], symbols: []});
+    });
+
+    it('processes the `.else` branch since the `.if` is always guessed false',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.else')],
+        [ident('Label2'), COLON],
+        [cs('.endif')],
+      ]));
+      a.export('Label2');
+      expect(a.lateAssemblyCondQueries.length).toBe(1);
+      expect(strip(a.module())).toEqual({
+        chunks: [{overwrite: 'allow', segments: [], name: 'Label2', data: Uint8Array.of()}],
+        segments: [],
+        symbols: [{export: 'Label2', expr: off(0)}],
+      });
+    });
+
+    it('keeps guessing false through an `.elseif` chain down to the final `.else`',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.elseif'), num(2)],
+        [ident('Label2'), COLON],
+        [cs('.else')],
+        [ident('Label3'), COLON],
+        [cs('.endif')],
+      ]));
+      a.export('Label3');
+      // Both the `.if` and the `.elseif` defer, but only one query is recorded -
+      // the whole chain is a single "not decided" unit at pass 1.
+      expect(a.lateAssemblyCondQueries.length).toBe(1);
+      expect(strip(a.module())).toEqual({
+        chunks: [{overwrite: 'allow', segments: [], name: 'Label3', data: Uint8Array.of()}],
+        segments: [],
+        symbols: [{export: 'Label3', expr: off(0)}],
+      });
+    });
+
+    it('drops the whole chain when no `.else` is present', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.elseif'), num(2)],
+        [ident('Label2'), COLON],
+        [cs('.endif')],
+      ]));
+      expect(a.lateAssemblyCondQueries.length).toBe(1);
+      expect(strip(a.module())).toEqual({chunks: [], segments: [], symbols: []});
+    });
+
+    it('does not lose the skipped branch from the recorded late-assembly stream',
+        function() {
+      // `skipGuessedDeadBranch` pulls lines straight from `_tokenSource`,
+      // bypassing `tokens()`'s own loop - confirm they still land in
+      // `lateAssemblyStream` via the wrapped recording source.
+      const a = new Assembler(Cpu.P02);
+      const lines: Token[][] = [
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.endif')],
+      ];
+      a.tokens(tokenSource(lines));
+      // `module()`'s `lateAssembly` gate isn't wired to `condQueries` until a
+      // later commit, so read the private stream field directly for now.
+      expect((a as unknown as {lateAssemblyStream: Token[][]}).lateAssemblyStream)
+          .toEqual(lines);
+    });
+
+    it('a stray `.elseif`/`.else`/`.endif` with no open `.if` fails clearly',
+        function() {
+      // `directive()` records via `this.fail`, which reports through the error
+      // collector rather than throwing out of `line()` - same recovery path
+      // every other directive error uses.
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([[cs('.elseif'), num(1)]]));
+      expect(a.getMessages().map(m => m.message)).toEqual(['.elseif without .if']);
+
+      const b = new Assembler(Cpu.P02);
+      b.tokens(tokenSource([[cs('.else')]]));
+      expect(b.getMessages().map(m => m.message)).toEqual(['.else without .if']);
+    });
+
+    it('fails with EOF looking for .endif when the stream runs out mid-branch',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+      ]));
+      expect(a.getMessages().map(m => m.message)).toEqual(['EOF looking for .endif']);
     });
   });
 

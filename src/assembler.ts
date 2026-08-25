@@ -415,8 +415,13 @@ export class Assembler {
   /** Recorded whenever an imported symbol's zp/abs size falls back to a guess. */
   readonly lateAssemblyQueries: mod.LateAssemblyQuery[] = [];
 
+  /** Recorded for every `.if`/`.elseif` that can't be decided without a linker */
+  readonly lateAssemblyCondQueries: Array<{source?: Tokens.SourceInfo}> = [];
+
   /** Replayed tokenstream in the latepass. */
   private readonly lateAssemblyStream: Token[][] = [];
+
+  private _tokenSource?: Tokens.Source;
 
   /** Set by the late pass on replay; undefined (and unconsulted) on pass 1. */
   linkEnv?: LinkTimeEnv;
@@ -1191,12 +1196,20 @@ export class Assembler {
   // assembly can be cancelled cooperatively; an aborted signal throws, which the caller
   // (compile) turns into an ordinary failure result.
   tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }): void {
+    // Wrapper for pulling the next line of tokens and keeping them for the late pass
+    const recording: Tokens.Source = {
+      next: () => {
+        const line = source.next();
+        if (line) this.lateAssemblyStream.push(line);
+        return line;
+      },
+    };
+    this._tokenSource = recording;
     // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
     while (!this.ended) {
-      const line = source.next();
-      if (!line) break;
       if (signal?.aborted) throw new FatalError('Compilation cancelled');
-      this.lateAssemblyStream.push(line);
+      const line = recording.next();
+      if (!line) break;
       this.line(line);
     }
   }
@@ -1209,6 +1222,12 @@ export class Assembler {
     this.linter?.endInstructionSequence();
     try {
       switch (Tokens.str(tokens[0])) {
+        case '.if': return this.ifDirective(tokens);
+        // The preprocessor handles these, so if we got here its cause
+        // the source is malformed
+        case '.elseif': return this.fail(`.elseif without .if`, tokens[0]);
+        case '.else': return this.fail(`.else without .if`, tokens[0]);
+        case '.endif': return this.parseNoArgs(tokens, 1);
         case '.org': return this.org(this.parseConst(tokens, 1));
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
         case '.assert': return this.assert(...this.parseAssert(tokens));
@@ -1297,6 +1316,37 @@ export class Assembler {
     } finally {
       this.errorToken = undefined;
     }
+  }
+
+  /**
+   * If this is called, then the conditional isn't const and we need
+   * to fall back to running it at link time.
+   */
+  private ifDirective(tokens: Token[]) {
+    const cs = tokens[0];
+    // Run a parse to check for malformed expressions
+    this.parseExpr(tokens, 1);
+    // Then defer it and skip the rest of it
+    this.lateAssemblyCondQueries.push({source: cs.source});
+    this.skipGuessedDeadBranch(cs);
+  }
+
+  // Used above when we cant resolve an .if branch at assembly time
+  // so we skip it and mark the branch as false for now
+  private skipGuessedDeadBranch(at: Token) {
+    let depth = 1;
+    Tokens.pullLines(this._tokenSource!, line => {
+      if (!line) this.fail(`EOF looking for .endif`, at);
+      const front = line[0];
+      if (front.token === 'cs' && Tokens.eq(front, Tokens.ENDIF)) {
+        if (--depth === 0) return false;
+      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
+        depth++;
+      } else if (depth === 1 && Tokens.eq(front, Tokens.ELSE)) {
+        return false;
+      }
+      return true;
+    });
   }
 
   /**
