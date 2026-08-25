@@ -1377,6 +1377,14 @@ class Link {
     this.debugSymbols = undefined;
     this.rawSegments = new Map();
     this.moduleRanges = [];
+    // `setConfig` only runs once, so its segments (declared in a linker.cfg
+    // rather than an inline `.segment` attr) need to be re-seeded here or
+    // they vanish from `rawSegments` on every replay.
+    if (this.config) {
+      for (const segment of lowerLinkerConfig(this.config, this.objectExports, this.defines)) {
+        this.addRawSegment(segment);
+      }
+    }
     for (const file of this.rawModules) {
       this.loadModuleInto(file);
     }
@@ -1645,7 +1653,8 @@ class Link {
   /** Replays modules whose late-assembly guesses disagree with `linkEnv`. */
   private lateAssemblyPass(merged: Map<string, Segment>,
                             signal?: {readonly aborted: boolean}): boolean {
-    if (!this.rawModules.some(m => m.lateAssembly?.sizeQueries.length)) return false;
+    if (!this.rawModules.some(m => m.lateAssembly?.sizeQueries.length ||
+                                    m.lateAssembly?.condQueries.length)) return false;
     const linkEnv = buildLinkTimeEnv(this.rawModules, merged);
     const noMessages = this.rawModules.map(() => []);
     const replayed = replayModules(this.rawModules, noMessages, linkEnv, signal);
