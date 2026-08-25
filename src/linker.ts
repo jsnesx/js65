@@ -1325,7 +1325,8 @@ class Link {
     this.orig.set(offset, data);
   }
 
-  readFile(file: Module) {
+  // Flattens one module's segments/chunks/symbols into the global arrays.
+  private loadModuleInto(file: Module) {
     const dc = this.chunks.length;
     const ds = this.symbols.length;
     const dd = this.debugSymbols?.length ?? 0;
@@ -1347,7 +1348,6 @@ class Link {
         this.debugSymbols.push(translateSymbol(symbol, dc, ds));
       }
     }
-    this.rawModules.push(file);
     this.moduleRanges.push({
       chunkStart: dc, chunkCount: file.chunks?.length ?? 0,
       symbolStart: ds, symbolCount: file.symbols?.length ?? 0,
@@ -1363,6 +1363,23 @@ class Link {
     //     missing subs (these are not eligible for coalescing).
     //     -- probably same treatment for freed sections
     //  4. for reloc chunks, find the biggest chunk with no deps.
+  }
+
+  readFile(file: Module) {
+    this.loadModuleInto(file);
+    this.rawModules.push(file);
+  }
+
+  // Reloads every module from scratch for after a replay changes things.
+  private rebuildFromModules(): void {
+    this.chunks = [];
+    this.symbols = [];
+    this.debugSymbols = undefined;
+    this.rawSegments = new Map();
+    this.moduleRanges = [];
+    for (const file of this.rawModules) {
+      this.loadModuleInto(file);
+    }
   }
 
   // resolveChunk(chunk: LinkChunk) {
@@ -1429,16 +1446,8 @@ class Link {
       this.fail(`Unknown segment: ${name}`, chunk.at());
     });
     // Merge all segments (mapped and unmapped) into a single Segment each.
-    // Note that we intentionally copy the segments into `s` so we don't overwrite
-    // the original data.
     const merged = new Map<string, Segment>();
-    for (const [name, segments] of this.rawSegments) {
-      let s = {...segments[0]};
-      for (let i = 1; i < segments.length; i++) {
-        s = Segment.merge(s, segments[i]);
-      }
-      merged.set(name, s);
-    }
+    this.mergeSegments(merged);
     // Composite segments are aliases and not real segments, we expand them here
     // now that we should have all of the segments known.
     this.expandComposites(merged);
@@ -1621,6 +1630,18 @@ class Link {
     return patch;
   }
 
+  /** Merges each raw segment's pieces into one `Segment`, into `target`. */
+  private mergeSegments(target: Map<string, Segment>): void {
+    target.clear();
+    for (const [name, segments] of this.rawSegments) {
+      let s = {...segments[0]};
+      for (let i = 1; i < segments.length; i++) {
+        s = Segment.merge(s, segments[i]);
+      }
+      target.set(name, s);
+    }
+  }
+
   /** Replays modules whose late-assembly guesses disagree with `linkEnv`. */
   private lateAssemblyPass(merged: Map<string, Segment>,
                             signal?: {readonly aborted: boolean}): boolean {
@@ -1633,38 +1654,15 @@ class Link {
     for (let i = 0; i < this.rawModules.length; i++) {
       const module = replayed.modules[i];
       if (module === this.rawModules[i]) continue;
-      this.replaceModule(module, this.moduleRanges[i]);
       this.rawModules[i] = module;
       didReplace = true;
     }
-    return didReplace;
-  }
-
-  /** Overwrites one module's slice of `chunks`/`symbols`/`debugSymbols`. */
-  private replaceModule(module: Module, at: Link['moduleRanges'][number]): void {
-    const chunks = module.chunks ?? [];
-    if (chunks.length !== at.chunkCount)
-      impossible(`late assembly changed chunk count for ${module.name ?? 'module'}`);
-    for (let k = 0; k < at.chunkCount; k++) {
-      this.chunks[at.chunkStart + k] = new LinkChunk(
-          this, at.chunkStart + k, chunks[k], at.chunkStart, at.symbolStart);
-    }
-    const symbols = module.symbols ?? [];
-    if (symbols.length !== at.symbolCount)
-      impossible(`late assembly changed symbol count for ${module.name ?? 'module'}`);
-    for (let k = 0; k < at.symbolCount; k++) {
-      this.symbols[at.symbolStart + k] =
-          translateSymbol(symbols[k], at.chunkStart, at.symbolStart);
-    }
-    if (at.debugCount) {
-      const debugSymbols = module.debugSymbols ?? [];
-      if (debugSymbols.length !== at.debugCount)
-        impossible(`late assembly changed debug symbol count for ${module.name ?? 'module'}`);
-      for (let k = 0; k < at.debugCount; k++) {
-        this.debugSymbols![at.debugStart + k] =
-            translateSymbol(debugSymbols[k], at.chunkStart, at.symbolStart);
-      }
-    }
+    if (!didReplace) return false;
+    // Chunk/symbol sizes may have changed, so reflatten everything.
+    this.rebuildFromModules();
+    this.mergeSegments(merged);
+    this.expandComposites(merged);
+    return true;
   }
 
   /**
