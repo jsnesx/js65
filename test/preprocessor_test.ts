@@ -3,6 +3,7 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Base64} from '../src/base64.ts';
+import type {Expr} from '../src/expr.ts';
 import {Preprocessor} from '../src/preprocessor.ts';
 import * as Tokens from '../src/token.ts';
 import {TokenStream} from '../src/tokenstream.ts';
@@ -843,6 +844,144 @@ describe('Preprocessor', function() {
   // TODO - test .local, both for symbols AND for defines.
 
   // TODO - tests for .if, make sure it evaluates numbers, etc...
+
+  describe('deferred marker pass-through', function() {
+    // No source syntax produces a `deferred` marker yet - hand-build the
+    // token stream directly, standing in for a future deferred `.if` block.
+    function tokenSource(lines: Tokens.Token[][]): Tokens.Source {
+      let i = 0;
+      return {next: () => lines[i++]};
+    }
+    const marker = (str: string, deferred: boolean): Tokens.Token =>
+        deferred ? {token: 'cs', str, deferred} : {token: 'cs', str};
+
+    function run(line: Tokens.Token[]): Tokens.Token[]|undefined {
+      const toks = new TokenStream();
+      toks.enter(tokenSource([line]));
+      return new Preprocessor(toks, new Assembler()).next();
+    }
+
+    for (const m of ['.if', '.elseif', '.else', '.endif']) {
+      it(`passes a tagged ${m} straight through without dispatching it`, function() {
+        const out = run([marker(m, true)]);
+        expect(out?.map(Tokens.name).join(' ')).toEqual(m);
+      });
+    }
+
+    it('still errors on an untagged stray .elseif', function() {
+      expect(() => run([marker('.elseif', false)])).toThrow(/with no \.if/);
+    });
+  });
+
+  describe('deferred .if', function() {
+    // A minimal `Env` stub, standing in for the assembler so a `.bank(X)`
+    // condition can be made to depend on an import or a chunk-relative
+    // label without driving a real `Assembler`/linker.
+    class StubEnv {
+      readonly imports = new Set<string>();
+      readonly locals = new Map<string, Expr>();
+      definedSymbol(sym: string): boolean {
+        return this.imports.has(sym) || this.locals.has(sym);
+      }
+      constantSymbol(): boolean { return false; }
+      referencedSymbol(): boolean { return false; }
+      isMnemonic(): boolean { return false; }
+      allowsPcAssignment(): boolean { return false; }
+      allowsLabelWithoutColon(): boolean { return false; }
+      evaluate(expr: Expr): number|undefined {
+        return expr.op === 'num' && !expr.meta?.rel ? expr.num : undefined;
+      }
+      definedValue(sym: string): Expr|undefined {
+        // An import has no compile-time value yet, matching the real
+        // Assembler mid-file, before `closeScopes()` resolves it.
+        return this.imports.has(sym) ? undefined : this.locals.get(sym);
+      }
+      assignSym(): void {}
+      setSym(): void {}
+      encodeChar(): number|undefined { return undefined; }
+    }
+
+    function run(env: StubEnv, lines: string[]): string[] {
+      const toks = new TokenStream();
+      toks.enter(new Tokenizer(lines.join('\n'), 'input.s'));
+      const pre = new Preprocessor(toks, env);
+      const out: string[] = [];
+      for (let line = pre.next(); line; line = pre.next()) {
+        out.push(line.map(Tokens.name).join(' '));
+      }
+      return out;
+    }
+
+    it('defers on an unresolved import, keeping both branches verbatim', async function() {
+      const env = new StubEnv();
+      env.imports.add('anImport');
+      const out = run(env, [
+          '.if .bank(anImport) <> 0', 'x y', '.else', 'a b', '.endif', 'z']);
+      expect(out).toEqual([
+          await directive('.if .bank(anImport) <> 0'),
+          await instruction('x y'),
+          await directive('.else'),
+          await instruction('a b'),
+          await directive('.endif'),
+          await instruction('z')]);
+    });
+
+    it('defers on a chunk-relative local label, keeping both branches verbatim',
+       async function() {
+      const env = new StubEnv();
+      env.locals.set('localLabel', {op: 'num', num: 0, meta: {rel: true, chunk: 0}});
+      const out = run(env, [
+          '.if .bank(localLabel) = 3', 'x y', '.else', 'a b', '.endif', 'z']);
+      expect(out).toEqual([
+          await directive('.if .bank(localLabel) = 3'),
+          await instruction('x y'),
+          await directive('.else'),
+          await instruction('a b'),
+          await directive('.endif'),
+          await instruction('z')]);
+    });
+
+    it('leaves an already-resolvable .if byte-identical to today', async function() {
+      const out = run(new StubEnv(), ['.if 1', 'x y', '.else', 'a b', '.endif', 'z']);
+      expect(out).toEqual([await instruction('x y'), await instruction('z')]);
+    });
+
+    it('still expands a .define from both branches once deferred (documented wart)',
+       async function() {
+      const env = new StubEnv();
+      env.imports.add('anImport');
+      const out = run(env, [
+          '.if .bank(anImport) <> 0', '.define A 1', '.else', '.define B 2', '.endif',
+          'lda #A', 'lda #B']);
+      expect(out).toEqual([
+          await directive('.if .bank(anImport) <> 0'),
+          await directive('.else'),
+          await directive('.endif'),
+          await instruction('lda #1'),
+          await instruction('lda #2')]);
+    });
+
+    it('still resolves a resolvable .if nested inside a deferred block', async function() {
+      const env = new StubEnv();
+      env.imports.add('anImport');
+      const out = run(env, [
+          '.if .bank(anImport) <> 0',
+          '.if 1', 'x y', '.else', 'a b', '.endif',
+          '.else', 'c d', '.endif', 'z']);
+      expect(out).toEqual([
+          await directive('.if .bank(anImport) <> 0'),
+          await instruction('x y'),
+          await directive('.else'),
+          await instruction('c d'),
+          await directive('.endif'),
+          await instruction('z')]);
+    });
+
+    it('still errors immediately on a genuinely undefined symbol', function() {
+      expect(() => run(new StubEnv(), ['.if undefinedSym <> 0', 'x y', '.endif']))
+          .toThrow(/Expected a constant/);
+    });
+  });
 
 });
 

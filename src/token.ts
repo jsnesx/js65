@@ -44,6 +44,8 @@ export interface StringToken {
    * the assembler can attribute that line's data to the label for `.sizeof`.
    */
   labelsData?: boolean;
+  /** Marks when an .if/.elseif/etc statement is delayed till the latepass */
+  deferred?: boolean;
 }
 export interface NumberToken {
   token: NumberTok;

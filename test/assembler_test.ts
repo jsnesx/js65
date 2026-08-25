@@ -3687,7 +3687,9 @@ lda #.sizeof(Point)
       expect(a.lateAssemblyCondQueries.length).toBe(1);
       // Label1 lived in the guessed-dead branch, so it was never defined -
       // exporting it would otherwise fail with "Exported symbol undefined".
-      expect(strip(a.module())).toEqual({chunks: [], segments: [], symbols: []});
+      const {lateAssembly, ...rest} = strip(a.module());
+      expect(rest).toEqual({chunks: [], segments: [], symbols: []});
+      expect(lateAssembly!.condQueries.length).toBe(1);
     });
 
     it('processes the `.else` branch since the `.if` is always guessed false',
@@ -3702,11 +3704,13 @@ lda #.sizeof(Point)
       ]));
       a.export('Label2');
       expect(a.lateAssemblyCondQueries.length).toBe(1);
-      expect(strip(a.module())).toEqual({
+      const {lateAssembly, ...rest} = strip(a.module());
+      expect(rest).toEqual({
         chunks: [{overwrite: 'allow', segments: [], name: 'Label2', data: Uint8Array.of()}],
         segments: [],
         symbols: [{export: 'Label2', expr: off(0)}],
       });
+      expect(lateAssembly!.condQueries.length).toBe(1);
     });
 
     it('keeps guessing false through an `.elseif` chain down to the final `.else`',
@@ -3725,11 +3729,13 @@ lda #.sizeof(Point)
       // Both the `.if` and the `.elseif` defer, but only one query is recorded -
       // the whole chain is a single "not decided" unit at pass 1.
       expect(a.lateAssemblyCondQueries.length).toBe(1);
-      expect(strip(a.module())).toEqual({
+      const {lateAssembly, ...rest} = strip(a.module());
+      expect(rest).toEqual({
         chunks: [{overwrite: 'allow', segments: [], name: 'Label3', data: Uint8Array.of()}],
         segments: [],
         symbols: [{export: 'Label3', expr: off(0)}],
       });
+      expect(lateAssembly!.condQueries.length).toBe(1);
     });
 
     it('drops the whole chain when no `.else` is present', function() {
@@ -3742,7 +3748,10 @@ lda #.sizeof(Point)
         [cs('.endif')],
       ]));
       expect(a.lateAssemblyCondQueries.length).toBe(1);
-      expect(strip(a.module())).toEqual({chunks: [], segments: [], symbols: []});
+      const m = strip(a.module());
+      const {lateAssembly, ...rest} = m;
+      expect(rest).toEqual({chunks: [], segments: [], symbols: []});
+      expect(lateAssembly!.condQueries.length).toBe(1);
     });
 
     it('does not lose the skipped branch from the recorded late-assembly stream',
@@ -3757,8 +3766,6 @@ lda #.sizeof(Point)
         [cs('.endif')],
       ];
       a.tokens(tokenSource(lines));
-      // `module()`'s `lateAssembly` gate isn't wired to `condQueries` until a
-      // later commit, so read the private stream field directly for now.
       expect((a as unknown as {lateAssemblyStream: Token[][]}).lateAssemblyStream)
           .toEqual(lines);
     });
@@ -3801,6 +3808,20 @@ lda #.sizeof(Point)
     it('carries no block when every import is sized', function() {
       const m = assembleModule('.importzp foo\nlda foo\n');
       expect(m.lateAssembly).toBeUndefined();
+    });
+
+    it('carries a block for a module with only a deferred `.if` (no size queries)',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [ident('Label1'), COLON],
+        [cs('.endif')],
+      ]));
+      const m = a.module();
+      expect(m.lateAssembly).toBeDefined();
+      expect(m.lateAssembly!.sizeQueries.length).toBe(0);
+      expect(m.lateAssembly!.condQueries.length).toBe(1);
     });
 
     it('does not change assembled bytes', function() {
