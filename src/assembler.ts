@@ -1136,8 +1136,9 @@ export class Assembler {
       }
     }
 
-    // Only annotated-abs modules need to re-assemble, so skip the block otherwise.
-    const lateAssembly: mod.LateAssembly | undefined = this.lateAssemblyQueries.length ?
+    // Only modules with a link-time-dependent query need to re-assemble.
+    const lateAssembly: mod.LateAssembly | undefined =
+        this.lateAssemblyQueries.length || this.lateAssemblyCondQueries.length ?
         {sizeQueries: this.lateAssemblyQueries, condQueries: this.lateAssemblyCondQueries,
          stream: this.lateAssemblyStream, opts: this.opts} :
         undefined;

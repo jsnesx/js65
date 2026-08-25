@@ -679,10 +679,11 @@ export class Preprocessor implements Tokens.Source {
   }
 
   /**
+   * Resolve the expression, reducing constant expressions along the way.
    * @param addresses Whether `*` and labels may stand in for their address value
    * `.const` needs them as labels, but other callers want them as addresses.
    */
-  evaluateConst(expr: Expr, source?: Token, addresses = true): number {
+  private reduceConst(expr: Expr, addresses: boolean): {value: number}|{reduced: Expr} {
     // Attempt to look up a symbol and see if its a constant value
     const evalWrapper = (ex: Expr) => {
       if (ex.op === 'sym' && ex.sym) {
@@ -711,10 +712,36 @@ export class Preprocessor implements Tokens.Source {
       return reduced.op === 'num' && !reduced.meta?.rel ? reduced.num : undefined;
     };
     const v = evalNode(expr);
-    if (v !== undefined) return v;
-    const reduced = Exprs.traversePost(expr, evalWrapper);
+    if (v !== undefined) return {value: v};
+    return {reduced: Exprs.traversePost(expr, evalWrapper)};
+  }
+
+  private failNotConstant(reduced: Expr, source?: Token): never {
     const desc = reduced.op === 'sym' ? `symbol ${reduced.sym}` : `${reduced.op} expression`;
     Tokens.fail(`Expected a constant: ${desc}`, reduced.source ?? source);
+  }
+
+  evaluateConst(expr: Expr, source?: Token, addresses = true): number {
+    const r = this.reduceConst(expr, addresses);
+    if ('value' in r) return r.value;
+    this.failNotConstant(r.reduced, source);
+  }
+
+  evaluateConstOrDefer(expr: Expr, source?: Token): {value: number}|{deferred: true} {
+    const r = this.reduceConst(expr, true);
+    if ('value' in r) return r;
+    if (this.canDefer(r.reduced)) return {deferred: true};
+    this.failNotConstant(r.reduced, source);
+  }
+
+  /** Returns true when the expression is possibly known at link time */
+  private canDefer(ex: Expr): boolean {
+    if (ex.op === 'num' && !ex.meta?.rel) return true;
+    if (ex.op === 'im' && ex.sym != null) return true;
+    if (ex.meta?.rel && ex.meta?.chunk != null) return true;
+    if (ex.op === 'sym' && ex.sym != null) return this.env.definedSymbol(ex.sym);
+    if (!ex.args?.length) return false;
+    return ex.args.every(arg => this.canDefer(arg));
   }
 
   private readonly runDirectives:
@@ -722,40 +749,62 @@ export class Preprocessor implements Tokens.Source {
     '.define': (line) => this.parseDefine(line),
     '.delmacro': (line) => this.parseDelMacro(line),
     '.undefine': (line) => this.parseUndefine(line),
-    '.else': ([cs]) => badClose('.if', cs),
-    '.elseif': ([cs]) => badClose('.if', cs),
-    '.endif': ([cs]) => badClose('.if', cs),
+    '.else': (line) => isDeferredMarker(line[0]) ? this.outQueue.push(line) : badClose('.if', line[0]),
+    '.elseif': (line) => isDeferredMarker(line[0]) ? this.outQueue.push(line) : badClose('.if', line[0]),
+    '.endif': (line) => isDeferredMarker(line[0]) ? this.outQueue.push(line) : badClose('.if', line[0]),
     '.endmacro': ([cs]) => badClose('.macro', cs),
     '.endrepeat': (line) => this.parseEndRepeat(line),
     '.exitmacro': ([, a]) => { noGarbage(a); this.stream.exit(); },
-    '.if': ([cs, ...args]) =>
-        this.parseIf(() => !!this.evaluateConst(
-            parseOneExpr(args, cs, this.env.encodeChar), cs), cs),
-    '.ifdef': ([cs, ...args]) =>
-        this.parseIf(() => this.parseIfDef(args, cs), cs),
-    '.ifndef': ([cs, ...args]) =>
-        this.parseIf(() => !this.parseIfDef(args, cs), cs),
-    '.ifblank': ([cs, ...args]) => this.parseIf(() => !args.length, cs),
-    '.ifnblank': ([cs, ...args]) => this.parseIf(() => !!args.length, cs),
-    '.ifref': ([cs, ...args]) =>
-        this.parseIf(() => this.env.referencedSymbol(parseOneIdent(args, cs)), cs),
-    '.ifnref': ([cs, ...args]) =>
-        this.parseIf(() => !this.env.referencedSymbol(parseOneIdent(args, cs)), cs),
-    '.ifsym': ([cs, ...args]) =>
-        this.parseIf(() => this.env.definedSymbol(parseOneIdent(args, cs)), cs),
-    '.ifnsym': ([cs, ...args]) =>
-        this.parseIf(() => !this.env.definedSymbol(parseOneIdent(args, cs)), cs),
-    '.ifconst': ([cs, ...args]) =>
-        this.parseIf(() => this.env.constantSymbol(parseOneIdent(args, cs)), cs),
-    '.ifnconst': ([cs, ...args]) =>
-        this.parseIf(() => !this.env.constantSymbol(parseOneIdent(args, cs)), cs),
+    '.if': (line) => {
+      if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
+      const [cs, ...args] = line;
+      const expr = parseOneExpr(args, cs, this.env.encodeChar);
+      this.parseIf(() => {
+        const r = this.evaluateConstOrDefer(expr, cs);
+        return 'deferred' in r ? r : {value: !!r.value};
+      }, line);
+    },
+    '.ifdef': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: this.parseIfDef(args, cs)}), line);
+    },
+    '.ifndef': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: !this.parseIfDef(args, cs)}), line);
+    },
+    '.ifblank': (line) => this.parseIf(() => ({value: line.length <= 1}), line),
+    '.ifnblank': (line) => this.parseIf(() => ({value: line.length > 1}), line),
+    '.ifref': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: this.env.referencedSymbol(parseOneIdent(args, cs))}), line);
+    },
+    '.ifnref': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: !this.env.referencedSymbol(parseOneIdent(args, cs))}), line);
+    },
+    '.ifsym': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: this.env.definedSymbol(parseOneIdent(args, cs))}), line);
+    },
+    '.ifnsym': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: !this.env.definedSymbol(parseOneIdent(args, cs))}), line);
+    },
+    '.ifconst': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: this.env.constantSymbol(parseOneIdent(args, cs))}), line);
+    },
+    '.ifnconst': (line) => {
+      const [cs, ...args] = line;
+      this.parseIf(() => ({value: !this.env.constantSymbol(parseOneIdent(args, cs))}), line);
+    },
     // NOTE: If support for any other CPUs is added, these will need to be un-stubbed.
-    '.ifp02': ([cs]) => this.parseIf(() => true, cs),
-    '.ifp4510': ([cs]) => this.parseIf(() => false, cs),
-    '.ifp816': ([cs]) => this.parseIf(() => false, cs),
-    '.ifpc02': ([cs]) => this.parseIf(() => false, cs),
-    '.ifpdtv': ([cs]) => this.parseIf(() => false, cs),
-    '.ifpsc02': ([cs]) => this.parseIf(() => false, cs),
+    '.ifp02': (line) => this.parseIf(() => ({value: true}), line),
+    '.ifp4510': (line) => this.parseIf(() => ({value: false}), line),
+    '.ifp816': (line) => this.parseIf(() => ({value: false}), line),
+    '.ifpc02': (line) => this.parseIf(() => ({value: false}), line),
+    '.ifpdtv': (line) => this.parseIf(() => ({value: false}), line),
+    '.ifpsc02': (line) => this.parseIf(() => ({value: false}), line),
     '.incbin': (line) => this.parseIncbin(line),
     '.include': (line) => this.parseInclude(line),
     '.macpack': (line) => this.parseMacpack(line),
@@ -905,7 +954,8 @@ export class Preprocessor implements Tokens.Source {
    * Process the args in a callable so that we can catch any errors
    * inside the `.if` block and recover.
    */
-  private condition(test: () => boolean, at?: Token): boolean {
+  private condition(test: () => {value: boolean}|{deferred: true}, at?: Token):
+      {value: boolean}|{deferred: true} {
     try {
       return test();
     } catch (err) {
@@ -917,12 +967,17 @@ export class Preprocessor implements Tokens.Source {
         err.recorded = true;
         this.errorCollector.addFromException(err, err.source ?? at?.source);
       }
-      return false;
+      return {value: false};
     }
   }
 
-  private parseIf(test: () => boolean, at?: Token): void {
-    let cond = this.condition(test, at);
+  private parseIf(test: () => {value: boolean}|{deferred: true}, line: Token[]): void {
+    const at = line[0];
+    const raw: Token[][] = [line];
+    const markerIdx: number[] = [0];
+    const outcome = this.condition(test, at);
+    let deferred = 'deferred' in outcome;
+    let cond = deferred ? false : (outcome as {value: boolean}).value;
     let depth = 1;
     let done = false;
     const result: Token[][] = [];
@@ -933,34 +988,50 @@ export class Preprocessor implements Tokens.Source {
     Tokens.pullLines(this.stream, line => {
       // Report missing endif at the site of the starting .if
       if (!line) Tokens.fail(`EOF looking for .endif`, at);
+      raw.push(line);
       const front = line[0];
       if (Tokens.eq(front, Tokens.ENDIF)) {
         depth--;
-        if (!depth) { dead?.flush(); return false; }
+        if (!depth) {
+          markerIdx.push(raw.length - 1);
+          if (!deferred) dead?.flush();
+          return false;
+        }
       } else if (front.token === 'cs' && front.str.startsWith('.if')) {
         depth++;
       } else if (depth === 1 && !done) {
-        if (cond && (Tokens.eq(front, Tokens.ELSE) ||
+        if (!deferred && cond && (Tokens.eq(front, Tokens.ELSE) ||
                      Tokens.eq(front, Tokens.ELSEIF))) {
           // if true ... else .....
+          markerIdx.push(raw.length - 1);
           cond = false;
           done = true;
           return true;
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
+          markerIdx.push(raw.length - 1);
+          if (deferred) return true; // chain already deferred - stop evaluating
           dead?.flush();
-          cond = this.condition(() => !!this.evaluateConst(
-              parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
-              front), front);
+          const elseOutcome = this.condition(() => {
+            const r = this.evaluateConstOrDefer(
+                parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
+                front);
+            return 'deferred' in r ? r : {value: !!r.value};
+          }, front);
+          if ('deferred' in elseOutcome) { deferred = true; return true; }
+          cond = elseOutcome.value;
           return true;
         } else if (Tokens.eq(front, Tokens.ELSE)) {
           // if false ... else .....
+          markerIdx.push(raw.length - 1);
+          if (deferred) return true;
           dead?.flush();
           cond = true;
           return true;
         }
       }
       // anything else on the line
+      if (deferred) return true;
       if (cond) {
         result.push(line);
         // Only this level's verdict is final. A line inside a nested `.if` is
@@ -972,6 +1043,17 @@ export class Preprocessor implements Tokens.Source {
       }
       return true;
     });
+    if (deferred) {
+      // Tag this depth's own markers so the late pass sends them straight
+      // through instead of re-entering `parseIf`
+      for (const i of markerIdx) {
+        const [marker, ...rest] = raw[i];
+        const tagged: Tokens.StringToken = {...(marker as Tokens.StringToken), deferred: true};
+        raw[i] = [tagged, ...rest];
+      }
+      this.stream.unshift(...raw);
+      return;
+    }
     dead?.flush();
     // result has the expansion: unshift it
     this.stream.unshift(...result);
@@ -1151,4 +1233,8 @@ function noGarbage(token: Token|undefined): void {
 
 function badClose(open: string, tok: Token): never {
   Tokens.fail(`${Tokens.name(tok)} with no ${open}`, tok);
+}
+
+function isDeferredMarker(tok: Token): boolean {
+  return tok.token === 'cs' && !!tok.deferred;
 }
