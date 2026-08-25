@@ -1624,7 +1624,7 @@ class Link {
   /** Replays modules whose late-assembly guesses disagree with `linkEnv`. */
   private lateAssemblyPass(merged: Map<string, Segment>,
                             signal?: {readonly aborted: boolean}): boolean {
-    if (!this.rawModules.some(m => m.lateAssembly?.queries.length)) return false;
+    if (!this.rawModules.some(m => m.lateAssembly?.sizeQueries.length)) return false;
     const linkEnv = buildLinkTimeEnv(this.rawModules, merged);
     const noMessages = this.rawModules.map(() => []);
     const replayed = replayModules(this.rawModules, noMessages, linkEnv, signal);

@@ -3792,9 +3792,9 @@ lda #.sizeof(Point)
     it('carries a stream and queries for a module with an unresolved size', function() {
       const m = assembleModule('.import foo\nlda foo\n');
       expect(m.lateAssembly).toBeDefined();
-      expect(m.lateAssembly!.queries.length).toBe(1);
-      expect(m.lateAssembly!.queries[0].name).toBe('foo');
-      expect(m.lateAssembly!.queries[0].guess).toBe(2);
+      expect(m.lateAssembly!.sizeQueries.length).toBe(1);
+      expect(m.lateAssembly!.sizeQueries[0].name).toBe('foo');
+      expect(m.lateAssembly!.sizeQueries[0].guess).toBe(2);
       expect(m.lateAssembly!.stream.length).toBeGreaterThan(0);
     });
 
@@ -3816,7 +3816,7 @@ lda #.sizeof(Point)
       const m2 = assembleModule(body);
       expect(m1.lateAssembly!.stream.length).toBeGreaterThan(0);
       expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
-      expect(m2.lateAssembly!.queries).toEqual(m1.lateAssembly!.queries);
+      expect(m2.lateAssembly!.sizeQueries).toEqual(m1.lateAssembly!.sizeQueries);
     });
 
     it('.ifref/.ifsym/.ifconst after a query-recording reference reproduce identically', function() {
@@ -3826,7 +3826,7 @@ lda #.sizeof(Point)
           '.ifconst foo\n.byte 3\n.endif\n';
       const m1 = assembleModule(body);
       const m2 = assembleModule(body);
-      expect(m1.lateAssembly!.queries.length).toBe(1);
+      expect(m1.lateAssembly!.sizeQueries.length).toBe(1);
       expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
       expect(Array.from(m2.chunks![0].data)).toEqual(Array.from(m1.chunks![0].data));
     });
