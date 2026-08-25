@@ -675,8 +675,14 @@ export class Assembler {
   /** Adapts the linker provided environment to combine it with the chunk info */
   private evalEnv(): Exprs.LinkTimeEvalEnv {
     return {
-      addrSize: (sym) => this.linkEnv?.addrSize(sym),
-      bank: (sym) => this.linkEnv?.bank(sym),
+      addrSize: (sym) => {
+        const segs = this.linkEnv?.localForwardRefs?.get(sym);
+        return segs ? this.linkEnv?.segmentAddrSize?.(segs) : this.linkEnv?.addrSize(sym);
+      },
+      bank: (sym) => {
+        const segs = this.linkEnv?.localForwardRefs?.get(sym);
+        return segs ? this.linkEnv?.segmentBank(segs) : this.linkEnv?.bank(sym);
+      },
       chunkBank: (chunkIndex) => {
         const segs = chunkIndex === this._chunkIndex ?
             this._chunk?.segments : this.chunks[chunkIndex]?.segments;
@@ -696,6 +702,17 @@ export class Assembler {
         // Not defined yet - leave it for `resolveDeferredOps` to retry at the end.
         this.deferredOps.set(e, {kind: 'sizeof', scope: this.currentScope});
         return e;
+      }
+      // A `.bank()`/`.bankbyte()`/`.addrsize()` query on a bare local forward
+      // reference has to be answered by name before the generic `sym`
+      // resolution below turns it into a numeric forward-ref placeholder -
+      // that placeholder only resolves once the label is *actually* defined
+      // later in this pass, which is too late for an `.if` that needs the
+      // answer right now.
+      if ((e.op === '^' || e.op === '.bankbyte' || e.op === '.addrsize') &&
+          e.args?.length === 1 && e.args[0].op === 'sym' && e.args[0].sym != null &&
+          this.linkEnv?.localForwardRefs?.has(e.args[0].sym)) {
+        return Exprs.evaluate(e, this.evalEnv());
       }
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
@@ -1171,6 +1188,30 @@ export class Assembler {
     return {chunks, symbols, segments, debugSymbols, lateAssembly};
   }
 
+  /**
+   * Segment identity for every named label in this module, keyed by name.
+   * Used during replay so an `.if` can resolve `.bank()`/`.addrsize()` on a
+   * local label defined later in the same module's token stream - see
+   * `replayModule` in latepass.ts, which reruns replay with this map fed
+   * back in as `localForwardRefs` until it stabilizes.
+   */
+  collectLocalSegments(): Map<string, readonly string[]> {
+    const out = new Map<string, readonly string[]>();
+    const visit = (scope: Scope) => {
+      for (const [name, sym] of scope.symbols) {
+        if (isSizeOfSymbol(name) || name.startsWith('@')) continue;
+        const chunkIndex = sym.expr?.meta?.chunk;
+        if (chunkIndex == null) continue;
+        const segs = this.chunks[chunkIndex]?.segments;
+        if (segs) out.set(name, segs);
+      }
+      for (const child of scope.children.values()) visit(child);
+      for (const child of scope.anonymousChildren) visit(child);
+    };
+    visit(this.currentScope.global);
+    return out;
+  }
+
   // Assemble from a list of tokens
   line(tokens: Token[]) {
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
@@ -1398,7 +1439,10 @@ export class Assembler {
 
   private evalCond(at: Token, expr: Expr): boolean {
     const value = this.evaluate(expr);
-    if (value == null) this.fail(`Expected a constant`, at);
+    if (value == null) {
+      if (this.linkEnv?.tolerateUnresolvedIf) return false;
+      this.fail(`Expected a constant`, at);
+    }
     return value !== 0;
   }
 

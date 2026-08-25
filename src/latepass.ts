@@ -16,6 +16,12 @@ export interface LinkTimeEnv {
   bank(sym: string): number|undefined;
   /** Bank shared by every candidate segment, if declared and they agree. */
   segmentBank(segNames: readonly string[]): number|undefined;
+  /** Address size (1 or 2) shared by every candidate segment, if they agree. */
+  segmentAddrSize?(segNames: readonly string[]): 1|2|undefined;
+  /** Segment list for local labels forward-referenced by an `.if` */
+  localForwardRefs?: ReadonlyMap<string, readonly string[]>;
+  /** Set if we can't resolve all conditionals in this pass */
+  tolerateUnresolvedIf?: boolean;
 }
 
 /** A symbol's defining chunk, found by walking the loaded modules. */
@@ -81,6 +87,10 @@ export function buildLinkTimeEnv(
         seg => seg.bank, () => {
           fail(`disagreement across segments ${segNames.join(', ')}`);
         }),
+    segmentAddrSize: segNames => resolveCandidates(segNames, segments,
+        seg => seg.addressing === 1 ? 1 : 2, () => {
+          fail(`disagreement across segments ${segNames.join(', ')}`);
+        }),
   };
 }
 
@@ -93,6 +103,23 @@ export interface ReplayResult {
   /** Messages from the replayed pass */
   messages: AssemblerMessage[];
 }
+
+function segmentsEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((s, i) => s === b[i]);
+}
+
+function localSegmentsEqual(a: ReadonlyMap<string, readonly string[]>,
+                             b: ReadonlyMap<string, readonly string[]>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [name, segs] of a) {
+    const other = b.get(name);
+    if (!other || !segmentsEqual(segs, other)) return false;
+  }
+  return true;
+}
+
+/** Bounds the scanning loop below against a circular `.if`. */
+const MAX_LOCAL_REF_SCAN_ITERATIONS = 8;
 
 /**
  * Rebuilds a module from its recorded `lateAssembly` stream, with the full
@@ -107,13 +134,37 @@ export function replayModule(
   if (!lateAssembly) {
     throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
   }
-  const asm = new Assembler(Cpu.P02, lateAssembly.opts);
-  asm.linkEnv = linkEnv;
-  asm.globalKinds = lateAssembly.globalKinds;
   const {stream} = lateAssembly;
-  let i = 0;
-  const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
-  asm.tokens(source, signal);
+  const run = (localForwardRefs: ReadonlyMap<string, readonly string[]>|undefined,
+               tolerant: boolean) => {
+    const asm = new Assembler(Cpu.P02, lateAssembly.opts);
+    asm.linkEnv = linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant};
+    asm.globalKinds = lateAssembly.globalKinds;
+    let i = 0;
+    const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
+    asm.tokens(source, signal);
+    return asm;
+  };
+
+  let asm: Assembler;
+  if (lateAssembly.condQueries.length) {
+    // Retry scanning over and over to try and resolve all banks for data
+    // that reference forward labels. This sucks and needs replacing.
+    let known: ReadonlyMap<string, readonly string[]> = new Map();
+    asm = run(known, true);
+    let converged = false;
+    for (let iter = 0; iter < MAX_LOCAL_REF_SCAN_ITERATIONS; iter++) {
+      asm.module(); // finalize the scope tree (closeScopes/resolveDeferredOps)
+      const next = asm.collectLocalSegments();
+      if (localSegmentsEqual(known, next)) { converged = true; break; }
+      known = next;
+      asm = run(known, true);
+    }
+    // If we failed to converge, force a bad compilation so it errors out
+    asm = run(converged ? known : undefined, false);
+  } else {
+    asm = run(undefined, false);
+  }
 
   const replayed = asm.module();
   replayed.name = module.name;

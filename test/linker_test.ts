@@ -2880,26 +2880,9 @@ Target:
       expect(bytes.slice(i, i + 3)).toEqual([0x99, 0xaa, 0x88]);
     });
 
-    it.failing('defers on a genuinely fresh forward reference - a local label ' +
+    it('defers on a genuinely fresh forward reference - a local label ' +
         'mentioned for the first time anywhere in the module, inside the ' +
-        '`.if` itself, with no earlier touch to register a placeholder symbol ' +
-        '- `Preprocessor.canDefer` requiring `env.definedSymbol` to already ' +
-        'find the symbol is only the first layer of this: loosening that ' +
-        'check alone regresses the "genuinely undefined symbol still fails ' +
-        'immediately" tests (preprocessor_test.ts, integration_test.ts), ' +
-        'since canDefer has no way to tell a true forward reference apart ' +
-        'from a typo. And even deferred all the way to the assembler\'s own ' +
-        'replay, `evalCond` still fails: replay reprocesses the module\'s ' +
-        'token stream linearly exactly once, so at the `.if` line ' +
-        '`forwardLabel` genuinely has no value yet (its label comes later in ' +
-        'the same pass) - unlike `.bank(Target)` for an already-seen local ' +
-        'label (fixed above) or `.bank(import)` for a cross-module symbol, ' +
-        'neither of which needs to peek ahead. Resolving this needs either a ' +
-        'name-preserving lookup into pass 1\'s already-complete module (' +
-        '`Module.symbols` currently only retains a name for `.export`ed ' +
-        'symbols, so a plain local forward ref has no name left to look up ' +
-        'by the time replay reaches it) or a two-sub-pass replay that seeds ' +
-        'label positions before deciding `.if` branches', function() {
+        '`.if` itself, with no earlier touch to register a placeholder symbol', function() {
       const main: AssemblyInput = {
         type: 'source', name: 'main.s',
         code: `
@@ -2917,6 +2900,145 @@ forwardLabel:
       const result = compile([main], {lineContinuations: true});
       expect(result.success).toBe(true);
       expect(result.messages).toEqual([]);
+    });
+
+    it('resolves a forward reference whose own segment was decided by an ' +
+        'earlier, unrelated deferred `.if`', function() {
+      const cfg = `
+        MEMORY {
+          PRG0: start = $8000, size = $8000, file = %O, bank = 0;
+          PRG1: start = $8000, size = $8000, file = %O, bank = 1;
+        }
+        SEGMENTS {
+          CODE: load = PRG0;
+          BANK1: load = PRG1;
+        }
+      `;
+      const other: AssemblyInput = {
+        type: 'source', name: 'other.s',
+        code: `.segment "BANK1"\n.export Target\nTarget:\n  rts\n`,
+      };
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE"
+.import Target
+.if .bank(Target) <> 0
+  .segment "BANK1"
+.else
+  .segment "CODE"
+.endif
+Later:
+  nop
+.if .bank(Later) = 1
+  .byte $aa
+.else
+  .byte $bb
+.endif
+`
+      };
+      const result = compile(
+          [main, other],
+          {lineContinuations: true, linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      // Target lives in bank 1, so the first `.if` puts `Later` in BANK1
+      // too, and the second `.if` (querying `Later`'s own bank) should see
+      // that - not the guessed-false answer from pass 1.
+      const bytes = Array.from(result.outputs[0].data);
+      expect(bytes).toEqual([0xea, 0xaa, 0x60]);
+    });
+
+    it('resolves .addrsize on a genuinely fresh forward reference to a ' +
+        'zeropage label defined later in the same module', function() {
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.if .addrsize(forwardZp) = 1
+  .byte $11
+.else
+  .byte $22
+.endif
+.segment "ZP" :size $10 :mem $0020 :zp
+forwardZp:
+  .res 1
+`
+      };
+      const result = compile([main], {lineContinuations: true});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      expect(Array.from(result.outputs[0].data)).toEqual([0x11]);
+    });
+
+    it('still succeeds when a label\'s segment placement depends on the ' +
+        'very `.if` that queries it, as long as the guessed-false scan ' +
+        'happens to land on a self-consistent answer', function() {
+      const cfg = `
+        MEMORY {
+          PRG0: start = $8000, size = $8000, file = %O, bank = 0;
+          PRG1: start = $8000, size = $8000, file = %O2, bank = 1;
+        }
+        SEGMENTS {
+          CODE: load = PRG0;
+          BANK1: load = PRG1;
+        }
+      `;
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE"
+.if .bank(Foo) = 0
+  .segment "CODE"
+.else
+  .segment "BANK1"
+.endif
+Foo:
+  nop
+`
+      };
+      const result = compile(
+          [main], {lineContinuations: true, linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      // Guessing the `.if` false takes the `.else` branch (BANK1), which
+      // makes `.bank(Foo) = 0` really evaluate to false - the guess and
+      // the outcome agree, so the scan converges on its first try.
+      expect(Array.from(result.outputs[0].data)).toEqual([]);
+      expect(Array.from(result.outputs[1].data)).toEqual([0xea]);
+    });
+
+    it('fails cleanly instead of guessing when a label\'s segment placement ' +
+        'genuinely depends on the very `.if` that queries it', function() {
+      const cfg = `
+        MEMORY {
+          PRG0: start = $8000, size = $8000, file = %O, bank = 0;
+          PRG1: start = $8000, size = $8000, file = %O2, bank = 1;
+        }
+        SEGMENTS {
+          CODE: load = PRG0;
+          BANK1: load = PRG1;
+        }
+      `;
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE"
+.if .bank(Circular) = 0
+  .segment "BANK1"
+.else
+  .segment "CODE"
+.endif
+Circular:
+  nop
+`
+      };
+      const result = compile(
+          [main], {lineContinuations: true, linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+      expect(result.success).toBe(false);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors[0]?.message).toMatch(/Expected a constant/);
     });
   });
 });
