@@ -116,11 +116,13 @@ export function traversePost(expr: Expr, f: Rec): Expr {
 }
 
 /** LinkTimeEnv interface pasted here to avoid importing it. */
-export interface AddrSizeEnv {
+export interface LinkTimeEvalEnv {
   addrSize(sym: string): 1|2|undefined;
+  bank(sym: string): number|undefined;
+  chunkBank(chunkIndex: number): number|undefined;
 }
 
-export function evaluate(expr: Expr, linkEnv?: AddrSizeEnv): Expr {
+export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
   const mapped = NAME_MAP.get(expr.op) ?? expr.op;
   switch (mapped) { // var-arg functions
     case '.move':
@@ -156,8 +158,19 @@ export function evaluate(expr: Expr, linkEnv?: AddrSizeEnv): Expr {
         // Minor diff between js65, but if you use `^` on an addr instead of
         // a number, then we load the `.bank` value instead of the upper bits
         // 16-23 of the number like ca65 .bankbyte
-        const bank = num(expr.args![0].meta?.bank);
-        return bank ?? unary(expr, x => (x >>> 16) & 0xff);
+        const arg = expr.args![0];
+        const known = num(arg.meta?.bank);
+        if (known) return known;
+        // if we are getting a .bank(sym) use bank otherwise look it up
+        // from the current chunk with segmentBank
+        if (arg.op === 'im' && arg.sym != null) {
+          const answer = num(linkEnv?.bank(arg.sym));
+          if (answer) return answer;
+        } else if (arg.meta?.rel && arg.meta?.chunk != null) {
+          const answer = num(linkEnv?.chunkBank(arg.meta.chunk));
+          if (answer) return answer;
+        }
+        return unary(expr, x => (x >>> 16) & 0xff);
       }
       case '.sizeof': {
         const arg = expr.args![0];

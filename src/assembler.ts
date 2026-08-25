@@ -68,6 +68,9 @@ const ANON_SEGMENT_ATTR_REASONS = new Map<string, string>([
   ['define', ''],
 ]);
 
+/** Any operation that forces the expr to be linker derived */
+const DEFERRABLE_LINK_OPS = new Set(['^', '.bankbyte', '.addrsize']);
+
 /**
  * List of CPUs that we support.
  * We aren't very strict about the difference between 6502 and 6502x.
@@ -315,11 +318,11 @@ export class Assembler {
       Array<{kind: 'struct'|'enum', offset: number, name?: string, count: number}> = [];
 
   /**
-   * When a `.sizeof` operation is used in a non-const context, we can defer the check
-   * and try and see if the size was added later. This is different from ca65 who just
-   * errors out, but I think its worth doing this.
+   * If something can only be known later into compilation like a sizeOf for an unclosed
+   * scope or a linker request, we keep the expression here for handling later. 
    */
-  private deferredSizeOfs = new Map<Expr, Scope>();
+  private deferredOps =
+      new Map<Expr, {kind: 'sizeof', scope: Scope}|{kind: 'link'}>();
 
   /**
    * `.sizeof(label)` is the data declared on the same source line as the label.
@@ -660,6 +663,19 @@ export class Assembler {
             (this.chunk.org + this.chunk.data.length).toString(16)}`;
   }
 
+  /** Adapts the linker provided environment to combine it with the chunk info */
+  private evalEnv(): Exprs.LinkTimeEvalEnv {
+    return {
+      addrSize: (sym) => this.linkEnv?.addrSize(sym),
+      bank: (sym) => this.linkEnv?.bank(sym),
+      chunkBank: (chunkIndex) => {
+        const segs = chunkIndex === this._chunkIndex ?
+            this._chunk?.segments : this.chunks[chunkIndex]?.segments;
+        return segs && this.linkEnv?.segmentBank(segs);
+      },
+    };
+  }
+
   resolve(expr: Expr): Expr {
     const out = Exprs.traverse(expr, (e, rec) => {
       // Need to check to see if we are resolving a `.sizeof` operation here
@@ -668,15 +684,25 @@ export class Assembler {
       if (e.op === '.sizeof' && e.args?.length === 1 && e.args[0].sym) {
         const replacement = this.sizeOf(e.args[0].sym);
         if (replacement) return Exprs.evaluate(rec(replacement));
-        // Not defined yet - leave it for `resolveSizeOfs` to retry at the end.
-        this.deferredSizeOfs.set(e, this.currentScope);
+        // Not defined yet - leave it for `resolveDeferredOps` to retry at the end.
+        this.deferredOps.set(e, {kind: 'sizeof', scope: this.currentScope});
         return e;
       }
       while (e.op === 'sym' && e.sym) {
         e = this.resolveSymbol(e);
       }
       e = this.substituteResolvedRef(e);
-      return Exprs.evaluate(rec(e), this.linkEnv);
+      const recursed = rec(e);
+      const out = Exprs.evaluate(recursed, this.evalEnv());
+      // If we can't resolve this right now because its a linker value, store it for later.
+      if (out === recursed && DEFERRABLE_LINK_OPS.has(recursed.op) &&
+          recursed.args?.length === 1) {
+        const arg = recursed.args[0];
+        if (arg.op === 'sym' && arg.sym == null && arg.num != null) {
+          this.deferredOps.set(out, {kind: 'link'});
+        }
+      }
+      return out;
     });
     if (this.opts.refExtractor?.ref && out !== expr) {
       const orig = this.exprMap.get(expr) || expr;
@@ -967,22 +993,23 @@ export class Assembler {
       }
     }
 
-    this.resolveSizeOfs();
+    this.resolveDeferredOps();
   }
 
   /**
-   * As part of closing scopes, we need to resolve any deferred size of operations
-   * This function was pulled out just for clarities sake, but its really just
-   * an extension of `closeScopes`
+   * As part of closing scopes, we need to retry any expr node that couldn't
+   * fully fold on first pass - see `deferredOps`. This function was pulled
+   * out just for clarities sake, but its really just an extension of
+   * `closeScopes`.
    */
-  private resolveSizeOfs() {
-    if (!this.deferredSizeOfs.size) return;
+  private resolveDeferredOps() {
+    if (!this.deferredOps.size) return;
     const saved = this.currentScope;
     const fix = (expr: Expr): Expr => Exprs.traverse(expr, (e, rec) => {
-      const scope = this.deferredSizeOfs.get(e);
-      if (scope && e.args?.[0]?.sym) {
+      const op = this.deferredOps.get(e);
+      if (op?.kind === 'sizeof' && e.args?.[0]?.sym) {
         const name = e.args[0].sym;
-        this.currentScope = scope;
+        this.currentScope = op.scope;
         try {
           const replacement = this.sizeOf(name);
           // Since we've closed all the scopes by now, anything still undefined
@@ -995,6 +1022,10 @@ export class Assembler {
           this.currentScope = saved;
         }
       }
+      if (op?.kind === 'link' && e.args?.length === 1) {
+        const arg = this.substituteResolvedRef(e.args[0]);
+        return Exprs.evaluate({...e, args: [arg]}, this.evalEnv());
+      }
       return Exprs.evaluate(rec(e));
     });
     for (const chunk of this.chunks) {
@@ -1006,7 +1037,7 @@ export class Assembler {
     for (const symbol of this.symbols) {
       if (symbol.expr) symbol.expr = fix(symbol.expr);
     }
-    this.deferredSizeOfs.clear();
+    this.deferredOps.clear();
   }
 
   module(): Module {
