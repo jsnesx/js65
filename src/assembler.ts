@@ -305,6 +305,7 @@ export class Assembler {
    *  depending on whether the symbol ends up defined in this module. */
   // NOTE: we could add 'force-import', 'detect', or others...
   private globals = new Map<string, 'export'|'import'|'global'>();
+  private resolvedGlobalKinds = new Map<string, 'import'|'export'>();
   /** Scope each `.export`/`.import`/`.global` was declared in, so the symbol is
    *  resolved there. */
   private globalScopes = new Map<string, Scope>();
@@ -425,6 +426,9 @@ export class Assembler {
 
   /** Set by the late pass on replay; undefined (and unconsulted) on pass 1. */
   linkEnv?: LinkTimeEnv;
+
+  /** Set by first pass to note whether a global was import or export */
+  globalKinds?: Record<string, 'import'|'export'>;
 
   /** Runs the lint rules, unless linting was turned off. */
   readonly linter?: Linter;
@@ -872,6 +876,19 @@ export class Assembler {
       // console.log(`sometging: ${JSON.stringify(sym)}`);
       return sym.expr;
     }
+    // If this is a late pass, we can resolve import and globalimport now
+    const globalKind = this.globals.get(name);
+    if (this.linkEnv && (globalKind === 'import' ||
+        (globalKind === 'global' && this.globalKinds?.[name] === 'import'))) {
+      const expr: Expr = {op: 'im', sym: name};
+      const at = firstRef(sym);
+      if (at) expr.source = at;
+      if (this.zeropageGlobals.has(name) || this.linkEnv.addrSize(name) === 1) {
+        expr.meta = {size: 1};
+      }
+      sym.expr = expr;
+      return expr;
+    }
     // if the expression is not yet known then refer to the symbol table,
     // adding it if necessary.
     if (sym.id == null) {
@@ -954,7 +971,11 @@ export class Assembler {
         if (outer?.expr) sym = outer;
       }
       // `.global` is import-or-export depending on whether it got defined here.
-      const kind = global === 'global' ? (sym?.expr ? 'export' : 'import') : global;
+      // Don't treat an eagerly resolved global export in the late pass as global if
+      // we already know whether it was import or export from the first pass
+      const kind = global === 'global' ?
+          (sym?.expr && sym.expr.op !== 'im' ? 'export' : 'import') : global;
+      if (global === 'global') this.resolvedGlobalKinds.set(name, kind);
       if (kind === 'export') {
         if (!sym?.expr) {
           collector.add('error', `Exported symbol '${name}' undefined`, firstRef(sym));
@@ -975,18 +996,21 @@ export class Assembler {
       } else if (kind === 'import') {
         if (!sym) continue; // okay to import but not use.
         // TODO - record both positions?
-        if (sym.expr) {
+        // Already resolved by resolveSymbol during the latepass is not a redefinition
+        if (sym.expr && sym.expr.op !== 'im') {
           collector.add('error', `Symbol '${name}' already defined`, firstRef(sym));
           continue;
         }
-        // Zeropage imports carry a one-byte size so references pick zp modes.
-        const expr: Expr = {op: 'im', sym: name};
-        // Carry the reference site so the linker can point at something if the
-        // import turns out never to have been exported.
-        const at = firstRef(sym);
-        if (at) expr.source = at;
-        if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
-        sym.expr = expr;
+        if (!sym.expr) {
+          // Zeropage imports carry a one-byte size so references pick zp modes.
+          const expr: Expr = {op: 'im', sym: name};
+          // Carry the reference site so the linker can point at something if the
+          // import turns out never to have been exported.
+          const at = firstRef(sym);
+          if (at) expr.source = at;
+          if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
+          sym.expr = expr;
+        }
       } else {
         assertNever(kind);
       }
@@ -1140,6 +1164,7 @@ export class Assembler {
     const lateAssembly: mod.LateAssembly | undefined =
         this.lateAssemblyQueries.length || this.lateAssemblyCondQueries.length ?
         {sizeQueries: this.lateAssemblyQueries, condQueries: this.lateAssemblyCondQueries,
+         globalKinds: Object.fromEntries(this.resolvedGlobalKinds),
          stream: this.lateAssemblyStream, opts: this.opts} :
         undefined;
 
@@ -1372,24 +1397,9 @@ export class Assembler {
   }
 
   private evalCond(at: Token, expr: Expr): boolean {
-    const value = this.evaluate(this.preresolveImportBanks(expr));
+    const value = this.evaluate(expr);
     if (value == null) this.fail(`Expected a constant`, at);
     return value !== 0;
-  }
-
-  // Hacky workaround to make it so we can immediately resolve an import
-  // when used in an if statement.
-  private preresolveImportBanks(expr: Expr): Expr {
-    if (!this.linkEnv) return expr;
-    return Exprs.traverse(expr, (e, rec) => {
-      e = rec(e);
-      if (!DEFERRABLE_LINK_OPS.has(e.op) || e.args?.length !== 1) return e;
-      const arg = e.args[0];
-      if (arg.op !== 'sym' || !arg.sym || this.globals.get(arg.sym) !== 'import') {
-        return e;
-      }
-      return {...e, args: [{op: 'im', sym: arg.sym}]};
-    });
   }
 
   // recursively run through potentially nested if statements

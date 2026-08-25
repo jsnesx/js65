@@ -212,6 +212,8 @@ export interface LateAssemblyCondQuery {
 export interface LateAssembly {
   sizeQueries: LateAssemblySizeQuery[];
   condQueries: LateAssemblyCondQuery[];
+  /** Records whether global resolved to import or export for the late pass */
+  globalKinds: Record<string, 'import'|'export'>;
   stream: Token[][];
   opts: AssemblerOptions;
 }
