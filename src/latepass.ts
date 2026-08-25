@@ -109,6 +109,7 @@ export function replayModule(
   }
   const asm = new Assembler(Cpu.P02, lateAssembly.opts);
   asm.linkEnv = linkEnv;
+  asm.globalKinds = lateAssembly.globalKinds;
   const {stream} = lateAssembly;
   let i = 0;
   const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};

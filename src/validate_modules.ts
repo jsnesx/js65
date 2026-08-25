@@ -321,17 +321,28 @@ function validateAssemblerOptions(v: unknown, path: string): AssemblerOptions {
   return v as AssemblerOptions;
 }
 
+function validateGlobalKinds(v: unknown, path: string): Record<string, 'import'|'export'> {
+  if (!isObject(v)) fail(path, 'expected object');
+  const out: Record<string, 'import'|'export'> = {};
+  for (const [name, kind] of Object.entries(v)) {
+    if (kind !== 'import' && kind !== 'export') fail(`${path}.${name}`, `expected 'import' or 'export'`);
+    out[name] = kind;
+  }
+  return out;
+}
+
 function validateLateAssembly(v: unknown, path: string): LateAssembly {
   if (!isObject(v)) fail(path, 'expected object');
   const sizeQueries = reqArray(v.sizeQueries, `${path}.sizeQueries`)
     .map((q, i) => validateLateAssemblySizeQuery(q, `${path}.sizeQueries[${i}]`));
   const condQueries = reqArray(v.condQueries, `${path}.condQueries`)
     .map((q, i) => validateLateAssemblyCondQuery(q, `${path}.condQueries[${i}]`));
+  const globalKinds = validateGlobalKinds(v.globalKinds, `${path}.globalKinds`);
   const stream = reqArray(v.stream, `${path}.stream`).map((line, i) =>
     reqArray(line, `${path}.stream[${i}]`)
       .map((t, j) => validateToken(t, `${path}.stream[${i}][${j}]`)));
   const opts = validateAssemblerOptions(v.opts, `${path}.opts`);
-  return { sizeQueries, condQueries, stream, opts };
+  return { sizeQueries, condQueries, globalKinds, stream, opts };
 }
 
 /**

@@ -320,6 +320,7 @@ start:
       lateAssembly: {
         sizeQueries: [{ name: 'foo', guess: 2, source: { file: 'a.s', line: 1, column: 0 } }],
         condQueries: [{ source: { file: 'a.s', line: 2, column: 0 } }],
+        globalKinds: { foo: 'import' },
         stream: [[{ token: 'ident', str: 'lda' }, { token: 'eol' }]],
         opts: { generateDebugInfo: true },
       },
@@ -331,7 +332,7 @@ start:
 
   it('rejects a lateAssembly.sizeQueries guess outside 1|2', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [{ name: 'foo', guess: 3 }], condQueries: [], stream: [], opts: {} },
+      lateAssembly: { sizeQueries: [{ name: 'foo', guess: 3 }], condQueries: [], globalKinds: {}, stream: [], opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.sizeQueries[0].guess');
@@ -339,7 +340,7 @@ start:
 
   it('rejects a malformed lateAssembly.stream token', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [], condQueries: [], stream: [[{ token: 'bogus' }]], opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: [], globalKinds: {}, stream: [[{ token: 'bogus' }]], opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.stream[0][0]');
@@ -347,7 +348,7 @@ start:
 
   it('rejects a truncated (non-array) lateAssembly.stream', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [], condQueries: [], stream: 'nope', opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: [], globalKinds: {}, stream: 'nope', opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.stream');
@@ -355,7 +356,7 @@ start:
 
   it('rejects a truncated (non-array) lateAssembly.condQueries', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [], condQueries: 'nope', stream: [], opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: 'nope', globalKinds: {}, stream: [], opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.condQueries');
