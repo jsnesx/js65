@@ -2761,4 +2761,162 @@ Target:
       expect(result.messages.some(m => m.message === 'Expected a constant')).toBe(true);
     });
   });
+
+  // Bugs found while validating the late-pass `.if` feature against its stated
+  // goals (see linker.ts, expr.ts, preprocessor.ts fixes). Three are now
+  // fixed and converted to plain `it`s. The remaining `it.failing` pins the
+  // CORRECT expected behavior for a deeper, still-open bug; it currently
+  // passes only because the assertions inside it throw (bun's `.failing`
+  // inverts pass/fail), so a real fix should turn it into a normal `it`.
+  describe('known bugs (regressions pending a fix)', function() {
+    it('a deferred `.if` with no accompanying sizeQuery still replays, ' +
+        'instead of the linker silently keeping pass 1\'s guessed-false dead ' +
+        'branch even though the condition is tautologically true - ' +
+        'Linker.lateAssemblyPass (linker.ts) gates replay on ' +
+        '`m.lateAssembly?.sizeQueries.length` only, never checking ' +
+        '`condQueries.length`, so a module whose only late-assembly need is a ' +
+        '`.if` never gets replayed and the guarded byte below is silently ' +
+        'dropped from the linked output', function() {
+      const cfg = `
+        MEMORY {
+          PRG0: start = $8000, size = $8000, file = %O, bank = 0;
+        }
+        SEGMENTS {
+          CODE: load = PRG0;
+        }
+      `;
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE"
+.byte $99
+.if .bank(*) = .bank(*)
+  .byte $aa
+.endif
+.byte $88
+`
+      };
+      const result = compile(
+          [main], {lineContinuations: true, linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+      expect(result.success).toBe(true);
+      expect(Array.from(result.outputs[0].data)).toEqual([0x99, 0xaa, 0x88]);
+    });
+
+    it('compares `.bank(*)` against another local label\'s bank correctly ' +
+        'once both sides sit in `.org`-fixed chunks - expr.ts\'s `^` case only ' +
+        'takes the linkEnv-aware `chunkBank` path when `arg.meta?.rel` is set, ' +
+        'but an `.org`-assigned address carries `meta.chunk`/`meta.org` without ' +
+        '`meta.rel`, so it silently falls through to the ca65-style ' +
+        '`(x >>> 16) & 0xff` fallback - which is always 0 for any 16-bit `.org` ' +
+        'address, so two different banks compare equal and the wrong branch ' +
+        '(picked at preprocess time, without ever consulting the linker) wins',
+        function() {
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "BANK1" :bank $01 :size $2000 :mem $9000 :off $0000
+.org $9000
+Target:
+  rts
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $2000
+.org $8000
+.byte $99
+.if .bank(Target) <> .bank(*)
+  .byte $aa
+.else
+  .byte $bb
+.endif
+.byte $88
+`
+      };
+      const result = compile([main], {lineContinuations: true});
+      expect(result.success).toBe(true);
+      const bytes = Array.from(result.outputs[0].data);
+      const i = bytes.indexOf(0x99);
+      // Target (bank 1) and `*` (bank 0) genuinely differ, so the `.if` branch
+      // should win - not the `.else` branch bug A currently produces.
+      expect(bytes.slice(i, i + 3)).toEqual([0x99, 0xaa, 0x88]);
+    });
+
+    it('links cleanly when a real linker.cfg (not inline `.segment` ' +
+        'attrs) supplies cross-bank segments and a `.if` triggers a replay - ' +
+        'currently the replayed module\'s chunks lose their segment name, and ' +
+        'the linker fails with "Could not find space for N-byte chunk in ' +
+        '(no segment)"', function() {
+      const cfg = `
+        MEMORY {
+          PRG0: start = $8000, size = $8000, file = %O, bank = 0;
+          PRG1: start = $8000, size = $8000, file = %O, bank = 1;
+        }
+        SEGMENTS {
+          CODE: load = PRG0;
+          BANK1: load = PRG1;
+        }
+      `;
+      const other: AssemblyInput = {
+        type: 'source', name: 'other.s',
+        code: `.segment "BANK1"\n.export Target\nTarget:\n  rts\n`,
+      };
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE"
+.import Target
+.byte $99
+.if .bank(Target) <> 0
+  .byte $aa
+.else
+  .byte $bb
+.endif
+.byte $88
+`
+      };
+      const result = compile(
+          [main, other],
+          {lineContinuations: true, linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+      expect(result.success).toBe(true);
+      const bytes = Array.from(result.outputs[0].data);
+      const i = bytes.indexOf(0x99);
+      expect(bytes.slice(i, i + 3)).toEqual([0x99, 0xaa, 0x88]);
+    });
+
+    it.failing('defers on a genuinely fresh forward reference - a local label ' +
+        'mentioned for the first time anywhere in the module, inside the ' +
+        '`.if` itself, with no earlier touch to register a placeholder symbol ' +
+        '- `Preprocessor.canDefer` requiring `env.definedSymbol` to already ' +
+        'find the symbol is only the first layer of this: loosening that ' +
+        'check alone regresses the "genuinely undefined symbol still fails ' +
+        'immediately" tests (preprocessor_test.ts, integration_test.ts), ' +
+        'since canDefer has no way to tell a true forward reference apart ' +
+        'from a typo. And even deferred all the way to the assembler\'s own ' +
+        'replay, `evalCond` still fails: replay reprocesses the module\'s ' +
+        'token stream linearly exactly once, so at the `.if` line ' +
+        '`forwardLabel` genuinely has no value yet (its label comes later in ' +
+        'the same pass) - unlike `.bank(Target)` for an already-seen local ' +
+        'label (fixed above) or `.bank(import)` for a cross-module symbol, ' +
+        'neither of which needs to peek ahead. Resolving this needs either a ' +
+        'name-preserving lookup into pass 1\'s already-complete module (' +
+        '`Module.symbols` currently only retains a name for `.export`ed ' +
+        'symbols, so a plain local forward ref has no name left to look up ' +
+        'by the time replay reaches it) or a two-sub-pass replay that seeds ' +
+        'label positions before deciding `.if` branches', function() {
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.if .bank(forwardLabel) = 0
+  .byte $11
+.else
+  .byte $22
+.endif
+forwardLabel:
+  nop
+`
+      };
+      const result = compile([main], {lineContinuations: true});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+    });
+  });
 });

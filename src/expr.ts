@@ -166,9 +166,13 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
         if (arg.op === 'im' && arg.sym != null) {
           const answer = num(linkEnv?.bank(arg.sym));
           if (answer) return answer;
-        } else if (arg.meta?.rel && arg.meta?.chunk != null) {
+          return expr; // not resolvable here without the linker
+        } else if (arg.meta?.chunk != null) {
+          // Addrs (when chunk is not null) are always 16 bit, so don't fall back
+          // to the ca65 .bankbyte definition.
           const answer = num(linkEnv?.chunkBank(arg.meta.chunk));
           if (answer) return answer;
+          return expr; // not resolvable here without the linker
         }
         return unary(expr, x => (x >>> 16) & 0xff);
       }
