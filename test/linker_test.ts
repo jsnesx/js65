@@ -5,7 +5,7 @@ import {describe, it, expect} from 'bun:test';
 import {type Expr} from '../src/expr.ts';
 import {ErrorCollector} from '../src/error.ts';
 import {FreeSpace, Linker} from '../src/linker.ts';
-import {compile, type AssemblyInput} from '../src/libassembler.ts';
+import {assemble, compile, type AssemblyInput} from '../src/libassembler.ts';
 import {type Module, type Segment} from '../src/module.ts';
 import {SourceError} from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -2672,5 +2672,93 @@ after:
     // Narrowed to zp (2 bytes), so `after` lands at $8002, not the $8003 a
     // stale abs guess would have produced.
     expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xa5, 0x20, 0xea]);
+  });
+
+  describe('deferred .if conditions', function() {
+    const main = (body: string): AssemblyInput => ({
+      type: 'source', name: 'main.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import Target
+.export after
+.org $8000
+  nop
+.if .bank(Target) <> .bank(*)
+${body}
+after:
+  nop
+`
+    });
+    const targetSameBank: AssemblyInput = {
+      type: 'source', name: 'other.s',
+      code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.export Target
+.org $9000
+Target:
+  rts
+`
+    };
+    const targetOtherBank: AssemblyInput = {
+      type: 'source', name: 'other.s',
+      code: `
+.segment "BANK1" :bank $01 :size $2000 :mem $9000 :off $8000
+.export Target
+.org $9000
+Target:
+  rts
+`
+    };
+
+    it('picks the `.else` branch when the import is in the same bank as the call site',
+        function() {
+      const result = compile(
+          [main('  .byte $11, $11, $11\n.else\n  .byte $22\n.endif'), targetSameBank],
+          {lineContinuations: true});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      // .else (1 byte) taken, so `after` follows right behind it.
+      expect(Array.from(result.outputs[0].data.slice(0, 3))).toEqual([0xea, 0x22, 0xea]);
+    });
+
+    it('picks the `.if` branch when the import is in a different bank, resizing ' +
+        'past pass 1\'s guessed `.else` shape and shifting a later label', function() {
+      const result = compile(
+          [main('  .byte $11, $11, $11\n.else\n  .byte $22\n.endif'), targetOtherBank],
+          {lineContinuations: true});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      // Pass 1 guessed `.else` (1 byte); replay picks the 3-byte `.if` branch
+      // instead, so `after` lands 2 bytes later than pass 1's guess did.
+      expect(Array.from(result.outputs[0].data.slice(0, 5)))
+          .toEqual([0xea, 0x11, 0x11, 0x11, 0xea]);
+    });
+
+    it('does not replay or error on assemble-only (no link)', function() {
+      const result = assemble(
+          [main('  .byte $11\n.else\n  .byte $22\n.endif'), targetOtherBank],
+          {lineContinuations: true});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      expect(result.modules[0].lateAssembly?.condQueries.length).toBe(1);
+    });
+
+    it('raises Expected a constant at link time when the condition still cannot ' +
+        'resolve after replay', function() {
+      const unresolvable: AssemblyInput = {
+        type: 'source', name: 'main2.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import Ghost
+.org $8000
+.if .bank(Ghost) <> 0
+  .byte $11
+.endif
+`
+      };
+      const result = compile([unresolvable], {lineContinuations: true});
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => m.message === 'Expected a constant')).toBe(true);
+    });
   });
 });

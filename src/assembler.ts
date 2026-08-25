@@ -1321,16 +1321,18 @@ export class Assembler {
   }
 
   /**
-   * If this is called, then the conditional isn't const and we need
-   * to fall back to running it at link time.
+   * On pass 1 (no linkEnv), the conditional isn't const, so defer to link
+   * time. On replay, linkEnv can answer for real
    */
   private ifDirective(tokens: Token[]) {
     const cs = tokens[0];
-    // Run a parse to check for malformed expressions
-    this.parseExpr(tokens, 1);
-    // Then defer it and skip the rest of it
-    this.lateAssemblyCondQueries.push({source: cs.source});
-    this.skipGuessedDeadBranch(cs);
+    const expr = this.parseExpr(tokens, 1);
+    if (!this.linkEnv) {
+      this.lateAssemblyCondQueries.push({source: cs.source});
+      this.skipGuessedDeadBranch(cs);
+      return;
+    }
+    this.evalIfChain(cs, expr);
   }
 
   // Used above when we cant resolve an .if branch at assembly time
@@ -1346,6 +1348,100 @@ export class Assembler {
         depth++;
       } else if (depth === 1 && Tokens.eq(front, Tokens.ELSE)) {
         return false;
+      }
+      return true;
+    });
+  }
+
+  // This is run during the late pass and everything MUST be resolved at this point
+  // or its a link time error.
+  private evalIfChain(cs: Token, expr: Expr) {
+    let cond = this.evalCond(cs, expr);
+    for (;;) {
+      const terminator = cond ? this.processBranch(cs) : this.skipBranch(cs);
+      const marker = terminator[0];
+      if (Tokens.eq(marker, Tokens.ENDIF)) return;
+      if (cond) {
+        // Live branch just ended; whatever remains in the chain is dead.
+        this.skipRestOfChain(cs);
+        return;
+      }
+      cond = Tokens.eq(marker, Tokens.ELSE) ? true :
+          this.evalCond(cs, this.parseExpr(terminator, 1));
+    }
+  }
+
+  private evalCond(at: Token, expr: Expr): boolean {
+    const value = this.evaluate(this.preresolveImportBanks(expr));
+    if (value == null) this.fail(`Expected a constant`, at);
+    return value !== 0;
+  }
+
+  // Hacky workaround to make it so we can immediately resolve an import
+  // when used in an if statement.
+  private preresolveImportBanks(expr: Expr): Expr {
+    if (!this.linkEnv) return expr;
+    return Exprs.traverse(expr, (e, rec) => {
+      e = rec(e);
+      if (!DEFERRABLE_LINK_OPS.has(e.op) || e.args?.length !== 1) return e;
+      const arg = e.args[0];
+      if (arg.op !== 'sym' || !arg.sym || this.globals.get(arg.sym) !== 'import') {
+        return e;
+      }
+      return {...e, args: [{op: 'im', sym: arg.sym}]};
+    });
+  }
+
+  // recursively run through potentially nested if statements
+  private processBranch(at: Token): Token[] {
+    let terminator: Token[];
+    Tokens.pullLines(this._tokenSource!, line => {
+      if (!line) this.fail(`EOF looking for .endif`, at);
+      const front = line[0];
+      if (front.token === 'cs' &&
+          (Tokens.eq(front, Tokens.ENDIF) || Tokens.eq(front, Tokens.ELSE) ||
+           Tokens.eq(front, Tokens.ELSEIF))) {
+        terminator = line;
+        return false;
+      }
+      this.line(line);
+      return true;
+    });
+    return terminator!;
+  }
+
+  // Discards a dead branch (tracking nested `.if` depth) until this chain's
+  // next `.elseif`/`.else`/`.endif`.
+  private skipBranch(at: Token): Token[] {
+    let depth = 1;
+    let terminator: Token[];
+    Tokens.pullLines(this._tokenSource!, line => {
+      if (!line) this.fail(`EOF looking for .endif`, at);
+      const front = line[0];
+      if (front.token === 'cs' && Tokens.eq(front, Tokens.ENDIF)) {
+        if (--depth === 0) { terminator = line; return false; }
+      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
+        depth++;
+      } else if (depth === 1 && front.token === 'cs' &&
+                 (Tokens.eq(front, Tokens.ELSE) || Tokens.eq(front, Tokens.ELSEIF))) {
+        terminator = line;
+        return false;
+      }
+      return true;
+    });
+    return terminator!;
+  }
+
+  // Discards the rest of a chain once its live branch is already known.
+  private skipRestOfChain(at: Token) {
+    let depth = 1;
+    Tokens.pullLines(this._tokenSource!, line => {
+      if (!line) this.fail(`EOF looking for .endif`, at);
+      const front = line[0];
+      if (front.token === 'cs' && Tokens.eq(front, Tokens.ENDIF)) {
+        if (--depth === 0) return false;
+      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
+        depth++;
       }
       return true;
     });

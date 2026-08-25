@@ -3795,6 +3795,142 @@ lda #.sizeof(Point)
     });
   });
 
+  describe('.if/.elseif/.else/.endif directives (replay: linkEnv answers for real)',
+      function() {
+    const noEnv: LinkTimeEnv =
+        {addrSize: () => undefined, bank: () => undefined, segmentBank: () => undefined};
+
+    it('processes the `.if` branch and skips the rest when its condition is true',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+      ]));
+      const replay = replayModule(a.module(), noEnv);
+      expect(replay.success).toBe(true);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x11]);
+    });
+
+    it('falls through to `.else` when the `.if` condition is false', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+      ]));
+      const replay = replayModule(a.module(), noEnv);
+      expect(replay.success).toBe(true);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22]);
+    });
+
+    it('evaluates an `.elseif` chain in turn and picks the first true branch',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.elseif'), num(1)],
+        [cs('.byte'), num(0x22)],
+        [cs('.else')],
+        [cs('.byte'), num(0x33)],
+        [cs('.endif')],
+      ]));
+      const replay = replayModule(a.module(), noEnv);
+      expect(replay.success).toBe(true);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22]);
+    });
+
+    it('leaves nothing live when every branch is false and there is no `.else`',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.elseif'), num(0)],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+      ]));
+      const replay = replayModule(a.module(), noEnv);
+      expect(replay.success).toBe(true);
+      expect(strip(replay.module).chunks).toEqual([]);
+    });
+
+    it('resolves a nested `.if` inside a live branch recursively', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.if'), num(1)],
+        [cs('.if'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+        [cs('.byte'), num(0x33)],
+        [cs('.endif')],
+      ]));
+      const replay = replayModule(a.module(), noEnv);
+      expect(replay.success).toBe(true);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22, 0x33]);
+    });
+
+    it('resolves `.bank(import)` via linkEnv even though imports normally only ' +
+        'settle at closeScopes', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.import'), ident('Target')],
+        [cs('.if'), cs('.bankbyte'), LP, ident('Target'), RP, cs('<>'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+      ]));
+      const diffBank: LinkTimeEnv =
+          {addrSize: () => undefined, bank: () => 4, segmentBank: () => undefined};
+      const replay = replayModule(a.module(), diffBank);
+      expect(replay.success).toBe(true);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x11]);
+    });
+
+    it('resolves `.bank(localLabel)` via linkEnv, without an export', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.segment'), str('BANK1')],
+        [ident('localTarget'), COLON],
+        [cs('.segment'), str('CODE')],
+        [cs('.byte'), num(0x99)], // materialize a CODE chunk before `.if`
+        [cs('.if'), cs('.bankbyte'), LP, ident('localTarget'), RP, cs('<>'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+      ]));
+      const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
+                                 segmentBank: segs => segs.includes('BANK1') ? 4 : 0};
+      const replay = replayModule(a.module(), env);
+      expect(replay.success).toBe(true);
+      expect(Array.from(strip(replay.module).chunks![1].data)).toEqual([0x99, 0x11]);
+    });
+
+    it('raises Expected a constant at the chain\'s `.if` when the condition still ' +
+        'cannot resolve on replay', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.import'), ident('Ghost')],
+        [cs('.if'), cs('.bankbyte'), LP, ident('Ghost'), RP, cs('<>'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.endif')],
+      ]));
+      const replay = replayModule(a.module(), noEnv);
+      expect(replay.success).toBe(false);
+      expect(replay.messages.map(m => m.message)).toEqual(['Expected a constant']);
+    });
+  });
+
   describe('late-assembly stream capture', function() {
     it('carries a stream and queries for a module with an unresolved size', function() {
       const m = assembleModule('.import foo\nlda foo\n');
