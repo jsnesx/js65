@@ -21,6 +21,9 @@ const MAX_STACK_DEPTH = 100;
 /** Token types that finish off a value so a `::` after one qualifies it. */
 const VALUE_END: ReadonlySet<string> = new Set(['num', 'str', 'rb', 'rp', 'rc', 'grp']);
 
+/** Expr ops that only need a symbol's segment identity, not its value. */
+const BANK_QUERY_OPS: ReadonlySet<string> = new Set(['^', '.bankbyte', '.addrsize']);
+
 /**
  * Value reported by `.version`, encoded the way ca65 does it:
  * `(major << 8) | minor`.
@@ -741,6 +744,11 @@ export class Preprocessor implements Tokens.Source {
     if (ex.meta?.rel && ex.meta?.chunk != null) return true;
     if (ex.op === 'sym' && ex.sym != null) return this.env.definedSymbol(ex.sym);
     if (!ex.args?.length) return false;
+    // For bank ops, we can allow deferring since they only care about the bank list not actual bank num
+    if (BANK_QUERY_OPS.has(ex.op) && ex.args.length === 1 &&
+        ex.args[0].op === 'sym' && ex.args[0].sym != null) {
+      return true;
+    }
     return ex.args.every(arg => this.canDefer(arg));
   }
 

@@ -163,7 +163,7 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
         if (known) return known;
         // if we are getting a .bank(sym) use bank otherwise look it up
         // from the current chunk with segmentBank
-        if (arg.op === 'im' && arg.sym != null) {
+        if ((arg.op === 'im' || arg.op === 'sym') && arg.sym != null) {
           const answer = num(linkEnv?.bank(arg.sym));
           if (answer) return answer;
           return expr; // not resolvable here without the linker
@@ -191,6 +191,10 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
           if (arg.meta?.size === 1) return {op: 'num', num: 1, meta: size(1)};
           const answer = linkEnv?.addrSize(arg.sym!);
           return {op: 'num', num: answer ?? 2, meta: size(1)};
+        }
+        if (arg.op === 'sym' && arg.sym != null) {
+          const answer = linkEnv?.addrSize(arg.sym);
+          return answer == null ? expr : {op: 'num', num: answer, meta: size(1)};
         }
         if (arg.op !== 'num') return expr;
         return {op: 'num', num: arg.meta?.zeropage ? 1 : 2, meta: size(1)};
