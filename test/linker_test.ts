@@ -2902,6 +2902,27 @@ forwardLabel:
       expect(result.messages).toEqual([]);
     });
 
+    it('converges when a newly-live branch introduces a label nobody ' +
+        'queried', function() {
+      const main: AssemblyInput = {
+        type: 'source', name: 'main.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.if .bank(forwardLabel) = 0
+  Extra:
+  .byte $11
+.endif
+forwardLabel:
+  nop
+`
+      };
+      const result = compile([main], {lineContinuations: true});
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual([]);
+      expect(Array.from(result.outputs[0].data)).toEqual([0x11, 0xea]);
+    });
+
     it('resolves a forward reference whose own segment was decided by an ' +
         'earlier, unrelated deferred `.if`', function() {
       const cfg = `
@@ -3038,7 +3059,8 @@ Circular:
           [main], {lineContinuations: true, linkerConfig: cfg, linkerConfigName: 'test.cfg'});
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
-      expect(errors[0]?.message).toMatch(/Expected a constant/);
+      expect(errors[0]?.message).toMatch(
+          /'Circular' lands in a different segment depending on a link-time/);
     });
   });
 });

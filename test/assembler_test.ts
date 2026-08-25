@@ -3926,6 +3926,82 @@ lda #.sizeof(Point)
       expect(replay.success).toBe(false);
       expect(replay.messages.map(m => m.message)).toEqual(['Expected a constant']);
     });
+
+    it('needs a single scan when no `.if` queries a local forward reference',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.import'), ident('Target')],
+        [cs('.if'), cs('.bankbyte'), LP, ident('Target'), RP, cs('<>'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+      ]));
+      const env: LinkTimeEnv =
+          {addrSize: () => undefined, bank: () => 4, segmentBank: () => undefined};
+      const replay = replayModule(a.module(), env);
+      expect(replay.success).toBe(true);
+      expect(replay.scans).toBe(1);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x11]);
+    });
+
+    it('needs two scans for a single-hop local forward reference', function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.segment'), str('CODE')],
+        [cs('.if'), cs('.bankbyte'), LP, ident('forwardLabel'), RP, cs('<>'), num(0)],
+        [cs('.byte'), num(0x11)],
+        [cs('.else')],
+        [cs('.byte'), num(0x22)],
+        [cs('.endif')],
+        [ident('forwardLabel'), COLON],
+        [cs('.byte'), num(0x33)],
+      ]));
+      const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
+                                 segmentBank: segs => segs.includes('BANK1') ? 1 : 0};
+      const replay = replayModule(a.module(), env);
+      expect(replay.success).toBe(true);
+      expect(replay.scans).toBe(2);
+      expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22, 0x33]);
+    });
+
+    it('follows a chain of forward references without cutting it short',
+        function() {
+      const a = new Assembler(Cpu.P02);
+      a.tokens(tokenSource([
+        [cs('.segment'), str('CODE')],
+        [cs('.byte'), num(0x99)], // materialize a CODE chunk before `.if`
+        // C's segment depends on B's bank, and B's on A's, so each scan
+        // settles exactly one more hop of the chain.
+        [cs('.if'), cs('.bankbyte'), LP, ident('B'), RP, cs('<>'), num(0)],
+        [cs('.segment'), str('BANK1')],
+        [cs('.endif')],
+        [ident('C'), COLON],
+        [cs('.byte'), num(0x03)],
+        [cs('.segment'), str('CODE')],
+        [cs('.if'), cs('.bankbyte'), LP, ident('A'), RP, cs('='), num(0)],
+        [cs('.segment'), str('BANK1')],
+        [cs('.endif')],
+        [ident('B'), COLON],
+        [cs('.byte'), num(0x01)],
+        [cs('.segment'), str('CODE')],
+        [ident('A'), COLON],
+        [cs('.byte'), num(0x02)],
+      ]));
+      const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
+                                 segmentBank: segs => segs.includes('BANK1') ? 1 : 0};
+      const replay = replayModule(a.module(), env);
+      expect(replay.success).toBe(true);
+      expect(replay.scans).toBe(3);
+      const chunks = strip(replay.module).chunks!;
+      expect(chunks.map(c => [c.segments, Array.from(c.data)])).toEqual([
+        [['CODE'], [0x99]],
+        [['BANK1'], [0x03]],
+        [['BANK1'], [0x01]],
+        [['CODE'], [0x02]],
+      ]);
+    });
   });
 
   describe('eager import resolution on replay (resolveSymbol answers directly)',

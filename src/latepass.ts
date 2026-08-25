@@ -102,24 +102,36 @@ export interface ReplayResult {
   module: Module;
   /** Messages from the replayed pass */
   messages: AssemblerMessage[];
+  /** How many assembler runs the replay needed. */
+  scans: number;
 }
 
 function segmentsEqual(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((s, i) => s === b[i]);
 }
 
-function localSegmentsEqual(a: ReadonlyMap<string, readonly string[]>,
-                             b: ReadonlyMap<string, readonly string[]>): boolean {
-  if (a.size !== b.size) return false;
-  for (const [name, segs] of a) {
-    const other = b.get(name);
-    if (!other || !segmentsEqual(segs, other)) return false;
+/** Compares the names of `.if` conditions actually queried. */
+function queriedSegmentsEqual(a: ReadonlyMap<string, readonly string[]>,
+                              b: ReadonlyMap<string, readonly string[]>,
+                              queried: ReadonlySet<string>): boolean {
+  for (const name of queried) {
+    const x = a.get(name), y = b.get(name);
+    if (!x !== !y) return false;
+    if (x && y && !segmentsEqual(x, y)) return false;
   }
   return true;
 }
 
-/** Bounds the scanning loop below against a circular `.if`. */
-const MAX_LOCAL_REF_SCAN_ITERATIONS = 8;
+/** Names the queried labels whose placement disagrees between two scans. */
+function unstableDiagnostic(a: ReadonlyMap<string, readonly string[]>,
+                            b: ReadonlyMap<string, readonly string[]>,
+                            queried: ReadonlySet<string>,
+                            name?: string): string {
+  const unstable = [...queried].filter(n => !queriedSegmentsEqual(a, b, new Set([n])));
+  return `${name ? `${name}: ` : ''}${unstable.map(n => `'${n}'`).join(', ')} lands in ` +
+      `a different segment depending on a link-time '.if' that queries it. ` +
+      `Restructure to avoid the cycle`;
+}
 
 /**
  * Rebuilds a module from its recorded `lateAssembly` stream, with the full
@@ -135,8 +147,10 @@ export function replayModule(
     throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
   }
   const {stream} = lateAssembly;
+  let scans = 0;
   const run = (localForwardRefs: ReadonlyMap<string, readonly string[]>|undefined,
                tolerant: boolean) => {
+    scans++;
     const asm = new Assembler(Cpu.P02, lateAssembly.opts);
     asm.linkEnv = linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant};
     asm.globalKinds = lateAssembly.globalKinds;
@@ -147,30 +161,46 @@ export function replayModule(
   };
 
   let asm: Assembler;
+  // Each scan should resolve at least one conditional
+  // so we run it multiple times to resolve each of the conditionals
+  // until its stable
+  let replayed: Module|undefined;
   if (lateAssembly.condQueries.length) {
-    // Retry scanning over and over to try and resolve all banks for data
-    // that reference forward labels. This sucks and needs replacing.
     let known: ReadonlyMap<string, readonly string[]> = new Map();
-    asm = run(known, true);
-    let converged = false;
-    for (let iter = 0; iter < MAX_LOCAL_REF_SCAN_ITERATIONS; iter++) {
-      asm.module(); // finalize the scope tree (closeScopes/resolveDeferredOps)
-      const next = asm.collectLocalSegments();
-      if (localSegmentsEqual(known, next)) { converged = true; break; }
+    const everQueried = new Set<string>();
+    for (let iter = 0; ; iter++) {
+      const scan = run(known, true);
+      const scanned = scan.module();
+      const next = scan.collectLocalSegments();
+      for (const name of scan.localRefQueries)
+        everQueried.add(name);
+      if (queriedSegmentsEqual(known, next, scan.localRefQueries)) {
+        if (scan.toleratedIfs === 0) {
+          // No unresolved conditionals, and segments are now stable.
+          asm = scan;
+          replayed = scanned;
+        } else {
+          // If the segments haven't changed but we are still processing unresolvable
+          // conditionals, then lets get it to error out with this pass.
+          asm = run(next, false);
+        }
+        break;
+      }
+      if (iter >= everQueried.size) {
+        fail(unstableDiagnostic(known, next, scan.localRefQueries, module.name));
+      }
       known = next;
-      asm = run(known, true);
     }
-    // If we failed to converge, force a bad compilation so it errors out
-    asm = run(converged ? known : undefined, false);
   } else {
+    // Regular case for running the late pass with no special conditionals
     asm = run(undefined, false);
   }
 
-  const replayed = asm.module();
+  replayed ??= asm.module();
   replayed.name = module.name;
   const messages = asm.getMessages();
   const hasErrors = messages.some(m => m.level === 'error');
-  return {success: !hasErrors, module: replayed, messages: [...messages]};
+  return {success: !hasErrors, module: replayed, messages: [...messages], scans};
 }
 
 /** Result of replaying whichever modules a `LinkTimeEnv` disagrees with. */
