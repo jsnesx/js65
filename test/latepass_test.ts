@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
+import {Assembler} from '../src/assembler.ts';
+import {Cpu} from '../src/cpu.ts';
 import {buildLinkTimeEnv, mergeModuleSegments, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
 import {assemble as libAssemble, type AssemblyInput} from '../src/libassembler.ts';
 import {SymbolIndex} from '../src/lspindex.ts';
@@ -426,5 +428,107 @@ start:
 .endscope
 `);
     expect(messages(result.messages)).toContain('Cannot re-enter scope foo');
+  });
+});
+
+describe('qualified names in a link-time .if', function() {
+  const SEGMENTS = `
+.segment "CODE" :bank $00 :size $2000 :mem $8000 :off $0000
+.segment "BANK1" :bank $01 :size $2000 :mem $a000 :off $2000
+`;
+
+  function assembleSource(code: string) {
+    const result = libAssemble([{type: 'source', name: 'main.s', code}],
+                               {lineContinuations: true});
+    const env = buildLinkTimeEnv(result.modules,
+                                 mergeModuleSegments(result.modules));
+    return {result, env};
+  }
+
+  const messages = (msgs: readonly {message: string}[]) => msgs.map(m => m.message);
+
+  it('settles a qualified forward ref in the same scope', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "CODE"
+.scope Far
+start:
+  nop
+.if .bank(Far::Target) <> .bank(*)
+  nop
+.endif
+Target:
+  rts
+.endscope
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+  });
+
+  it('still settles an unqualified forward ref in the same scope', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "CODE"
+.scope Far
+start:
+  nop
+.if .bank(Target) <> .bank(*)
+  nop
+.endif
+Target:
+  rts
+.endscope
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+  });
+
+  it('keys collected segments by qualified name', function() {
+    const asm = new Assembler(Cpu.P02);
+    asm.segment('CODE');
+    asm.scope('One');
+    asm.label('Target');
+    asm.byte(0);
+    asm.endScope();
+    asm.scope('Two');
+    asm.label('Target');
+    asm.byte(0);
+    asm.endScope();
+    expect([...asm.collectLocalSegments().keys()])
+        .toEqual(['One::Target', 'Two::Target']);
+  });
+
+  it('skips anonymous scopes when qualifying a key', function() {
+    const asm = new Assembler(Cpu.P02);
+    asm.segment('CODE');
+    asm.scope(undefined);
+    asm.scope('Far');
+    asm.label('Target');
+    asm.byte(0);
+    asm.endScope();
+    asm.endScope();
+    expect([...asm.collectLocalSegments().keys()]).toEqual(['Far::Target']);
+  });
+
+  it('does not collide same-named labels in sibling scopes', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "CODE"
+.scope One
+  .if .bank(Two::Target) <> .bank(*)
+  nop
+  .endif
+Target:
+  rts
+.endscope
+.segment "BANK1"
+.scope Two
+Target:
+  rts
+.endscope
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    // Both labels used to share the bare key `Target`, so one shadowed the other.
+    expect(messages(replay.messages).some(m => /lands in a different segment/.test(m)))
+        .toBe(false);
   });
 });

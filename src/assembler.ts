@@ -200,6 +200,17 @@ class Scope extends BaseScope {
   label?: string;
   /** Created by a forward reference, before its `.scope`/`.proc` was seen. */
   forwardDeclared?: boolean;
+  /** This scope's own name, unset for the global and anonymous scopes. */
+  name?: string;
+
+  /** Find the scope prefix without the name of the label */
+  qualifiedPrefix(): string {
+    const parts: string[] = [];
+    for (let scope: Scope|undefined = this; scope?.parent; scope = scope.parent) {
+      if (scope.name) parts.unshift(scope.name);
+    }
+    return parts.length ? `${parts.join('::')}::` : '';
+  }
 
   constructor(readonly parent?: Scope, public kind?: 'scope'|'proc') {
     super();
@@ -270,6 +281,7 @@ class Scope extends BaseScope {
       if (!child) {
         child = new Scope(scope);
         child.forwardDeclared = true;
+        child.name = parts[i];
         scope.children.set(parts[i], child);
       }
       scope = child;
@@ -750,6 +762,27 @@ export class Assembler {
     };
   }
 
+  /** Find the fully qualified scope name for a label ie: Scope::Inner::Label */
+  private localRefKey(name: string): string|undefined {
+    // Cheap locals and `*`/anonymous/rts/relative refs are never scope-qualified.
+    if (name.startsWith('@')) return undefined;
+    if (parseSymbol(name).type !== 'none') return undefined;
+    if (name.includes('::')) {
+      const picked =
+          this.currentScope.pickScope(name, undefined, 'undefined');
+      if (!picked) return undefined;
+      const [tail, scope] = picked;
+      return scope.qualifiedPrefix() + tail;
+    }
+    for (let scope: Scope|undefined = this.currentScope; scope;
+         scope = scope.parent) {
+      const sym = scope.symbols.get(name);
+      if (sym) return scope.qualifiedPrefix() + name;
+    }
+    // Not declared yet, so a forward reference lands in the current scope.
+    return this.currentScope.qualifiedPrefix() + name;
+  }
+
   resolve(expr: Expr): Expr {
     const out = Exprs.traverse(expr, (e, rec) => {
       // Need to check to see if we are resolving a `.sizeof` operation here
@@ -766,9 +799,11 @@ export class Assembler {
       // using the localForwardRefs from the linker, otherwise track it for the latepass.
       if (DEFERRABLE_LINK_OPS.has(e.op) && e.args?.length === 1 &&
           e.args[0].op === 'sym' && e.args[0].sym != null) {
-        if (this.inCondition) this.localRefQueries.add(e.args[0].sym);
-        if (this.linkEnv?.localForwardRefs?.has(e.args[0].sym)) {
-          return Exprs.evaluate(e, this.evalEnv());
+        const key = this.localRefKey(e.args[0].sym) ?? e.args[0].sym;
+        if (this.inCondition) this.localRefQueries.add(key);
+        if (this.linkEnv?.localForwardRefs?.has(key)) {
+          return Exprs.evaluate({...e, args: [{...e.args[0], sym: key}]},
+                                this.evalEnv());
         }
       }
       while (e.op === 'sym' && e.sym) {
@@ -1257,18 +1292,22 @@ export class Assembler {
    */
   collectLocalSegments(): Map<string, readonly string[]> {
     const out = new Map<string, readonly string[]>();
-    const visit = (scope: Scope) => {
+    // Keyed by qualified name so `Far::Target` and a bare `Target` in another
+    // scope stay distinct, matching how a reference spells them.
+    const visit = (scope: Scope, prefix: string) => {
       for (const [name, sym] of scope.symbols) {
         if (isSizeOfSymbol(name) || name.startsWith('@')) continue;
         const chunkIndex = sym.expr?.meta?.chunk;
         if (chunkIndex == null) continue;
         const segs = this.chunks[chunkIndex]?.segments;
-        if (segs) out.set(name, segs);
+        if (segs) out.set(prefix + name, segs);
       }
-      for (const child of scope.children.values()) visit(child);
-      for (const child of scope.anonymousChildren) visit(child);
+      for (const [name, child] of scope.children) visit(child, `${prefix}${name}::`);
+      // An anonymous scope has no name to qualify with, so its symbols are only
+      // reachable unqualified from inside it.
+      for (const child of scope.anonymousChildren) visit(child, prefix);
     };
-    visit(this.currentScope.global);
+    visit(this.currentScope.global, '');
     return out;
   }
 
@@ -2653,6 +2692,7 @@ export class Assembler {
     const child = new Scope(this.currentScope, kind);
     child.startPc = this.pc();
     if (name) {
+      child.name = name;
       this.currentScope.children.set(name, child);
     } else {
       this.currentScope.anonymousChildren.push(child);
