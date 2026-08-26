@@ -1657,7 +1657,8 @@ class Link {
                                     m.lateAssembly?.condQueries.length)) return false;
     const linkEnv = buildLinkTimeEnv(this.rawModules, merged);
     const noMessages = this.rawModules.map(() => []);
-    const replayed = replayModules(this.rawModules, noMessages, linkEnv, signal);
+    const replayed = replayModules(this.rawModules, noMessages, linkEnv, signal,
+                                   this.errorCollector?.limit);
     if (this.errorCollector) this.errorCollector.merge(replayed.messages);
     let didReplace = false;
     for (let i = 0; i < this.rawModules.length; i++) {

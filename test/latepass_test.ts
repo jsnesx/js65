@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {buildLinkTimeEnv} from '../src/latepass.ts';
+import {buildLinkTimeEnv, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
+import {assemble as libAssemble, type AssemblyInput} from '../src/libassembler.ts';
 import type {Module, Segment, Symbol} from '../src/module.ts';
 
 function chunk(segments: string[]) {
@@ -120,5 +121,49 @@ describe('buildLinkTimeEnv', function() {
       const env = buildLinkTimeEnv([], segments);
       expect(env.segmentBank(['GHOST'])).toBeUndefined();
     });
+  });
+});
+
+describe('replayModules error limit', function() {
+  // Every `.if` body is deferred on pass 1, so its errors only land on replay.
+  function assembleWithErrorsBehindIf(count: number) {
+    const lines = ['.import cond', '.if cond'];
+    for (let i = 0; i < count; i++) lines.push(`  .error "boom ${i}"`);
+    lines.push('.endif');
+    const result = libAssemble(
+        [{type: 'source', code: lines.join('\n') + '\n', name: 'test.s'} as AssemblyInput],
+        {});
+    if (!result.success) throw new Error(JSON.stringify(result.messages));
+    return result;
+  }
+
+  const env: LinkTimeEnv = {
+    addrSize: () => 2,
+    bank: () => undefined,
+    segmentBank: () => undefined,
+  };
+
+  const errorsOf = (msgs: readonly {level: string, message: string}[]) =>
+      msgs.filter(m => m.level === 'error' && m.message.startsWith('boom'));
+
+  it('returns every message when the limit is raised past the error count', function() {
+    const result = assembleWithErrorsBehindIf(40);
+    const replayed = replayModules(
+        result.modules, result.moduleMessages, env, undefined, 1000);
+    expect(replayed.success).toBe(false);
+    expect(errorsOf(replayed.messages).length).toBe(40);
+  });
+
+  it('treats a limit of 0 as unlimited', function() {
+    const result = assembleWithErrorsBehindIf(40);
+    const replayed = replayModules(
+        result.modules, result.moduleMessages, env, undefined, 0);
+    expect(errorsOf(replayed.messages).length).toBe(40);
+  });
+
+  it('still stops at the recorded limit when no override is given', function() {
+    const result = assembleWithErrorsBehindIf(40);
+    expect(() => replayModules(result.modules, result.moduleMessages, env))
+        .toThrow(/too many errors/);
   });
 });

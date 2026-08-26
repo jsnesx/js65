@@ -141,18 +141,20 @@ export function replayModule(
   module: Module,
   linkEnv?: LinkTimeEnv,
   signal?: CancelSignal,
+  errorLimit?: number,
 ): ReplayResult {
   const lateAssembly = module.lateAssembly;
   if (!lateAssembly) {
     throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
   }
   const {stream} = lateAssembly;
+  const opts = errorLimit != null ? {...lateAssembly.opts, errorLimit} : lateAssembly.opts;
   const autoImportNames = new Set((module.autoImports ?? []).map(a => a.name));
   let scans = 0;
   const run = (localForwardRefs: ReadonlyMap<string, readonly string[]>|undefined,
                tolerant: boolean) => {
     scans++;
-    const asm = new Assembler(Cpu.P02, lateAssembly.opts);
+    const asm = new Assembler(Cpu.P02, opts);
     asm.linkEnv = linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant};
     asm.globalKinds = lateAssembly.globalKinds;
     asm.autoImportNames = autoImportNames;
@@ -228,8 +230,9 @@ export function replayModules(
   moduleMessages: readonly (readonly AssemblerMessage[])[],
   linkEnv: LinkTimeEnv,
   signal?: CancelSignal,
+  errorLimit?: number,
 ): ReplayModulesResult {
-  const collector = new ErrorCollector();
+  const collector = new ErrorCollector(errorLimit);
   const outModules: Module[] = [];
   for (let i = 0; i < modules.length; i++) {
     const module = modules[i];
@@ -241,7 +244,7 @@ export function replayModules(
       continue;
     }
     collector.discardAsmPass();
-    const replay = replayModule(module, linkEnv, signal);
+    const replay = replayModule(module, linkEnv, signal, errorLimit);
     collector.merge(replay.messages);
     outModules.push(replay.module);
   }
