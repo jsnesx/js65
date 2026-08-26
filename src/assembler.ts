@@ -687,9 +687,11 @@ export class Assembler {
             (this.chunk.org + this.chunk.data.length).toString(16)}`;
   }
 
+  private _evalEnv?: Exprs.LinkTimeEvalEnv;
+
   /** Adapts the linker provided environment to combine it with the chunk info */
   private evalEnv(): Exprs.LinkTimeEvalEnv {
-    return {
+    return this._evalEnv ??= {
       addrSize: (sym) => {
         const segs = this.linkEnv?.localForwardRefs?.get(sym);
         return segs ? this.linkEnv?.segmentAddrSize?.(segs) : this.linkEnv?.addrSize(sym);
