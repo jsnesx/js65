@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {buildLinkTimeEnv, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
+import {buildLinkTimeEnv, mergeModuleSegments, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
 import {assemble as libAssemble, type AssemblyInput} from '../src/libassembler.ts';
+import {SymbolIndex} from '../src/lspindex.ts';
 import type {Module, Segment, Symbol} from '../src/module.ts';
 
 function chunk(segments: string[]) {
@@ -149,7 +150,7 @@ describe('replayModules error limit', function() {
   it('returns every message when the limit is raised past the error count', function() {
     const result = assembleWithErrorsBehindIf(40);
     const replayed = replayModules(
-        result.modules, result.moduleMessages, env, undefined, 1000);
+        result.modules, result.moduleMessages, env, undefined, {errorLimit: 1000});
     expect(replayed.success).toBe(false);
     expect(errorsOf(replayed.messages).length).toBe(40);
   });
@@ -157,7 +158,7 @@ describe('replayModules error limit', function() {
   it('treats a limit of 0 as unlimited', function() {
     const result = assembleWithErrorsBehindIf(40);
     const replayed = replayModules(
-        result.modules, result.moduleMessages, env, undefined, 0);
+        result.modules, result.moduleMessages, env, undefined, {errorLimit: 0});
     expect(errorsOf(replayed.messages).length).toBe(40);
   });
 
@@ -165,5 +166,177 @@ describe('replayModules error limit', function() {
     const result = assembleWithErrorsBehindIf(40);
     expect(() => replayModules(result.modules, result.moduleMessages, env))
         .toThrow(/too many errors/);
+  });
+});
+
+describe('mergeModuleSegments', function() {
+  function moduleSegs(...segments: Segment[]): Module {
+    return {segments};
+  }
+
+  it('produces the segment table buildLinkTimeEnv reads', function() {
+    const modules = [moduleWith([['ZP']], [exported('foo', 0)])];
+    modules[0].segments = [{name: 'ZP', addressing: 1}];
+    const env = buildLinkTimeEnv(modules, mergeModuleSegments(modules));
+    expect(env.addrSize('foo')).toBe(1);
+  });
+
+  it('merges the same segment declared across two modules', function() {
+    const segments = mergeModuleSegments([
+      moduleSegs({name: 'CODE', bank: 2}),
+      moduleSegs({name: 'CODE', addressing: 2, size: 0x2000}),
+    ]);
+    expect(segments.get('CODE')).toEqual(
+        {name: 'CODE', bank: 2, addressing: 2, size: 0x2000});
+  });
+
+  it('takes the last declaration when two modules disagree on bank', function() {
+    const segments = mergeModuleSegments([
+      moduleSegs({name: 'CODE', bank: 1}),
+      moduleSegs({name: 'CODE', bank: 2}),
+    ]);
+    expect(segments.get('CODE')!.bank).toBe(2);
+  });
+
+  it('concatenates free lists rather than replacing them', function() {
+    const segments = mergeModuleSegments([
+      moduleSegs({name: 'CODE', free: [[0, 0x10]]}),
+      moduleSegs({name: 'CODE', free: [[0x20, 0x30]]}),
+    ]);
+    expect(segments.get('CODE')!.free).toEqual([[0, 0x10], [0x20, 0x30]]);
+  });
+
+  it('drops composite segments', function() {
+    const segments = mergeModuleSegments([
+      moduleSegs({name: 'FIXED', bank: 1},
+                 {name: 'MIRRORED', mirror: ['FIXED']},
+                 {name: 'POOLED', pool: ['FIXED']}),
+    ]);
+    expect(segments.has('MIRRORED')).toBe(false);
+    expect(segments.has('POOLED')).toBe(false);
+    expect(segments.get('FIXED')!.bank).toBe(1);
+  });
+
+  it('seeds segments from a linker config with no modules', function() {
+    const segments = mergeModuleSegments([], {linkerConfig: `
+      MEMORY { ZP: start = $0, size = $100, type = rw;
+               PRG: start = $8000, size = $8000, file = %O; }
+      SEGMENTS { ZP: load = ZP, type = zp;
+                 CODE: load = PRG, type = ro; }
+    `});
+    expect(segments.get('ZP')!.addressing).toBe(1);
+    expect(segments.get('PRG')!.memory).toBe(0x8000);
+    // A SEGMENTS entry with no same-named area only records where it loads.
+    expect(segments.get('CODE')!.load).toBe('PRG');
+  });
+
+  it('lets a module .segment attr override the config', function() {
+    const segments = mergeModuleSegments(
+        [moduleSegs({name: 'CODE', bank: 7})],
+        {linkerConfig: `
+          MEMORY { CODE: start = $8000, size = $8000, bank = $1, file = %O; }
+          SEGMENTS { CODE: load = CODE; }
+        `});
+    expect(segments.get('CODE')!.bank).toBe(7);
+    expect(segments.get('CODE')!.memory).toBe(0x8000);
+  });
+
+  it('ignores a malformed linker config', function() {
+    const segments = mergeModuleSegments(
+        [moduleSegs({name: 'CODE', bank: 1})],
+        {linkerConfig: 'MEMORY { this is not a config'});
+    expect(segments.get('CODE')!.bank).toBe(1);
+  });
+
+  it('seeds segments from a built-in target', function() {
+    const segments = mergeModuleSegments([], {target: 'nes-nrom'});
+    expect(segments.get('ZEROPAGE')!.addressing).toBe(1);
+    expect(segments.get('CODE')!.memory).toBe(0x8000);
+  });
+
+  it('ignores an unknown target', function() {
+    const segments = mergeModuleSegments([moduleSegs({name: 'CODE'})],
+                                         {target: 'not-a-target'});
+    expect([...segments.keys()]).toEqual(['CODE']);
+  });
+});
+
+describe('replay symbolIndex override', function() {
+  // `inner` sits behind a `.bank` comparison, which only a linkEnv can settle,
+  // so pass 1 skips the whole body and never indexes it.
+  const main: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.import Target
+.scope outer
+always:
+  nop
+.if .bank(Target) <> .bank(*)
+inner:
+  nop
+.endif
+.endscope
+`};
+  const other: AssemblyInput = {type: 'source', name: 'other.s', code: `
+.segment "BANK1" :bank $01 :size $2000 :mem $9000 :off $8000
+.export Target
+Target:
+  rts
+`};
+
+  function assembleWithIndex() {
+    const symbolIndex = new SymbolIndex();
+    const result = libAssemble([main, other],
+                               {symbolIndex, lineContinuations: true});
+    if (!result.success) throw new Error(JSON.stringify(result.messages));
+    const env = buildLinkTimeEnv(result.modules,
+                                 mergeModuleSegments(result.modules));
+    return {result, symbolIndex, env};
+  }
+
+  const outerOf = (index: SymbolIndex) =>
+      index.root.children.filter(c => c.name === 'outer');
+
+  it('does not index the .if body without a replay', function() {
+    const {symbolIndex} = assembleWithIndex();
+    const [outer] = outerOf(symbolIndex);
+    expect(outer.symbols.has('always')).toBe(true);
+    expect(outer.symbols.has('inner')).toBe(false);
+  });
+
+  it('collects a symbol defined inside an .if body into the fresh index', function() {
+    const {result, env} = assembleWithIndex();
+    const replayIndex = new SymbolIndex();
+    replayModules(result.modules, result.moduleMessages, env, undefined,
+                  {symbolIndex: replayIndex});
+    const [outer] = outerOf(replayIndex);
+    expect(outer.symbols.has('inner')).toBe(true);
+  });
+
+  it('leaves the pass-1 index untouched when replay gets its own', function() {
+    const {result, symbolIndex, env} = assembleWithIndex();
+    const before = symbolIndex.root.children.length;
+    replayModules(result.modules, result.moduleMessages, env, undefined,
+                  {symbolIndex: new SymbolIndex()});
+    expect(symbolIndex.root.children.length).toBe(before);
+    expect(outerOf(symbolIndex)[0].symbols.has('inner')).toBe(false);
+  });
+
+  it('records each scope once even though replay rescans', function() {
+    const {result, env} = assembleWithIndex();
+    const replayIndex = new SymbolIndex();
+    replayModules(result.modules, result.moduleMessages, env, undefined,
+                  {symbolIndex: replayIndex});
+    expect(outerOf(replayIndex).length).toBe(1);
+  });
+
+  it('replays byte-identical modules with no override', function() {
+    const {result, env} = assembleWithIndex();
+    const withIndex = replayModules(result.modules, result.moduleMessages, env,
+                                    undefined, {symbolIndex: new SymbolIndex()});
+    const plain = assembleWithIndex();
+    const without = replayModules(plain.result.modules, plain.result.moduleMessages,
+                                  plain.env);
+    expect(without.success).toBe(withIndex.success);
+    expect(without.messages).toEqual(withIndex.messages);
   });
 });

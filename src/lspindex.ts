@@ -178,6 +178,35 @@ export class SymbolIndex {
     }
     return undefined;
   }
+
+  /** Files that any root-level scope in this index opened in. */
+  rootScopeFiles(): Set<string> {
+    const files = new Set<string>();
+    for (const c of this.root.children) {
+      if (c.start) files.add(c.start.file);
+    }
+    return files;
+  }
+
+  dropFiles(files: ReadonlySet<string>): void {
+    this.root.children = this.root.children.filter(
+        c => !c.start || !files.has(c.start.file));
+  }
+
+  adopt(other: SymbolIndex): void {
+    this.root.children.push(...other.root.children);
+    for (const [name, sym] of other.root.symbols) {
+      this.root.symbols.set(name, sym);
+    }
+    for (const scope of other.walk()) {
+      for (const sym of scope.symbols.values()) {
+        const module = other.modules.get(sym);
+        if (module != null) this.modules.set(sym, module);
+        const kind = other.kinds.get(sym);
+        if (kind != null) this.kinds.set(sym, kind);
+      }
+    }
+  }
 }
 /** A half-open span of source lines that the preprocessor threw away. */
 export interface InactiveRegion {
