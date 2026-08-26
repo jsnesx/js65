@@ -340,3 +340,91 @@ Target:
     expect(without.messages).toEqual(withIndex.messages);
   });
 });
+
+describe('forward-declared scopes in a link-time .if', function() {
+  const SEGMENTS = `
+.segment "CODE" :bank $00 :size $2000 :mem $8000 :off $0000
+.segment "BANK1" :bank $01 :size $2000 :mem $a000 :off $2000
+`;
+
+  function assembleSource(code: string) {
+    const result = libAssemble([{type: 'source', name: 'main.s', code}],
+                               {lineContinuations: true});
+    const env = buildLinkTimeEnv(result.modules,
+                                 mergeModuleSegments(result.modules));
+    return {result, env};
+  }
+
+  const messages = (msgs: readonly {message: string}[]) => msgs.map(m => m.message);
+
+  it('assembles a qualified name whose scope comes later in the file', function() {
+    const {result} = assembleSource(SEGMENTS + `
+.segment "CODE"
+start:
+  nop
+.if .bank(Far::Target) <> .bank(*)
+  nop
+.endif
+.segment "BANK1"
+.scope Far
+Target:
+  rts
+.endscope
+`);
+    expect(messages(result.messages)).toEqual([]);
+    expect(result.success).toBe(true);
+  });
+
+  it('replays without failing on the not-yet-declared scope', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "CODE"
+start:
+  nop
+.if .bank(Far::Target) <> .bank(*)
+  nop
+.endif
+.segment "BANK1"
+.scope Far
+Target:
+  rts
+.endscope
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).not.toContain('Could not resolve scope Far');
+  });
+
+  it('resolves a forward-scoped operand reference', function() {
+    const {result} = assembleSource(SEGMENTS + `
+.segment "CODE"
+start:
+  jmp Far::Target
+.segment "BANK1"
+.scope Far
+Target:
+  rts
+.endscope
+`);
+    expect(messages(result.messages)).toEqual([]);
+    expect(result.success).toBe(true);
+  });
+
+  it('still reports a scope that is never declared', function() {
+    const {result} = assembleSource(SEGMENTS + `
+.segment "CODE"
+start:
+  lda #Nope::Value
+  rts
+`);
+    expect(result.success).toBe(false);
+  });
+
+  it('still rejects re-entering a scope that was really declared', function() {
+    const {result} = assembleSource(SEGMENTS + `
+.scope foo
+.endscope
+.scope foo
+.endscope
+`);
+    expect(messages(result.messages)).toContain('Cannot re-enter scope foo');
+  });
+});
