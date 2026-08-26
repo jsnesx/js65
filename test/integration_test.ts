@@ -586,7 +586,10 @@ Trampoline:
 
   describe('Error handling', function() {
     it('should report undefined symbol errors', function() {
+      // `.autoimport -` so this is caught while assembling rather than being
+      // deferred to the linker as an implicit import.
       const source = `
+.autoimport -
 .segment "PRG"
 .org $8000
   lda UndefinedSymbol
@@ -1205,7 +1208,10 @@ lbl2:
     });
 
     it('should collect expression evaluation errors and keep going', function() {
+      // `.autoimport -` keeps `StillAssembled` an assemble-time error, so it
+      // shows that assembly continued past the two expression failures.
       const source = `
+.autoimport -
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
   .byte 1/0
@@ -1220,15 +1226,16 @@ lbl2:
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
       const divide = errors.find(e => e.message === 'Division by zero');
-      expect(divide?.source?.line).toBe(4);
+      expect(divide?.source?.line).toBe(5);
       const strat = errors.find(e => e.message === '.strat index out of range');
-      expect(strat?.source?.line).toBe(5);
+      expect(strat?.source?.line).toBe(6);
       // The lines after the failures were still assembled.
       expect(errors.some(e => e.message.includes('StillAssembled'))).toBe(true);
     });
 
     it('should stop after too many errors', function() {
       const lines = [
+        '.autoimport -',
         '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000',
         '.org $8000',
       ];
@@ -1276,6 +1283,7 @@ lbl2:
 
     it('should continue after unbalanced brace errors', function() {
       const source = `
+.autoimport -
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
 .define MACRO1 { nop
@@ -1335,6 +1343,7 @@ ValidLabel:
       // assembler treats as an internal fault and rethrows, so the first typo
       // in a file hid every error after it.
       const source = `
+.autoimport -
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
   lda #$01
@@ -1348,9 +1357,9 @@ ValidLabel:
       expect(result.success).toBe(false);
       const errors = result.messages.filter(m => m.level === 'error');
       expect(errors.map(e => `${e.message} @ ${e.source?.line}`)).toEqual([
-        'Bad mnemonic: bogusinstr @ 5',
-        'Bad mnemonic: otherbogus @ 6',
-        `Symbol 'Undefined' undefined @ 7`,
+        'Bad mnemonic: bogusinstr @ 6',
+        'Bad mnemonic: otherbogus @ 7',
+        `Symbol 'Undefined' undefined @ 8`,
       ]);
     });
 
@@ -1405,6 +1414,7 @@ ValidLabel:
       // `.ifdef` with no argument fails in the preprocessor, which used to
       // propagate out of the assemble and drop the rest of the file.
       const source = `
+.autoimport -
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
 .org $8000
   .ifdef

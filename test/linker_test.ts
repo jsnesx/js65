@@ -2516,6 +2516,49 @@ describe('FreeSpace', function() {
 });
 
 describe('late assembly pass', function() {
+  it('resolves an autoimported symbol against another module\'s export',
+     function() {
+    const cfg = `
+      MEMORY {
+        ZP:   start = $0000, size = $0100;
+        PRG0: start = $8000, size = $8000, type = ro, file = %O, bank = 0;
+      }
+      SEGMENTS {
+        ZEROPAGE: load = ZP, type = zp;
+        CODE: load = PRG0, type = ro;
+      }
+    `;
+    // `main.s` never declares Target - autoimport infers the import, and the
+    // late pass sizes it zp because the export landed in a zp segment.
+    const other: AssemblyInput = {
+      type: 'source', name: 'other.s',
+      code: `.segment "ZEROPAGE"\n.export Target\nTarget: .res 1\n`,
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `.segment "CODE"\n.byte $99\nlda Target\n.byte $88\n`,
+    };
+    const result = compile([main, other],
+        {linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    expect(result.success).toBe(true);
+    const bytes = Array.from(result.outputs[0].data);
+    const i = bytes.indexOf(0x99);
+    // `a5` is zp `lda`; `ad` would mean the late pass left it absolute.
+    expect(bytes.slice(i, i + 4)).toEqual([0x99, 0xa5, 0x00, 0x88]);
+  });
+
+  it('reports an autoimported symbol nothing exports', function() {
+    const result = compile([{
+      type: 'source', name: 'main.s',
+      code: `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000\n` +
+            `.org $8000\njsr Missing\nnop\n`,
+    }], {});
+    expect(result.success).toBe(false);
+    expect(result.messages.filter(m => m.level === 'error').map(m => m.message))
+        .toEqual([expect.stringMatching(/never exported Missing/)]);
+  });
+
   it('re-assembles a module whose plain .import turns out to be zeropage, narrowing to zp', function() {
     // `foo` is a real label in a real `:zp` segment, so `LinkTimeEnv` genuinely
     // disagrees with main.s's pass-1 abs guess (it never wrote `.importzp`).

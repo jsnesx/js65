@@ -208,6 +208,12 @@ export interface LateAssemblyCondQuery {
   source?: SourceInfo;
 }
 
+/** A name `.autoimport` inferred an `.import` for, and where it was referenced. */
+export interface AutoImport {
+  name: string;
+  source?: SourceInfo;
+}
+
 /** Everything needed to re-assemble a module once the linker runs the late pass. */
 export interface LateAssembly {
   sizeQueries: LateAssemblySizeQuery[];
@@ -233,4 +239,6 @@ export interface Module {
   debugSymbols?: Symbol[];
   /** Present only when a symbol's zp/abs size guess needs confirming. */
   lateAssembly?: LateAssembly;
+  /** All undefined symbols turned into imports */
+  autoImports?: AutoImport[];
 }

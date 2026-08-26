@@ -147,6 +147,7 @@ export function replayModule(
     throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
   }
   const {stream} = lateAssembly;
+  const autoImportNames = new Set((module.autoImports ?? []).map(a => a.name));
   let scans = 0;
   const run = (localForwardRefs: ReadonlyMap<string, readonly string[]>|undefined,
                tolerant: boolean) => {
@@ -154,6 +155,7 @@ export function replayModule(
     const asm = new Assembler(Cpu.P02, lateAssembly.opts);
     asm.linkEnv = linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant};
     asm.globalKinds = lateAssembly.globalKinds;
+    asm.autoImportNames = autoImportNames;
     let i = 0;
     const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
     asm.tokens(source, signal);
