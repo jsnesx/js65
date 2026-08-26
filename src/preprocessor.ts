@@ -1018,7 +1018,7 @@ export class Preprocessor implements Tokens.Source {
         } else if (Tokens.eq(front, Tokens.ELSEIF)) {
           // if false ... else if .....
           markerIdx.push(raw.length - 1);
-          if (deferred) return true; // chain already deferred - stop evaluating
+          if (deferred) return true; // chain already deferred so stop evaluating
           dead?.flush();
           const elseOutcome = this.condition(() => {
             const r = this.evaluateConstOrDefer(
