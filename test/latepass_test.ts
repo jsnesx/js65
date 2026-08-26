@@ -532,3 +532,114 @@ Target:
         .toBe(false);
   });
 });
+
+describe('.bank(*) before the chunk is started', function() {
+  const SEGMENTS = `
+.segment "CODE" :bank $00 :size $2000 :mem $8000 :off $0000
+.segment "BANK1" :bank $01 :size $2000 :mem $a000 :off $2000
+`;
+
+  function assembleSource(code: string) {
+    const result = libAssemble([{type: 'source', name: 'main.s', code}],
+                               {lineContinuations: true});
+    const env = buildLinkTimeEnv(result.modules,
+                                 mergeModuleSegments(result.modules));
+    return {result, env};
+  }
+
+  const messages = (msgs: readonly {message: string}[]) => msgs.map(m => m.message);
+
+  it('settles a backward ref compared against .bank(*)', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+Target:
+  rts
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  nop
+.endif
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+  });
+
+  it('settles a scoped backward ref compared against .bank(*)', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+.scope Far
+Target:
+  rts
+.endscope
+.segment "CODE"
+.if .bank(Far::Target) <> .bank(*)
+  nop
+.endif
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+  });
+
+  it('takes the branch when the banks really differ', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+Target:
+  rts
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  nop
+.endif
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    const chunks = replay.modules[0].chunks ?? [];
+    const code = chunks.find(c => c.segments.includes('CODE'));
+    expect(code?.data.length).toBe(1);
+  });
+
+  it('skips the branch when the banks match', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+Target:
+  rts
+.segment "BANK1"
+.if .bank(Target) <> .bank(*)
+  nop
+.endif
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(replay.success).toBe(true);
+    const total = (replay.modules[0].chunks ?? [])
+        .reduce((sum, c) => sum + c.data.length, 0);
+    expect(total).toBe(1); // just the `rts`
+  });
+
+  it('does not materialize a chunk for an empty branch', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+Target:
+  rts
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+.endif
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(replay.success).toBe(true);
+    expect(replay.modules[0].chunks?.length).toBe(1);
+  });
+
+  it('reports segments that disagree on a bank', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+Target:
+  rts
+.segment "CODE", "BANK1"
+.if .bank(Target) <> .bank(*)
+  nop
+.endif
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages).join(' '))
+        .toMatch(/disagreement across segments/);
+  });
+});
