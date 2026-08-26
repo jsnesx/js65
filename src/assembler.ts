@@ -743,6 +743,21 @@ export class Assembler {
 
   private _evalEnv?: Exprs.LinkTimeEvalEnv;
 
+  /**
+   * In the case of a `*`, it doesn't materialize a chunk, so its possible to reference
+   * the .bank(*) which still has a pending chunk. This now handles that pending chunk ref.
+   */
+  private segmentsForChunk(chunkIndex: number): readonly string[]|undefined {
+    if (chunkIndex === this._chunkIndex) return this._chunk?.segments;
+    const chunk = this.chunks[chunkIndex];
+    if (chunk) return chunk.segments;
+    // `ensureChunk` will append it here with the currently selected segments.
+    if (chunkIndex === this.chunks.length && this.segments.length) {
+      return this.segments;
+    }
+    return undefined;
+  }
+
   /** Adapts the linker provided environment to combine it with the chunk info */
   private evalEnv(): Exprs.LinkTimeEvalEnv {
     return this._evalEnv ??= {
@@ -755,8 +770,7 @@ export class Assembler {
         return segs ? this.linkEnv?.segmentBank(segs) : this.linkEnv?.bank(sym);
       },
       chunkBank: (chunkIndex) => {
-        const segs = chunkIndex === this._chunkIndex ?
-            this._chunk?.segments : this.chunks[chunkIndex]?.segments;
+        const segs = this.segmentsForChunk(chunkIndex);
         return segs && this.linkEnv?.segmentBank(segs);
       },
     };
