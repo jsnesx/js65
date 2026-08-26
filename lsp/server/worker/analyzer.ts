@@ -9,7 +9,7 @@ import {assemble, link, searchFiles, type AssemblyInput, type AssemblerOptions, 
 import type {AssemblerMessage, SourceInfo} from '../../../src/error.ts';
 import {InactiveRegionIndex, MacroIndex, SymbolIndex} from '../../../src/lspindex.ts';
 import type {Module, Segment} from '../../../src/module.ts';
-import {lowerLinkerConfig, parseLinkerConfig} from '../../../src/linkerconfig.ts';
+import {buildLinkTimeEnv, mergeModuleSegments, replayModules} from '../../../src/latepass.ts';
 import {joinDir} from '../../../src/util.ts';
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
@@ -43,6 +43,8 @@ export interface ProjectAnalysis {
    * without reassembling. Empty when the assemble failed outright.
    */
   readonly modules: readonly Module[];
+  /** Per-module messages, kept so the late pass can discard a replayed module's. */
+  readonly moduleMessages: readonly (readonly AssemblerMessage[])[];
   readonly ramSegments: ReadonlySet<string>;
 }
 
@@ -66,6 +68,8 @@ export interface AnalyzerOptions {
   onLog?: (msg: string) => void;
   /** Cap on messages a single project's assemble may report. */
   errorLimit?: number;
+  /** Replay link-time `.if` bodies on every pass. Default true. */
+  latePass?: boolean;
 }
 
 interface PendingRun {
@@ -404,6 +408,7 @@ export class Analyzer {
     // that escapes the pass.
     let messages: AssemblerMessage[];
     let modules: readonly Module[] = [];
+    let moduleMessages: readonly (readonly AssemblerMessage[])[] = [];
     try {
       const inputs: AssemblyInput[] = [];
       for (const s of project.sources) {
@@ -419,8 +424,20 @@ export class Analyzer {
       const result = assemble(inputs, asmOpts, callbacks, undefined, token.signal);
       messages = [...result.messages];
       modules = result.modules;
+      moduleMessages = result.moduleMessages;
     } catch (err) {
       messages = [internalErrorMessage(err, project)];
+    }
+
+    // Before the standalone downgrade, since replay's import branch resolves
+    // names the regex would otherwise downgrade.
+    if (this.opts.latePass !== false && modules.length) {
+      const late = this.runLatePass(project, modules, moduleMessages, index,
+                                    token.signal);
+      if (late) {
+        messages = late.messages;
+        modules = late.modules;
+      }
     }
 
     if (standalone) {
@@ -438,7 +455,39 @@ export class Analyzer {
                    diagnostics, touchedUris, uriOf);
 
     return {project, index, macros, inactiveRegions, touchedFiles: touched, standalone,
-            modules, ramSegments: collectRamSegments(project, modules)};
+            modules, moduleMessages,
+            ramSegments: collectRamSegments(project, modules)};
+  }
+
+  private runLatePass(
+      project: Js65Project,
+      modules: readonly Module[],
+      moduleMessages: readonly (readonly AssemblerMessage[])[],
+      index: SymbolIndex,
+      signal: CancelSignal,
+  ): {messages: AssemblerMessage[], modules: readonly Module[]} | undefined {
+    if (!modules.some(m => m.lateAssembly)) return undefined;
+    try {
+      const segments = mergeModuleSegments(modules, project);
+      const linkEnv = buildLinkTimeEnv(modules, segments);
+      const replayIndex = new SymbolIndex();
+      const replayed = replayModules([...modules], moduleMessages, linkEnv, signal, {
+        symbolIndex: replayIndex,
+        errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
+      });
+      if (replayed.replayed.length) {
+        index.dropFiles(replayIndex.rootScopeFiles());
+        index.adopt(replayIndex);
+      }
+      return {messages: replayed.messages, modules: replayed.modules};
+    } catch (err) {
+      // `Expected a constant` is a legitimate link-domain error that the save
+      // pass reports properly, so keep pass 1's list rather than surfacing an
+      // internal error on every keystroke.
+      this.log(`late pass failed for ${project.name}: ${
+          err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
   }
 
   /**
@@ -651,39 +700,12 @@ function hasMemoryLayout(analysis: ProjectAnalysis): boolean {
 
 function collectRamSegments(
     project: Js65Project, modules: readonly Module[]): ReadonlySet<string> {
-  const byName = new Map<string, Segment>();
-  for (const m of modules) {
-    for (const seg of m.segments ?? []) mergeSegment(byName, seg);
-  }
-  if (project.linkerConfig) {
-    try {
-      const cfg = parseLinkerConfig(project.linkerConfig,
-                                    project.linkerConfigPath ?? 'linker.cfg');
-      for (const seg of lowerLinkerConfig(cfg)) mergeSegment(byName, seg);
-    } catch (_e) {
-      // A malformed config is already reported by the link pass. Highlighting
-      // just falls back to treating every label as code.
-    }
-  }
-
+  const byName = mergeModuleSegments(modules, project);
   const out = new Set<string>();
   for (const [name, seg] of byName) {
     if (isRamSegment(seg, byName)) out.add(name);
   }
   return out;
-}
-
-function mergeSegment(byName: Map<string, Segment>, seg: Segment): void {
-  const prior = byName.get(seg.name);
-  if (!prior) {
-    byName.set(seg.name, {...seg});
-    return;
-  }
-  for (const [key, value] of Object.entries(seg)) {
-    if (value !== undefined && prior[key as keyof Segment] === undefined) {
-      (prior as Record<string, unknown>)[key] = value;
-    }
-  }
 }
 
 function isRamSegment(segment: Segment, byName: ReadonlyMap<string, Segment>,

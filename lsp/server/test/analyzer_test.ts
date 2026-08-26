@@ -401,6 +401,48 @@ describe('analyzer', () => {
       expect(analysis.ramSegments.has('CODE')).toBe(false);
       expect(analysis.ramSegments.has('RODATA')).toBe(false);
     });
+
+    // Modules are merged after the config, matching the order the linker seeds
+    // them in, so an explicit `.segment` attr wins over the config's placement.
+    // `type = bss` is not overridden here, since the config saying "this is RAM"
+    // is a claim about the segment, not placement the module can restate.
+    it('lets a module .segment attr override the linker config', async () => {
+      const fs = new MemFs();
+      const cfg = [
+        'MEMORY {',
+        '  SCRATCH: start = $0300, size = $500, type = rw;',
+        '}',
+        'SEGMENTS {',
+        '  SCRATCH: load = SCRATCH;',
+        '}',
+      ].join('\n') + '\n';
+      const code = '.segment "SCRATCH" :mem $8000 :size $100 :out "%O"\n  rts\n';
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}], {
+        rootDir: '/proj',
+        json: JSON.stringify({
+          projects: [{name: 'p', sources: ['main.s'], linkerConfig: 'l.cfg'}],
+        }),
+        extraFiles: {'l.cfg': cfg},
+      });
+      const analysis = [...result.projects.values()][0];
+      expect(analysis.ramSegments.has('SCRATCH')).toBe(false);
+    });
+
+    // The old local merge only knew about modules and the config, so a target's
+    // ZEROPAGE/BSS never registered as RAM.
+    it('collects RAM segments from a built-in target', async () => {
+      const fs = new MemFs();
+      const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: '  rts\n'}], {
+        rootDir: '/proj',
+        json: JSON.stringify({
+          projects: [{name: 'p', sources: ['main.s'], target: 'nes-nrom'}],
+        }),
+      });
+      const analysis = [...result.projects.values()][0];
+      expect(analysis.ramSegments.has('BSS')).toBe(true);
+      expect(analysis.ramSegments.has('ZEROPAGE')).toBe(true);
+      expect(analysis.ramSegments.has('CODE')).toBe(false);
+    });
   });
 
   describe('settled()', () => {
@@ -730,4 +772,148 @@ describe('analyzer', () => {
     expect(scope!.end).toBeDefined();
     expect(scope!.start!.file).toBe(toPosix('/proj/main.s'));
   });
+
+describe('late pass', () => {
+  // `Target` lives in BANK1 while the call site is in CODE, so the `.if` is
+  // true - but only a linkEnv can say so. Pass 1 skips the body entirely.
+  const MAIN = [
+    '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000',
+    '.import Target',
+    '.scope guarded',
+    'before:',
+    '  nop',
+    '.if .bank(Target) <> .bank(*)',
+    'BODY',
+    '.else',
+    'ELSE_BODY',
+    '.endif',
+    '.endscope',
+    '',
+  ].join('\n');
+
+  const OTHER = [
+    '.segment "BANK1" :bank $01 :size $2000 :mem $9000 :off $8000',
+    '.export Target',
+    'Target:',
+    '  rts',
+    '',
+  ].join('\n');
+
+  function mainWith(live: string, dead = '  nop') {
+    return MAIN.replace('BODY', live).replace('ELSE_BODY', dead);
+  }
+
+  async function analyze(main: string, other = OTHER, latePass?: boolean) {
+    const fs = new MemFs();
+    fs.add('/proj/js65.json', JSON.stringify({
+      projects: [{name: 'main', sources: ['main.s', 'other.s']}],
+    }));
+    fs.add('/proj/main.s', main);
+    fs.add('/proj/other.s', other);
+    const analyzer = new Analyzer({
+      workspaceRoot: '/proj', debounceMs: 0,
+      fsImpl: fs.sync as any,
+      ...(latePass === undefined ? {} : {latePass}),
+    });
+    analyzer.onDiagnostics = () => {};
+    const p = analyzer.discoverProject('/proj/js65.json');
+    if (p) analyzer.setProject(p);
+    analyzer.open(pathToUri('/proj/main.s'), main, 1);
+    await new Promise(r => setTimeout(r, 120));
+    return analyzer;
+  }
+
+  const allMessages = (analyzer: Analyzer) =>
+      [...analyzer.getResult()!.diagnostics.values()].flat().map(messageOf);
+
+  it('reports an error inside the live .if branch', async () => {
+    const analyzer = await analyze(mainWith('  .error "live branch"'));
+    expect(allMessages(analyzer).some(m => /live branch/.test(m))).toBe(true);
+  });
+
+  it('does not report an error inside the dead branch', async () => {
+    const analyzer = await analyze(mainWith('  nop', '  .error "dead branch"'));
+    expect(allMessages(analyzer).some(m => /dead branch/.test(m))).toBe(false);
+  });
+
+  it('says nothing about the live branch when the late pass is off', async () => {
+    const analyzer = await analyze(mainWith('  .error "live branch"'),
+                                   OTHER, false);
+    expect(allMessages(analyzer).some(m => /live branch/.test(m))).toBe(false);
+  });
+
+  it('resolves a symbol defined inside the live .if branch', async () => {
+    const analyzer = await analyze(mainWith('inside:\n  nop'));
+    const analysis = analyzer.getProject('main')!;
+    const scope = analysis.index.findScope('guarded');
+    expect(scope).toBeDefined();
+    expect(scope!.symbols.has('inside')).toBe(true);
+  });
+
+  it('indexes each scope once after replaying', async () => {
+    const analyzer = await analyze(mainWith('inside:\n  nop'));
+    const analysis = analyzer.getProject('main')!;
+    const guarded = [...analysis.index.walk()]
+        .filter(s => s.qualifiedName === 'guarded');
+    expect(guarded).toHaveLength(1);
+  });
+
+  it('keeps symbols from a module that did not need replaying', async () => {
+    const other = [
+      '.segment "BANK1" :bank $01 :size $2000 :mem $9000 :off $8000',
+      '.export Target',
+      '.scope untouched',
+      'elsewhere:',
+      '  rts',
+      '.endscope',
+      'Target:',
+      '  rts',
+      '',
+    ].join('\n');
+    const analyzer = await analyze(mainWith('inside:\n  nop'), other);
+    const analysis = analyzer.getProject('main')!;
+    expect(analysis.index.findScope('untouched')).toBeDefined();
+    expect(analysis.index.findScope('guarded')).toBeDefined();
+  });
+
+
+  // linkSaved passes already-replayed modules to link(), which replays them a
+  // second time because `needsReplay` is true for anything with a condQuery.
+  // The re-emitted messages must not double up in the published list.
+  it('does not duplicate late-pass messages when the file is saved', async () => {
+    const analyzer = await analyze(mainWith('  .error "live branch"'));
+    const before = allMessages(analyzer).filter(m => /live branch/.test(m));
+    expect(before).toHaveLength(1);
+
+    const linked = await analyzer.linkSaved(pathToUri('/proj/main.s'));
+    expect(linked).toBeDefined();
+    const after = [...linked!.diagnostics.values()].flat().map(messageOf)
+        .filter(m => /live branch/.test(m));
+    expect(after).toHaveLength(1);
+  });
+
+  it('keeps a link-only error reported exactly once after saving', async () => {
+    const analyzer = await analyze(mainWith('inside:\n  nop'));
+    const linked = await analyzer.linkSaved(pathToUri('/proj/main.s'));
+    expect(linked).toBeDefined();
+    const all = [...linked!.diagnostics.values()].flat().map(messageOf);
+    const counts = new Map<string, number>();
+    for (const m of all) counts.set(m, (counts.get(m) ?? 0) + 1);
+    const dupes = [...counts].filter(([, n]) => n > 1);
+    expect(dupes).toEqual([]);
+  });
+
+  it('leaves a project with no lateAssembly block untouched', async () => {
+    const plain = [
+      '.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000',
+      'start:',
+      '  nop',
+      '',
+    ].join('\n');
+    const withPass = await analyze(plain, OTHER);
+    const withoutPass = await analyze(plain, OTHER, false);
+    expect(allMessages(withPass)).toEqual(allMessages(withoutPass));
+  });
+});
+
 });

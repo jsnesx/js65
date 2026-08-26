@@ -5,7 +5,10 @@ import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
 import { ErrorCollector, fail, type AssemblerMessage } from './error.ts';
 import type { Expr } from './expr.ts';
-import type { Module, Segment } from './module.ts';
+import { lowerLinkerConfig, parseLinkerConfig } from './linkerconfig.ts';
+import { SymbolIndex } from './lspindex.ts';
+import { Segment, type Module } from './module.ts';
+import { Targets } from './preamble.ts';
 import * as Tokens from './token.ts';
 import type { CancelSignal } from './libassembler.ts';
 
@@ -94,6 +97,47 @@ export function buildLinkTimeEnv(
   };
 }
 
+/** The parts of a project that decide which segments exist before linking. */
+export interface SegmentSources {
+  linkerConfig?: string;
+  linkerConfigPath?: string;
+  target?: string;
+}
+
+export function mergeModuleSegments(
+    modules: readonly Module[],
+    config?: SegmentSources): Map<string, Segment> {
+  const byName = new Map<string, Segment>();
+  const add = (seg: Segment) => {
+    if (seg.mirror || seg.pool) return;
+    const prior = byName.get(seg.name);
+    byName.set(seg.name, prior ? Segment.merge(prior, seg) : {...seg});
+  };
+  if (config?.linkerConfig != null) {
+    try {
+      const cfg = parseLinkerConfig(config.linkerConfig,
+                                    config.linkerConfigPath ?? 'linker.cfg');
+      for (const seg of lowerLinkerConfig(cfg)) add(seg);
+    } catch (_e) {
+      // A malformed config is already reported by the link pass.
+    }
+  } else if (config?.target != null) {
+    const target = Targets.get(config.target.toLowerCase());
+    for (const seg of target?.segments ?? []) add(seg);
+  }
+  for (const m of modules) {
+    for (const seg of m.segments ?? []) add(seg);
+  }
+  return byName;
+}
+
+/** Overrides for a replay, on top of the options the module recorded. */
+export interface ReplayOptions {
+  /** Index to collect the replayed scopes and symbols into. */
+  symbolIndex?: SymbolIndex;
+  errorLimit?: number;
+}
+
 /** Result of re-assembling a module from its recorded `lateAssembly` stream. */
 export interface ReplayResult {
   /** Whether replay succeeded (no errors) */
@@ -141,19 +185,27 @@ export function replayModule(
   module: Module,
   linkEnv?: LinkTimeEnv,
   signal?: CancelSignal,
-  errorLimit?: number,
+  options?: ReplayOptions,
 ): ReplayResult {
   const lateAssembly = module.lateAssembly;
   if (!lateAssembly) {
     throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
   }
   const {stream} = lateAssembly;
-  const opts = errorLimit != null ? {...lateAssembly.opts, errorLimit} : lateAssembly.opts;
+  const {symbolIndex, errorLimit} = options ?? {};
+  const baseOpts = errorLimit != null ?
+      {...lateAssembly.opts, errorLimit} : lateAssembly.opts;
   const autoImportNames = new Set((module.autoImports ?? []).map(a => a.name));
   let scans = 0;
+  // Only the last scan is real, so each collects into its own index and the
+  // winner is adopted. `lateAssembly.opts` holds the pass-1 index by reference,
+  // so leaving it in place would re-enter the live one on every scan.
+  let scanIndex: SymbolIndex|undefined;
   const run = (localForwardRefs: ReadonlyMap<string, readonly string[]>|undefined,
                tolerant: boolean) => {
     scans++;
+    scanIndex = symbolIndex && new SymbolIndex();
+    const opts = symbolIndex ? {...baseOpts, symbolIndex: scanIndex} : baseOpts;
     const asm = new Assembler(Cpu.P02, opts);
     asm.linkEnv = linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant};
     asm.globalKinds = lateAssembly.globalKinds;
@@ -201,6 +253,7 @@ export function replayModule(
 
   replayed ??= asm.module();
   replayed.name = module.name;
+  if (symbolIndex && scanIndex) symbolIndex.adopt(scanIndex);
   const messages = asm.getMessages();
   const hasErrors = messages.some(m => m.level === 'error');
   return {success: !hasErrors, module: replayed, messages: [...messages], scans};
@@ -211,6 +264,8 @@ export interface ReplayModulesResult {
   success: boolean;
   modules: Module[];
   messages: AssemblerMessage[];
+  /** Indices of the modules that were actually re-assembled. */
+  replayed: number[];
 }
 
 /** Whether any query in `module`'s `lateAssembly` block gets a different answer from `linkEnv`. */
@@ -230,10 +285,11 @@ export function replayModules(
   moduleMessages: readonly (readonly AssemblerMessage[])[],
   linkEnv: LinkTimeEnv,
   signal?: CancelSignal,
-  errorLimit?: number,
+  options?: ReplayOptions,
 ): ReplayModulesResult {
-  const collector = new ErrorCollector(errorLimit);
+  const collector = new ErrorCollector(options?.errorLimit);
   const outModules: Module[] = [];
+  const replayed: number[] = [];
   for (let i = 0; i < modules.length; i++) {
     const module = modules[i];
     collector.openAsmPass();
@@ -244,10 +300,11 @@ export function replayModules(
       continue;
     }
     collector.discardAsmPass();
-    const replay = replayModule(module, linkEnv, signal, errorLimit);
+    const replay = replayModule(module, linkEnv, signal, options);
     collector.merge(replay.messages);
     outModules.push(replay.module);
+    replayed.push(i);
   }
   const messages = [...collector.getMessages()];
-  return {success: !collector.hasErrors(), modules: outModules, messages};
+  return {success: !collector.hasErrors(), modules: outModules, messages, replayed};
 }
