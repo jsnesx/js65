@@ -3272,11 +3272,10 @@ lda #.sizeof(Point)
       expect(a.getMessages()).toEqual([]);
     });
 
-    it('should warn on `-` rather than fail', function() {
+    it('should accept `-` without complaining', function() {
       const a = new Assembler(Cpu.P02);
       a.directive([cs('.autoimport'), op('-')]);
-      expect(a.getMessages().map(m => m.level)).toEqual(['warning']);
-      expect(a.getMessages()[0].message).toMatch(/autoimport/i);
+      expect(a.getMessages()).toEqual([]);
     });
 
     it('should reject anything else after the directive', function() {
@@ -3285,11 +3284,115 @@ lda #.sizeof(Point)
           .toThrow(/Expected \+ or -/);
     });
 
-    it('should keep assembling normally after `-`, feature still on',
-       function() {
+    it('should keep assembling normally after `-`', function() {
       expect(assemble('.autoimport -\nlda #$03\n')).toEqual([0xa9, 0x03]);
-      expect(assembleWarnings('.autoimport -\nlda #$03\n'))
-          .toEqual([expect.stringMatching(/autoimport/i)]);
+      expect(assembleWarnings('.autoimport -\nlda #$03\n')).toEqual([]);
+    });
+
+    it('should leave an undefined symbol for the linker when on', function() {
+      // Autoimport is the js65 default, so an undeclared name assembles as an
+      // implicit import and only the linker gets to complain about it.
+      const m = assembleModule('jsr Foo\n');
+      expect(m.symbols!.some(s => s.expr?.op === 'im' && s.expr.sym === 'Foo'))
+          .toBe(true);
+    });
+
+    it('should require an explicit import when off', function() {
+      expect(assembleErrors('.autoimport -\njsr Foo\n'))
+          .toEqual([expect.stringMatching(/Symbol 'Foo' undefined/)]);
+    });
+
+    it('should still accept a declared import when off', function() {
+      const m = assembleModule('.autoimport -\n.import Foo\njsr Foo\n');
+      expect(m.symbols!.some(s => s.expr?.op === 'im' && s.expr.sym === 'Foo'))
+          .toBe(true);
+    });
+
+    it('should not touch symbols that are defined locally when off', function() {
+      expect(assemble('.autoimport -\nFoo: lda #$03\n  jmp Foo\n'))
+          .toEqual([0xa9, 0x03, 0x4c, 0x00, 0x80]);
+    });
+
+    it('should still allow forward references when off', function() {
+      expect(assemble('.autoimport -\n  jmp Foo\nFoo: lda #$03\n'))
+          .toEqual([0x4c, 0x03, 0x80, 0xa9, 0x03]);
+    });
+
+    it('should apply to the whole module regardless of where it appears',
+       function() {
+      // ca65 treats autoimport as a global switch read at scope-close time,
+      // not a positional one, so a later `-` governs an earlier reference.
+      expect(assembleErrors('jsr Foo\n.autoimport -\n'))
+          .toEqual([expect.stringMatching(/Symbol 'Foo' undefined/)]);
+    });
+
+    it('should record what it inferred on the module', function() {
+      const m = assembleModule('lda Foo\n');
+      expect(m.autoImports!.map(a => a.name)).toEqual(['Foo']);
+      // The reference site rides along so tools can point at it.
+      expect(m.autoImports![0].source).toMatchObject({file: 'test.s', line: 1});
+    });
+
+    it('should record nothing when the name was declared', function() {
+      const m = assembleModule('.import Foo\nlda Foo\n');
+      expect(m.autoImports).toBeUndefined();
+    });
+
+    it('should record nothing for a plain forward reference', function() {
+      const m = assembleModule('jmp Foo\nFoo: rts\n');
+      expect(m.autoImports).toBeUndefined();
+    });
+
+    it('should round-trip autoImports through an object file', function() {
+      // The replay reads this back to size auto-imports, so a separately
+      // assembled `.o` has to carry it.
+      const m = assembleModule('lda Foo\n');
+      const m2 = deserializeObjectFile(serializeObjectFile(m));
+      expect(m2.autoImports).toEqual(m.autoImports);
+    });
+  });
+
+  describe('.autoimport late pass', function() {
+    // An auto-imported name is external, so the module has to defer its width
+    // to the linker exactly the way a declared `.import` does.
+    it('records a size query so the linker can re-size the reference',
+       function() {
+      const m = assembleModule('lda Foo\n');
+      expect(m.lateAssembly).toBeDefined();
+      expect(m.lateAssembly!.sizeQueries.map(q => [q.name, q.guess]))
+          .toEqual([['Foo', 2]]);
+    });
+
+    it('guesses abs on the first pass', function() {
+      const m = assembleModule('lda Foo\nrts\n');
+      expect(Array.from(m.chunks![0].data)).toEqual([0xad, 0xff, 0xff, 0x60]);
+    });
+
+    it('re-sizes to zp when the late pass finds the export in a zp segment',
+       function() {
+      const zpEnv: LinkTimeEnv = {
+        addrSize: () => 1,
+        bank: () => undefined,
+        segmentBank: () => undefined,
+      };
+      const m = assembleModule('lda Foo\nrts\n');
+      const replay = replayModule(m, zpEnv);
+      expect(replay.success).toBe(true);
+      expect(Array.from(replay.module.chunks![0].data))
+          .toEqual([0xa5, 0xff, 0x60]);
+    });
+
+    it('stays abs when the late pass reports an abs export', function() {
+      const absEnv: LinkTimeEnv = {
+        addrSize: () => 2,
+        bank: () => undefined,
+        segmentBank: () => undefined,
+      };
+      const m = assembleModule('lda Foo\nrts\n');
+      const replay = replayModule(m, absEnv);
+      expect(replay.success).toBe(true);
+      expect(Array.from(replay.module.chunks![0].data))
+          .toEqual([0xad, 0xff, 0xff, 0x60]);
     });
   });
 
@@ -4577,12 +4680,21 @@ lda #.sizeof(Point)
     it('treats a struct tag as a scope rather than a value', function() {
       // As in ca65, a struct name names a scope whose size is only reachable
       // through `.sizeof` - it is not itself a symbol holding the size.
+      // With autoimport on it becomes an implicit import, so the complaint
+      // comes from the linker; `.autoimport -` catches it while assembling.
       expect(() => assemble(`
 .struct Player
   hp .word
 .endstruct
   .byte Player
-`)).toThrow(/Symbol 'Player' undefined/);
+`)).toThrow(/Symbol never exported Player/);
+      expect(assembleErrors(`
+.autoimport -
+.struct Player
+  hp .word
+.endstruct
+  .byte Player
+`)).toEqual([expect.stringMatching(/Symbol 'Player' undefined/)]);
     });
 
     it('reports the size of an individual struct field', function() {

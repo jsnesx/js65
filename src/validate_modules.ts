@@ -11,7 +11,7 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
+import type { AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -309,6 +309,13 @@ function validateLateAssemblySizeQuery(v: unknown, path: string): LateAssemblySi
   return out;
 }
 
+function validateAutoImport(v: unknown, path: string): AutoImport {
+  if (!isObject(v)) fail(path, 'expected object');
+  const out: AutoImport = { name: reqString(v.name, `${path}.name`) };
+  if (v.source !== undefined) out.source = validateSourceInfo(v.source, `${path}.source`);
+  return out;
+}
+
 function validateLateAssemblyCondQuery(v: unknown, path: string): LateAssemblyCondQuery {
   if (!isObject(v)) fail(path, 'expected object');
   const out: LateAssemblyCondQuery = {};
@@ -374,6 +381,10 @@ export function parseModule(obj: unknown): Validated<Module> {
     }
     if (obj.lateAssembly !== undefined) {
       out.lateAssembly = validateLateAssembly(obj.lateAssembly, 'module.lateAssembly');
+    }
+    if (obj.autoImports !== undefined) {
+      out.autoImports = reqArray(obj.autoImports, 'module.autoImports')
+        .map((a, i) => validateAutoImport(a, `module.autoImports[${i}]`));
     }
     return { ok: true, value: out };
   } catch (err) {

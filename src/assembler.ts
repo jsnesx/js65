@@ -313,6 +313,9 @@ export class Assembler {
   private zeropageGlobals = new Set<string>();
   /** Names a command-line `-D` defined, which an `.import` may take over. */
   private commandLineDefines = new Set<string>();
+  private autoimportEnabled = true;
+  /** Names turned into implicit imports, so we can blame them if unresolved. */
+  private autoImported: mod.AutoImport[] = [];
 
   /** Current state for tracking .struct and .enum members */
   private structContext:
@@ -438,6 +441,9 @@ export class Assembler {
 
   /** Set by first pass to note whether a global was import or export */
   globalKinds?: Record<string, 'import'|'export'>;
+
+  /** Names marked as import in the first pass, set by the linker in the late pass */
+  autoImportNames?: ReadonlySet<string>;
 
   /** Runs the lint rules, unless linting was turned off. */
   readonly linter?: Linter;
@@ -903,7 +909,8 @@ export class Assembler {
     // If this is a late pass, we can resolve import and globalimport now
     const globalKind = this.globals.get(name);
     if (this.linkEnv && (globalKind === 'import' ||
-        (globalKind === 'global' && this.globalKinds?.[name] === 'import'))) {
+        (globalKind === 'global' && this.globalKinds?.[name] === 'import') ||
+        (globalKind == null && this.autoImportNames?.has(name)))) {
       const expr: Expr = {op: 'im', sym: name};
       const at = firstRef(sym);
       if (at) expr.source = at;
@@ -1041,7 +1048,10 @@ export class Assembler {
     }
 
     for (const [name, sym] of this.currentScope.symbols) {
-      if (!sym.expr) {
+      if (sym.expr) continue;
+      if (this.autoimportEnabled) {
+        this.autoImport(name, sym);
+      } else {
         collector.add('error', `Symbol '${name}' undefined`, firstRef(sym));
       }
     }
@@ -1192,7 +1202,9 @@ export class Assembler {
          stream: this.lateAssemblyStream, opts: this.opts} :
         undefined;
 
-    return {chunks, symbols, segments, debugSymbols, lateAssembly};
+    const autoImports = this.autoImported.length ? this.autoImported : undefined;
+
+    return {chunks, symbols, segments, debugSymbols, lateAssembly, autoImports};
   }
 
   /**
@@ -2441,7 +2453,7 @@ export class Assembler {
     const zp = Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
     // A plain `.import` should be abs, but maybe they meant .importzp
     // the linker may know better once every module is loaded, so query it.
-    if (!zp && this.globals.get(name) === 'import') {
+    if (!zp && this.isImportRef(name)) {
       const answer = this.linkEnv?.addrSize(name);
       if (answer != null) return answer === 1;
       this.lateAssemblyQueries.push({name, guess: 2, source: this._source});
@@ -2449,11 +2461,17 @@ export class Assembler {
     return zp;
   }
 
+  /** True if explicitly imported or autoimported */
+  private isImportRef(name: string): boolean {
+    return this.globals.get(name) === 'import' ||
+        Boolean(this.autoImportNames?.has(name));
+  }
+
   /** The name of an unresolved `.import` reachable through +/- from `expr`, if any. */
   private unresolvedImportIn(expr: Expr): string|undefined {
     if (expr.op === 'sym' || expr.op === 'im') {
       const name = expr.sym;
-      return name && this.globals.get(name) === 'import' && !this.zeropageGlobals.has(name) ?
+      return name && this.isImportRef(name) && !this.zeropageGlobals.has(name) ?
           name : undefined;
     }
     if (expr.op === '+' || expr.op === '-') {
@@ -2495,6 +2513,23 @@ export class Assembler {
       // gets resolved for real (and fails there) once the operand is emitted.
       return undefined;
     }
+  }
+
+  /** Converts undefined syms into imports */
+  private autoImport(name: string, sym: Symbol) {
+    const expr: Expr = {op: 'im', sym: name};
+    const at = firstRef(sym);
+    if (at) expr.source = at;
+    const answer = this.linkEnv?.addrSize(name);
+    if (answer != null) {
+      if (answer === 1) expr.meta = {size: 1};
+    } else {
+      // First pass: the operands referencing this name were already emitted at
+      // the abs guess, so ask the linker to re-run us if it knows better.
+      this.lateAssemblyQueries.push({name, guess: 2, source: at});
+    }
+    sym.expr = expr;
+    this.autoImported.push({name, source: at});
   }
 
   private declareGlobal(ident: string, kind: 'export'|'import'|'global', weak = false) {
@@ -2688,14 +2723,20 @@ export class Assembler {
   }
 
   autoimport(tokens: Token[]) {
-    if (tokens.length === 1) return;
-    const tok = tokens[1];
-    if (tokens.length === 2 && tok.token === 'op' && tok.str === '+') return;
-    if (tokens.length === 2 && tok.token === 'op' && tok.str === '-') {
-      this.errorCollector.add(
-          'warning', `.autoimport - has no effect; late-pass sizing is always on`,
-          tok.source);
+    if (tokens.length === 1) {
+      this.autoimportEnabled = true;
       return;
+    }
+    const tok = tokens[1];
+    if (tokens.length === 2 && tok.token === 'op') {
+      if (tok.str === '+') {
+        this.autoimportEnabled = true;
+        return;
+      }
+      if (tok.str === '-') {
+        this.autoimportEnabled = false;
+        return;
+      }
     }
     this.fail(`Expected + or - after .autoimport`, tok);
   }

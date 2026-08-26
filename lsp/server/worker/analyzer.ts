@@ -426,7 +426,8 @@ export class Analyzer {
     if (standalone) {
       // A file with no owning project gets noise from undefined symbols that
       // a real link would have resolved. Downgrade per the plan.
-      messages = downgradeUndefinedForStandalone(messages);
+      messages = [...downgradeUndefinedForStandalone(messages),
+                  ...standaloneAutoImportWarnings(modules)];
     }
 
     // Anything the assembler couldn't pin to a line still has to reach the
@@ -697,12 +698,32 @@ function isRamSegment(segment: Segment, byName: ReadonlyMap<string, Segment>,
 }
 
 /**
+ * Standalone mode never links, so an `.autoimport`ed name that no other file
+ * would have exported produces no diagnostic at all. Surface each one as the
+ * same `[standalone]` warning a declared-but-unresolved import gets.
+ */
+function standaloneAutoImportWarnings(
+    modules: readonly Module[]): AssemblerMessage[] {
+  const out: AssemblerMessage[] = [];
+  for (const m of modules) {
+    for (const {name, source} of m.autoImports ?? []) {
+      out.push({level: 'warning', source,
+                message: `[standalone] Symbol '${name}' undefined`});
+    }
+  }
+  return out;
+}
+
+/**
  * In standalone mode (no `js65.json`), the file isn't being linked and any
  * import/export references will be unresolved. Downgrade those
  * to warnings so they don't drown out the real diagnostics.
  */
 function downgradeUndefinedForStandalone(messages: AssemblerMessage[]): AssemblerMessage[] {
-  const UNDEFINED = /undefined/i;
+  // With autoimport on, an undeclared name becomes an implicit import, so the
+  // complaint arrives from the linker as "never exported" rather than from the
+  // assembler as "undefined". Both mean the same thing here.
+  const UNDEFINED = /undefined|never exported/i;
   return messages.map(m => m.level === 'error' && UNDEFINED.test(m.message)
       ? {...m, level: 'warning', message: `[standalone] ${m.message}`} : m);
 }
