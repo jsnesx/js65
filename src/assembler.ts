@@ -112,11 +112,16 @@ function firstRef(sym?: Symbol): Tokens.SourceInfo|undefined {
   return sym?.refs?.[0];
 }
 
+/** What to do when a qualified name mentions a scope that doesn't exist yet. */
+type MissingScope = 'fail'|'undefined'|'create';
+
 interface ResolveOpts {
   // Whether to create a forward reference for missing symbols.
   allowForwardRef?: boolean;
   // Reference Tokens.
   ref?: {source?: Tokens.SourceInfo};
+  // How to handle a name whose scope hasn't been declared yet.
+  missingScope?: MissingScope;
 }
 
 interface FwdRefResolveOpts extends ResolveOpts {
@@ -130,7 +135,8 @@ abstract class BaseScope {
   collectRefs?: boolean;
 
   protected pickScope(name: string,
-                      _at?: {source?: Tokens.SourceInfo}): [string, BaseScope] {
+                      _at?: {source?: Tokens.SourceInfo},
+                      _missing?: MissingScope): [string, BaseScope]|undefined {
     return [name, this];
   }
 
@@ -145,7 +151,11 @@ abstract class BaseScope {
   resolve(name: string, opts: ResolveOpts = {}):
       Symbol|undefined {
     const {allowForwardRef = false, ref} = opts;
-    const [tail, scope] = this.pickScope(name, ref);
+    const missingScope = opts.missingScope ??
+        (allowForwardRef ? 'create' : 'fail');
+    const picked = this.pickScope(name, ref, missingScope);
+    if (!picked) return undefined;
+    const [tail, scope] = picked;
     const sym = scope.symbols.get(tail);
 //console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
     if (sym) {
@@ -172,7 +182,7 @@ abstract class BaseScope {
 
   /** Insert a brand new symbol into the table, scoped if there is one open */
   declare(name: string, symbol: Symbol, at?: {source?: Tokens.SourceInfo}): Symbol {
-    const [tail, scope] = this.pickScope(name, at ?? {source: firstRef(symbol)});
+    const [tail, scope] = this.pickScope(name, at ?? {source: firstRef(symbol)})!;
     scope.symbols.set(tail, symbol);
     if (tail !== name) symbol.scoped = true;
     return symbol;
@@ -188,8 +198,10 @@ class Scope extends BaseScope {
   startPc?: Expr;
   /** Name of the label this scope belongs to */
   label?: string;
+  /** Created by a forward reference, before its `.scope`/`.proc` was seen. */
+  forwardDeclared?: boolean;
 
-  constructor(readonly parent?: Scope, readonly kind?: 'scope'|'proc') {
+  constructor(readonly parent?: Scope, public kind?: 'scope'|'proc') {
     super();
     this.global = parent ? parent.global : this;
     this.collectRefs = parent?.collectRefs;
@@ -224,17 +236,45 @@ class Scope extends BaseScope {
   }
 
   /** Splits a qualified symbol name into its unqualified tail and owning scope. */
-  pickScope(name: string, at?: {source?: Tokens.SourceInfo}): [string, Scope] {
+  pickScope(name: string, at?: {source?: Tokens.SourceInfo},
+            missing: MissingScope = 'fail'): [string, Scope]|undefined {
     const split = name.split(RE_SCOPE_SPLIT);
     const tail = split.pop()!;
     const found = this.walkScopes(split);
     // If the name has an explicit scope, this is an error?
     if ('missing' in found) {
+      // A scope declared later in the file isn't an error for a query, and a
+      // reference can forward-declare it the same way a bare name does.
+      if (missing === 'undefined') return undefined;
+      if (missing === 'create') return [tail, this.createScopes(split)];
       Tokens.fail(
           `Could not resolve scope ${split.slice(0, found.missing + 1).join('::')}`,
           at);
     }
     return [tail, found.scope];
+  }
+
+  /** Fills in placeholders for a qualified name whose scopes aren't open yet. */
+  private createScopes(parts: string[]): Scope {
+    // deno-lint-ignore no-this-alias
+    let scope: Scope = this;
+    for (let i = 0; i < parts.length; i++) {
+      if (!i && !parts[i]) {
+        scope = scope.global;
+        continue;
+      }
+      let child = scope.children.get(parts[i]);
+      while (!i && scope.parent && !child) {
+        child = (scope = scope.parent).children.get(parts[i]);
+      }
+      if (!child) {
+        child = new Scope(scope);
+        child.forwardDeclared = true;
+        scope.children.set(parts[i], child);
+      }
+      scope = child;
+    }
+    return scope;
   }
 
   // close() {
@@ -548,7 +588,7 @@ export class Assembler {
     let scope: Scope|undefined = this.currentScope;
     const unscoped = !sym.includes('::');
     do {
-      const s = scope.resolve(sym, {allowForwardRef: false});
+      const s = scope.resolve(sym, {allowForwardRef: false, missingScope: 'undefined'});
       if (s) return s.expr;
     } while (unscoped && (scope = scope.parent));
     return undefined;
@@ -588,14 +628,16 @@ export class Assembler {
 
   constantSymbol(sym: string): boolean {
     // If there's a symbol in a different scope, it's not actually constant.
-    const s = this.currentScope.resolve(sym, {allowForwardRef: false});
+    const s = this.currentScope.resolve(
+        sym, {allowForwardRef: false, missingScope: 'undefined'});
     return Boolean(s && s.expr && !(s.id! < 0));
   }
 
   referencedSymbol(sym: string): boolean {
     // If not referenced in this scope, we don't know which it is...
     // NOTE: this is different from ca65.
-    const s = this.currentScope.resolve(sym, {allowForwardRef: false});
+    const s = this.currentScope.resolve(
+        sym, {allowForwardRef: false, missingScope: 'undefined'});
     return s != null; // NOTE: this counts definitions.
   }
 
@@ -2508,13 +2550,10 @@ export class Assembler {
       }
       return undefined;
     }
-    try {
-      return this.currentScope.resolve(name, {allowForwardRef: false});
-    } catch {
-      // An unresolvable explicit scope shouldn't throw here. The symbol
-      // gets resolved for real (and fails there) once the operand is emitted.
-      return undefined;
-    }
+    // An unresolvable explicit scope shouldn't fail here. The symbol gets
+    // resolved for real (and fails there) once the operand is emitted.
+    return this.currentScope.resolve(
+        name, {allowForwardRef: false, missingScope: 'undefined'});
   }
 
   /** Converts undefined syms into imports */
@@ -2594,6 +2633,16 @@ export class Assembler {
   enterScope(name: string|undefined, kind: 'scope'|'proc', at?: Tokens.SourceInfo) {
     const existing = name ? this.currentScope.children.get(name) : undefined;
     if (existing) {
+      // A forward reference already made this scope, so claim it rather than
+      // treating the declaration as a re-entry.
+      if (existing.forwardDeclared) {
+        existing.forwardDeclared = undefined;
+        existing.kind = kind;
+        existing.startPc = this.pc();
+        this.currentScope = existing;
+        this.opts.symbolIndex?.enterScope(name, kind, at);
+        return;
+      }
       if (this.opts.reentrantScopes) {
         this.currentScope = existing;
         this.opts.symbolIndex?.enterScope(name, kind, at);
