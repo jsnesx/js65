@@ -161,9 +161,8 @@ export function replayModule(
   };
 
   let asm: Assembler;
-  // Each scan should resolve at least one conditional
-  // so we run it multiple times to resolve each of the conditionals
-  // until its stable
+  // Each scan should resolve at least one conditional so we run it multiple times to
+  // resolve each of the conditionals until its stable
   let replayed: Module|undefined;
   if (lateAssembly.condQueries.length) {
     let known: ReadonlyMap<string, readonly string[]> = new Map();
@@ -221,13 +220,7 @@ function needsReplay(module: Module, linkEnv: LinkTimeEnv): boolean {
   });
 }
 
-/**
- * Replays each module whose recorded guesses disagree with `linkEnv`,
- * replacing it in the result. `moduleMessages` (from `assemble()`) must be
- * aligned with `modules`. A replayed module's pass-1 messages are discarded
- * wholesale via `ErrorCollector`'s provisional scope (never merged with
- * pass-2's), so nothing reports twice.
- */
+/** Assembles a list of modules a second time if they need recompiling to resolve in the latepass */
 export function replayModules(
   modules: Module[],
   moduleMessages: readonly (readonly AssemblerMessage[])[],

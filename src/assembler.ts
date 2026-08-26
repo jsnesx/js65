@@ -712,12 +712,8 @@ export class Assembler {
         this.deferredOps.set(e, {kind: 'sizeof', scope: this.currentScope});
         return e;
       }
-      // A `.bank()`/`.bankbyte()`/`.addrsize()` query on a bare local forward
-      // reference has to be answered by name before the generic `sym`
-      // resolution below turns it into a numeric forward-ref placeholder -
-      // that placeholder only resolves once the label is *actually* defined
-      // later in this pass, which is too late for an `.if` that needs the
-      // answer right now.
+      // Attempt to resolve a .bank(ForwardRef) before the rest of the code
+      // using the localForwardRefs from the linker, otherwise track it for the latepass.
       if (DEFERRABLE_LINK_OPS.has(e.op) && e.args?.length === 1 &&
           e.args[0].op === 'sym' && e.args[0].sym != null) {
         if (this.inCondition) this.localRefQueries.add(e.args[0].sym);
@@ -1200,11 +1196,8 @@ export class Assembler {
   }
 
   /**
-   * Segment identity for every named label in this module, keyed by name.
-   * Used during replay so an `.if` can resolve `.bank()`/`.addrsize()` on a
-   * local label defined later in the same module's token stream - see
-   * `replayModule` in latepass.ts, which reruns replay with this map fed
-   * back in as `localForwardRefs` until it stabilizes.
+   * Build out the map of each chunk to the segment list it falls in
+   * so we can check if the latepass is stable or not.
    */
   collectLocalSegments(): Map<string, readonly string[]> {
     const out = new Map<string, readonly string[]>();
@@ -1768,8 +1761,8 @@ export class Assembler {
       // $80 + $8000 will end up in ABS still.
       if (expr.meta?.size == null && expr.args) {
         expr = Exprs.traversePost(expr, Exprs.evaluate);
-        // A compound expr (`foo+1`) doesn't fold zp-ness through an unresolved
-        // import the way a bare `foo` does in `isZeropageRef` - handle it here.
+        // In a compound expression like foo+1, we still need to carry
+        // the addrsize through for foo in the latepass.
         if (expr.meta?.size == null && !expr.meta?.zeropage) {
           const name = this.unresolvedImportIn(expr);
           if (name) {
