@@ -157,19 +157,8 @@ describe('integration: LSP over stdio', () => {
         },
       });
       // Wait for publishDiagnostics.
-      const diag = await new Promise<any>((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error('no diagnostics received')), 4000);
-        const check = () => {
-          const found = client.notifications.find(n => n.method === 'textDocument/publishDiagnostics');
-          if (found) {
-            clearTimeout(t);
-            resolve(found.params);
-          } else {
-            setTimeout(check, 50);
-          }
-        };
-        check();
-      });
+      const notif = await client.waitFor(n => n.method === 'textDocument/publishDiagnostics');
+      const diag = notif.params as any;
       expect(diag.uri).toBe('file:///proj/main.s');
       expect(diag.diagnostics.length).toBeGreaterThan(0);
       expect(diag.diagnostics[0].message).toMatch(/hex/i);

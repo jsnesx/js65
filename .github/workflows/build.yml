@@ -299,6 +299,7 @@ jobs:
 
   npm-package:
     runs-on: ubuntu-latest
+    needs: build
     steps:
       - name: Checkout js65
         uses: actions/checkout@v6
@@ -420,3 +421,58 @@ jobs:
           generate_release_notes: true
           # A tag carrying a prerelease suffix (v2.0.0-rc.1) is marked prerelease.
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  website:
+    runs-on: ubuntu-latest
+    needs: github-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    env:
+      HUGO_VERSION: 0.164.0
+    steps:
+      - name: Install Hugo CLI
+        run: |
+          curl -sL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb" -o /tmp/hugo.deb
+          sudo dpkg -i /tmp/hugo.deb
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Stamp the version from the git tag
+        # Rewrites website/hugo.yaml's `version:` key, which the download
+        # buttons on the site link against.
+        run: bun run gen-version
+      - name: Setup Go
+        # The Hextra theme is a Hugo module, so the build needs a Go toolchain
+        # to fetch it
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: website/go.mod
+          cache-dependency-path: website/go.sum
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v6
+      - name: Fetch Hugo modules
+        working-directory: website
+        # `mod graph` resolves the module tree at the versions go.mod pins,
+        # without upgrading them the way `mod get -u` would.
+        run: hugo mod graph
+      - name: Build with Hugo
+        working-directory: website
+        env:
+          HUGO_ENVIRONMENT: production
+          HUGO_ENV: production
+        run: hugo --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/public
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
