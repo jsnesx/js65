@@ -1096,9 +1096,10 @@ export class Assembler {
       const scopes = this.globalScopes.get(name) ?? [this.currentScope];
       for (const scope of scopes) {
         let sym = scope.symbols.get(name);
-        // A declaration inside a `.proc`/`.scope` can name a symbol that lives
-        // further out - the same lookup an ordinary reference from there does.
-        for (let s = scope.parent; s && !sym?.expr; s = s.parent) {
+        // Try to walk the sym scope looking for the sym, but ONLY while we don't
+        // already have something. This lets it choose a scoped import over an import
+        // with the same name in the parent scope.
+        for (let s = scope.parent; s && sym == null; s = s.parent) {
           const outer = s.symbols.get(name);
           if (outer?.expr) sym = outer;
         }

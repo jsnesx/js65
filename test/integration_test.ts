@@ -694,6 +694,51 @@ FuncB:
       const result = compile([moduleA, moduleB], { lineContinuations: true });
       expect(result.outputs[0].data).toBeTruthy();
     });
+
+    it('should resolve a name imported in both file scope and a nested .proc', function() {
+      // Regression test for closeScopes' parent-walk (assembler.ts ~1104)
+      // clobbering a same-name symbol declared in more than one scope.
+      // See test/z2mario_cheap_local_test.ts for the full-size fixture
+      // this was traced from.
+      const moduleA: AssemblyInput = {
+        type: 'source',
+        name: 'a.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.export FOO
+FOO = $42
+`
+      };
+
+      const moduleB: AssemblyInput = {
+        type: 'source',
+        name: 'b.s',
+        code: `
+.segment "CODE"
+.org $8100
+.import FOO
+  lda #FOO
+  sta $00
+.proc DoThing
+.import FOO
+  lda #FOO
+  beq @done
+  nop
+  nop
+@done:
+  rts
+.endproc
+`
+      };
+
+      const result = compile([moduleA, moduleB], { lineContinuations: true });
+      const errors = result.messages.filter(m => m.level === 'error');
+      if (!result.success) {
+        throw new Error(`Expected a clean link but got ${errors.length} error(s):\n${
+            errors.map(m => `  ${m.message}`).join('\n')}`);
+      }
+      expect(result.outputs[0].data).toBeTruthy();
+    });
   });
 
   describe('IPS patch generation', function() {
