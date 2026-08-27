@@ -142,8 +142,9 @@ describe('analyzer worker', () => {
   }, 15000);
 
   itIfBuilt('lets an open buffer win over the copy on disk', async () => {
-    // The disk copy defines the symbol; the mirrored buffer removes it. If the analysis used
-    // the buffer, the reference goes undefined and something gets reported.
+    // The disk copy defines the symbol; the mirrored buffer removes it. Autoimport would
+    // otherwise swallow the now-undefined reference, so turn it off to force a diagnostic.
+    // If the analysis used the buffer, the reference goes undefined and something gets reported.
     const {root, mainPath, cleanup} = makeProject();
     const {client} = spawnAnalyzer();
     try {
@@ -151,7 +152,7 @@ describe('analyzer worker', () => {
       new FileSync(client).loadProject(config, root);
       client.setProject(config, root);
       const pending = nextDiagnostics(client);
-      client.open(pathToUri(mainPath), 'main:\n  lda #DEFINED_VALUE\n  rts\n', 1);
+      client.open(pathToUri(mainPath), '.autoimport -\nmain:\n  lda #DEFINED_VALUE\n  rts\n', 1);
       const result = await pending;
       const forMain = result.diagnostics.get(pathToUri(mainPath)) ?? [];
       expect(forMain.some(d => /DEFINED_VALUE/.test(messageText(d.message)))).toBe(true);
