@@ -5,6 +5,13 @@ weight: 5
 
 This guide is a quick reference for someone who already knows ca65 and is interested in seeing whats different.
 
+## Multipass Assembly
+
+`ca65` somewhat famously decided on making a single pass assembler, and it suits the project well, but single pass assembly introduces some friction that isn't needed otherwise.
+We take this same concept and extended it to add one more pass at link time, similar to how modern compilers work with `Link Time Optimization` enabled.
+The js65 generated modules contain the original parsed syntax tree so that we can do one final pass during after all of the symbols are resolved.
+This enables a few different things ca65 *can't* do with its current design like using ZP addressing for a symbol that is not imported as ZP, or using a link time value in a conditional (for instance using `.if .bank(Label) <> 0`)
+
 ## Patching
 
 `js65` includes a new `-r` option for setting a `baseROM` image, which treats the rest of your code as overwriting the data in that file.
@@ -154,3 +161,14 @@ UPDATE_REFS target @ refs
 ; ref in the list, and sets the target there until it runs out of refs.
 .define UPDATE_REFS {target @ .eol}
 ```
+
+## `-D` supports strings
+
+In addition to passing in numeric values on the command line, js65 also supports passing in strings.
+Numeric values are treated as if they were created using `.set` and string values are created as if using `.define`
+
+## Linter warnings and code suggestions
+
+Common mistakes or other minor code quality suggestions are returned when building as either warning or info messages.
+Some of the linter warnings include common issues like using a bare literal decimal value when you probably meant to do imm `#` addressing.
+These can be annoying if you are building a large project for the first time with js65 so they can be turned off completely with `--no-lint` or individually with `-W`.
