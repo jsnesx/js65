@@ -1561,15 +1561,22 @@ class Link {
     this.collect(this.chunks, chunk => chunk.resolveSubs());
 
     // Now place them. Segments are filled by declaration order first,
-    // and within the segment, filled from largest to smalled. Anything that
-    // still depends on a different segment can be resolved later.
+    // and within the segment sorted so they are filled as follows:
+    // - first, the number of segments it can land in (so chunks restricted
+    //   to only 1 bank fill before chunks that can spill to multiple banks).
+    // - second, from largest to smallest in that group.
+    // - third, in case of a tie on all of the above, just use chunk index.
+    // Anything that still depends on a different segment can be resolved later.
     // If a segment is part of a pool though, we want to fill the best fit across
     // the pool instead of in a single segment
     const candidates = new Map<string, LinkChunk[]>();
+    const eligibleCount = new Map<LinkChunk, number>();
     for (const chunk of this.chunks) {
       if (chunk.org != null) continue;  // already placed by fixedPlacement
-      const [first] = this.eligibleSegments(chunk);
+      const eligible = this.eligibleSegments(chunk);
+      const [first] = eligible;
       if (first == null) continue;      // no segment at all: reported below
+      eligibleCount.set(chunk, eligible.length);
       const key = this.overlapGroup(first);
       let list = candidates.get(key);
       if (!list) candidates.set(key, list = []);
@@ -1579,7 +1586,8 @@ class Link {
     for (const name of this.segmentOrder) {
       const list = candidates.get(name);
       if (!list) continue;
-      list.sort((a, b) => b.size - a.size || a.index - b.index);
+      list.sort((a, b) => eligibleCount.get(a)! - eligibleCount.get(b)! ||
+                 b.size - a.size || a.index - b.index);
       this.collect(list, chunk => {
         if (signal?.aborted) throw new FatalError('Compilation cancelled');
         chunk.resolveSubs();

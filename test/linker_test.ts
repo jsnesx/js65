@@ -457,6 +457,28 @@ describe('Linker', function() {
     expect(chunks(link(m))).toEqual([[0, [1, 1, 1, 1, 2, 2, 2]], [8, [3, 3, 3]]]);
   });
 
+  it('should place a segment-restricted chunk before a spillable one that would strand it',
+     function() {
+    // 'restricted' can only go in 'a'. 'spillable' fits 'a' or 'b' and is
+    // bigger, so sorting by size alone would place it into 'a' first and
+    // fill it, leaving no room for 'restricted'. Placing the more-restricted
+    // chunk first keeps both chunks fitting.
+    const m = {
+      chunks: [
+        {segments: ['a', 'b'], data: Uint8Array.of(2, 2, 2, 2, 2, 2)},
+        {segments: ['a'], data: Uint8Array.of(1, 1, 1, 1)},
+      ],
+      segments: [
+        {name: 'a', size: 8, offset: 0, memory: 0x8000, free: [[0x8000, 0x8008]]},
+        {name: 'b', size: 8, offset: 8, memory: 0x9000, free: [[0x9000, 0x9008]]},
+      ],
+    };
+    expect(chunks(link(m))).toEqual([
+      [0, [1, 1, 1, 1]],
+      [8, [2, 2, 2, 2, 2, 2]],
+    ]);
+  });
+
   it('should place a pool the same however its members are ordered', function() {
     // The guarantee `:pool` adds: the order the members were written in does
     // not reach placement, so a reordered list links byte-identically.
