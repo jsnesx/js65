@@ -3222,6 +3222,12 @@ lda #.sizeof(Point)
             .toContain('Not a byte: $8001 at $8000');
       });
 
+      it('should fail when a label plus an offset overflows a word',
+         function() {
+        expect(assembleErrors('.word Table + $ff00\nTable:\n  nop\n'))
+            .toContain('Not a word: $17f02 at $8000');
+      });
+
       it('should truncate an out of range value', function() {
         // `far` is $8001, which does not fit in the byte the linker has to
         // write, so the feature keeps the low byte instead of failing.
