@@ -835,6 +835,25 @@ describe('Assembler', function() {
       expect(a.getMessages().map(m => m.message)).toEqual(['Not a byte: -129']);
     });
 
+    it('should overflow when lobyte is taken before adding to a positive offset', function() {
+      expect(assembleErrors([
+        'OFFSET = -8',
+        'LOBYTE_OFFSET = <OFFSET', // masks to $f8 (248), losing the sign
+        'Y1 = 8 + LOBYTE_OFFSET',  // 8 + 248 = 256 = $100, not 0
+        '.byte Y1',
+        '',
+      ].join('\n'))).toEqual(['Not a byte: $100']);
+
+      // Taking the lobyte only at the very end, after the signed arithmetic,
+      // gives the intended result instead.
+      expect(assemble([
+        'OFFSET = -8',
+        'Y1 = 8 + OFFSET',
+        '.byte <Y1',
+        '',
+      ].join('\n'))).toEqual([0]);
+    });
+
     it('should support strings', function() {
       const a = new Assembler(Cpu.P02);
       a.byte('ab', 'cd');
@@ -3633,6 +3652,38 @@ lda #.sizeof(Point)
         }],
         symbols: [], segments: [],
       });
+    });
+
+    // Regression test: the same name `.import`-ed in two separate sibling
+    // `.proc` blocks used to report the second occurrence as `Symbol 'foo'
+    // already defined`. `globalScopes`/`closeScopes` only tracked one scope
+    // per name, so the second proc's local symbol got merged into the
+    // first's instead of resolving as its own independent import.
+    it('should allow importing the same symbol from two sibling procs', function() {
+      const main = `.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8000
+.proc FirstUser
+.import foo
+  lda #foo
+  rts
+.endproc
+.proc SecondUser
+.import foo
+  lda #foo
+  rts
+.endproc
+`;
+      const lib = `.segment "CODE"
+foo = $ff
+.export foo
+`;
+      const result = compile([
+        {type: 'source', code: main, name: 'main.s'} as AssemblyInput,
+        {type: 'source', code: lib, name: 'lib.s'} as AssemblyInput,
+      ], {});
+      if (!result.success) throw new Error(JSON.stringify(result));
+      expect(Array.from(result.outputs[0].data))
+          .toEqual([0xa9, 0xff, 0x60, 0xa9, 0xff, 0x60]);
     });
   });
 

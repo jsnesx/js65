@@ -182,6 +182,13 @@ describe('Expr', function() {
       expect(Exprs.evaluate(op('<', num(0x416)))).toEqual(num(0x16));
     });
 
+    it('should mask a negative number to its unsigned low byte', function() {
+      // `<` is `x & 0xff`, so it does not preserve sign: `<(-8)` is $f8 (248),
+      // not -8. A caller that takes the lobyte of a signed offset before doing
+      // further signed arithmetic on it (e.g. `<(-8) + 8`) gets 256, not 0
+      expect(Exprs.evaluate(op('<', num(-8)))).toEqual(num(0xf8));
+    });
+
     it('should perform logical operations', function() {
       expect(Exprs.evaluate(op('<', num(4), num(2)))).toEqual(num(0));
       expect(Exprs.evaluate(op('<', num(2), num(4)))).toEqual(num(1));

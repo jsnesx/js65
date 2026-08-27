@@ -358,9 +358,10 @@ export class Assembler {
   // NOTE: we could add 'force-import', 'detect', or others...
   private globals = new Map<string, 'export'|'import'|'global'>();
   private resolvedGlobalKinds = new Map<string, 'import'|'export'>();
-  /** Scope each `.export`/`.import`/`.global` was declared in, so the symbol is
-   *  resolved there. */
-  private globalScopes = new Map<string, Scope>();
+  /** Scopes each `.export`/`.import`/`.global` was declared in, so the symbol is
+   *  resolved in each of them. The same name can be imported from multiple
+   *  sibling scopes and each occurrence needs its own resolution. */
+  private globalScopes = new Map<string, Scope[]>();
   /** Symbols declared zeropage (.importzp/.exportzp/.globalzp) */
   private zeropageGlobals = new Set<string>();
   /** Names a command-line `-D` defined, which an `.import` may take over. */
@@ -1056,9 +1057,14 @@ export class Assembler {
             continue;
           }
           const parentSym = scope.parent.symbols.get(name);
+          // check if this is already recorded multiple times from different scopes
+          // and don't double define it if it is.
+          const multiScopeGlobal = (this.globalScopes.get(name)?.length ?? 0) > 1;
           if (!parentSym) {
             // just alias it directly in the parent scope
-            scope.parent.symbols.set(name, sym);
+            if (!multiScopeGlobal) scope.parent.symbols.set(name, sym);
+          } else if (multiScopeGlobal) {
+            // leave sym as-is since the imports/exports pass resolves it directly.
           } else if (parentSym.id != null && parentSym.id >= 0) {
             // If this is resolving a macro from a parent symbol, try to use that value, otherwise
             // fall back to parent sym id
@@ -1084,59 +1090,62 @@ export class Assembler {
 
     const globalScope = this.currentScope.global;
     for (const [name, global] of this.globals) {
-      // Resolve the symbol in the scope the declaration appeared in and
-      // fall back to the global scope if not found.
-      const scope = this.globalScopes.get(name) ?? this.currentScope;
-      let sym = scope.symbols.get(name);
-      // A declaration inside a `.proc`/`.scope` can name a symbol that lives
-      // further out - the same lookup an ordinary reference from there does.
-      for (let s = scope.parent; s && !sym?.expr; s = s.parent) {
-        const outer = s.symbols.get(name);
-        if (outer?.expr) sym = outer;
-      }
-      // `.global` is import-or-export depending on whether it got defined here.
-      // Don't treat an eagerly resolved global export in the late pass as global if
-      // we already know whether it was import or export from the first pass
-      const kind = global === 'global' ?
-          (sym?.expr && sym.expr.op !== 'im' ? 'export' : 'import') : global;
-      if (global === 'global') this.resolvedGlobalKinds.set(name, kind);
-      if (kind === 'export') {
-        if (!sym?.expr) {
-          collector.add('error', `Exported symbol '${name}' undefined`, firstRef(sym));
-          continue;
+      // Resolve the symbol in each scope the declaration appeared in - the
+      // same name can be imported from multiple sibling scopes, and each
+      // occurrence needs its own resolution against its own local symbol.
+      const scopes = this.globalScopes.get(name) ?? [this.currentScope];
+      for (const scope of scopes) {
+        let sym = scope.symbols.get(name);
+        // A declaration inside a `.proc`/`.scope` can name a symbol that lives
+        // further out - the same lookup an ordinary reference from there does.
+        for (let s = scope.parent; s && !sym?.expr; s = s.parent) {
+          const outer = s.symbols.get(name);
+          if (outer?.expr) sym = outer;
         }
-        if (sym.id == null) {
-          sym.id = this.symbols.length;
-          this.symbols.push(sym);
+        // `.global` is import-or-export depending on whether it got defined here.
+        // Don't treat an eagerly resolved global export in the late pass as global if
+        // we already know whether it was import or export from the first pass
+        const kind = global === 'global' ?
+            (sym?.expr && sym.expr.op !== 'im' ? 'export' : 'import') : global;
+        if (global === 'global') this.resolvedGlobalKinds.set(name, kind);
+        if (kind === 'export') {
+          if (!sym?.expr) {
+            collector.add('error', `Exported symbol '${name}' undefined`, firstRef(sym));
+            continue;
+          }
+          if (sym.id == null) {
+            sym.id = this.symbols.length;
+            this.symbols.push(sym);
+          }
+          sym.export = name;
+          // An `.export` inside a `.proc`/`.scope` publishes the name for the
+          // whole module, so a reference from outside that scope - which by now
+          // has been floated up to the global scope - names this symbol.
+          const outer = globalScope.symbols.get(name);
+          if (outer && outer !== sym && !outer.expr) {
+            outer.expr = {op: 'sym', num: sym.id};
+          }
+        } else if (kind === 'import') {
+          if (!sym) continue; // okay to import but not use.
+          // TODO - record both positions?
+          // Already resolved by resolveSymbol during the latepass is not a redefinition
+          if (sym.expr && sym.expr.op !== 'im') {
+            collector.add('error', `Symbol '${name}' already defined`, firstRef(sym));
+            continue;
+          }
+          if (!sym.expr) {
+            // Zeropage imports carry a one-byte size so references pick zp modes.
+            const expr: Expr = {op: 'im', sym: name};
+            // Carry the reference site so the linker can point at something if the
+            // import turns out never to have been exported.
+            const at = firstRef(sym);
+            if (at) expr.source = at;
+            if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
+            sym.expr = expr;
+          }
+        } else {
+          assertNever(kind);
         }
-        sym.export = name;
-        // An `.export` inside a `.proc`/`.scope` publishes the name for the
-        // whole module, so a reference from outside that scope - which by now
-        // has been floated up to the global scope - names this symbol.
-        const outer = globalScope.symbols.get(name);
-        if (outer && outer !== sym && !outer.expr) {
-          outer.expr = {op: 'sym', num: sym.id};
-        }
-      } else if (kind === 'import') {
-        if (!sym) continue; // okay to import but not use.
-        // TODO - record both positions?
-        // Already resolved by resolveSymbol during the latepass is not a redefinition
-        if (sym.expr && sym.expr.op !== 'im') {
-          collector.add('error', `Symbol '${name}' already defined`, firstRef(sym));
-          continue;
-        }
-        if (!sym.expr) {
-          // Zeropage imports carry a one-byte size so references pick zp modes.
-          const expr: Expr = {op: 'im', sym: name};
-          // Carry the reference site so the linker can point at something if the
-          // import turns out never to have been exported.
-          const at = firstRef(sym);
-          if (at) expr.source = at;
-          if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
-          sym.expr = expr;
-        }
-      } else {
-        assertNever(kind);
       }
     }
 
@@ -2633,7 +2642,12 @@ export class Assembler {
       this.currentScope.global.symbols.delete(ident);
     }
     this.globals.set(ident, kind);
-    this.globalScopes.set(ident, this.currentScope);
+    const scopes = this.globalScopes.get(ident);
+    if (scopes) {
+      if (!scopes.includes(this.currentScope)) scopes.push(this.currentScope);
+    } else {
+      this.globalScopes.set(ident, [this.currentScope]);
+    }
   }
 
   import(...idents: string[]) {
