@@ -15,20 +15,15 @@ Additionally, `js65` was designed from the start to allow it to be used as a lib
 The `js65` library gives you full control over the assembly steps, through a [fluent-api builder pattern](/docs/library) that you can control programmatically.
 Gone are the days of patching game code by writing giant chunks of raw hex bytes at raw file offsets!
 
-## What else does `js65` offer?
+## What other ASM features does `js65` offer?
 
 For a more detailed look at the many additions, check out the [ca65 comparison](/docs/ca65-comparison) page.
 But for a quick overview of some of the powerful features offered by `js65`
 
 - No linker script needed! Build a rom in one go with [segments defined in the code itself](/docs/asm-guide#segment).
-- Free space tracking, let `js65` place code patches wherever there is room.
-- Custom Pattern matching [define macro support](/docs/ca65-comparison#custom-define-based-macro-system).
-
-## What's next for `js65`?
-
-- (COMING SOON) Anonymous segment definitions (allowing for single file, top-to-bottom segment layouts)
-- (COMING SOON) Built-in LSP support
-- (COMING not quite as SOON) VSCode extension for the LSP
+- [Free space tracking](/docs/asm-guide#free), let `js65` place code patches wherever there is room.
+- Custom Pattern matching based [.define macro support](/docs/ca65-comparison#custom-define-based-macro-system).
+- Multipass assembly, values known only at link time can be used in assembler conditionals.
 
 ## Where do I start?
 
