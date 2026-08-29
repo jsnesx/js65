@@ -3449,6 +3449,80 @@ lda #.sizeof(Point)
         }],
         symbols: [], segments: []});
     });
+
+    it('should parse every action spelling', function() {
+      const a = new Assembler(Cpu.P02);
+      const parse = (action: string) =>
+          a.parseAssert([ASSERT, num(1), COMMA, ident(action)])[1];
+      expect(parse('warn')).toBe('warning');
+      expect(parse('warning')).toBe('warning');
+      expect(parse('error')).toBe('error');
+      expect(parse('ldwarn')).toBe('ldwarning');
+      expect(parse('ldwarning')).toBe('ldwarning');
+      expect(parse('lderror')).toBe('lderror');
+    });
+
+    it('should default the action to error', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(a.parseAssert([ASSERT, num(1)])[1]).toBe('error');
+    });
+
+    it('should reject an unknown action', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.parseAssert([ASSERT, num(1), COMMA, ident('bogus')]))
+          .toThrow(/Bad assertion action: bogus/);
+    });
+
+    it('should allow a message with the action omitted', function() {
+      const a = new Assembler(Cpu.P02);
+      const [, action, message] =
+          a.parseAssert([ASSERT, num(1), COMMA, str('msg')]);
+      expect(action).toBe('error');
+      expect(message).toBe('msg');
+    });
+
+    it('should report the message without doubling it', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.directive([ASSERT, num(0), COMMA, str('msg')]))
+          .toThrow(/^msg$/);
+    });
+
+    it('should accept a .sprintf message', function() {
+      expect(assembleErrors('.assert 0, error, .sprintf("bad %d here", 5)'))
+          .toEqual(['bad 5 here (PC=$8000)']);
+    });
+
+    it('should accept a .concat message with the action omitted', function() {
+      expect(assembleErrors('.assert 0, .concat("a", "b")'))
+          .toEqual(['ab (PC=$8000)']);
+    });
+
+    it('should reject a non-string message', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.parseAssert([ASSERT, num(0), COMMA, ident('error'),
+                                  COMMA, num(5)]))
+          .toThrow(/Expected a constant string message/);
+    });
+
+    it('should reject a multi-token message', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.parseAssert([ASSERT, num(0), COMMA, ident('error'),
+                                  COMMA, LP, str('msg'), RP]))
+          .toThrow(/Expected a constant string message/);
+    });
+
+    it('should reject extra arguments', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.parseAssert([ASSERT, num(0), COMMA, ident('error'),
+                                  COMMA, str('msg'), COMMA, ident('extra')]))
+          .toThrow(/Too many arguments to \.assert/);
+    });
+
+    it('should default the message when none is given', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.directive([ASSERT, num(0)]))
+          .toThrow(/^Assertion failed$/);
+    });
   });
 
   describe('.scope', function() {
