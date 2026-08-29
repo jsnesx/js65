@@ -981,6 +981,71 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/Assertion failed/);
   });
 
+  function assertModule(action: string, expr: Expr, message?: string): Module {
+    const a: Record<string, unknown> = {expr, action};
+    if (message != null) a['message'] = message;
+    return {
+      chunks: [{
+        segments: ['a'],
+        org: 100,
+        data: Uint8Array.of(2, 4, 6, 8),
+        asserts: [a],
+      }],
+      segments: [{name: 'a', size: 100, offset: 100, memory: 100}],
+    } as unknown as Module;
+  }
+
+  function linkWith(m: Module): [ErrorCollector, util.SparseByteArray] {
+    const ec = new ErrorCollector();
+    return [ec, new Linker({errorCollector: ec}).read(m).link()];
+  }
+
+  it('should warn but still link on a failing ldwarning assert', function() {
+    const m = assertModule('ldwarning', op('=', off(0, 4), num(105)), 'too low');
+    const [ec, out] = linkWith(m);
+    expect(ec.hasErrors()).toBe(false);
+    expect(ec.getMessages().map(msg => [msg.level, msg.message]))
+        .toEqual([['warning', 'too low']]);
+    expect(chunks(out)).toEqual([[100, [2, 4, 6, 8]]]);
+  });
+
+  it('should error on a failing lderror assert', function() {
+    const m = assertModule('lderror', op('=', off(0, 4), num(105)), 'too low');
+    const ec = new ErrorCollector();
+    const linker = new Linker({errorCollector: ec});
+    expect(() => linker.read(m).link()).toThrow();
+    expect(ec.getMessages().filter(msg => msg.level === 'error')
+        .map(msg => msg.message)).toEqual(['too low']);
+  });
+
+  it('should stay silent on a passing ldwarning assert', function() {
+    const m = assertModule('ldwarning', op('=', off(0, 4), num(104)), 'too low');
+    const [ec, out] = linkWith(m);
+    expect(ec.getMessages()).toEqual([]);
+    expect(chunks(out)).toEqual([[100, [2, 4, 6, 8]]]);
+  });
+
+  it('should warn without erroring on an unresolvable assert', function() {
+    // A value still flagged relative after placement can't be folded.
+    const rel: Expr = {op: 'num', num: 5, meta: {rel: true}};
+    const m = assertModule('error', op('=', rel, num(5)));
+    const [ec, out] = linkWith(m);
+    expect(ec.hasErrors()).toBe(false);
+    expect(ec.getMessages().map(msg => [msg.level, msg.message]))
+        .toEqual([['warning', 'Cannot evaluate assertion']]);
+    expect(chunks(out)).toEqual([[100, [2, 4, 6, 8]]]);
+  });
+
+  it('should print the user message and pc for a failing assert', function() {
+    const m = assertModule('lderror', num(0), 'custom text');
+    (m.chunks![0] as {asserts: Array<{pc?: number}>}).asserts[0]!.pc = 0x8000;
+    const ec = new ErrorCollector();
+    const linker = new Linker({errorCollector: ec});
+    expect(() => linker.read(m).link()).toThrow();
+    expect(ec.getMessages().filter(msg => msg.level === 'error')
+        .map(msg => msg.message)).toEqual(['custom text (PC=$8000)']);
+  });
+
   it('should support circular references', function() {
     const m = {
       chunks: [{
