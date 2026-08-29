@@ -117,6 +117,17 @@ type MissingScope = 'fail'|'undefined'|'create';
 
 type GlobalKind = 'export'|'import'|'global';
 
+export type AssertAction = 'warning'|'error'|'ldwarning'|'lderror';
+
+const ASSERT_ACTIONS = new Map<string, AssertAction>([
+  ['warn', 'warning'],
+  ['warning', 'warning'],
+  ['error', 'error'],
+  ['ldwarn', 'ldwarning'],
+  ['ldwarning', 'ldwarning'],
+  ['lderror', 'lderror'],
+]);
+
 /** `.export`/`.import`/`.global` calls along with the scope it appeared in. */
 interface GlobalDecl {
   scope: Scope;
@@ -2187,7 +2198,7 @@ export class Assembler {
     return (this._chunk?.org ?? this._org!) + (this._chunk?.data.length ?? 0);
   }
 
-  assert(expr: Expr, _level?: string, message?: string) {
+  assert(expr: Expr, _action: AssertAction = 'error', message?: string) {
     this.linter?.assert();
     expr = this.resolve(expr);
     const val = this.evaluate(expr);
@@ -2198,7 +2209,7 @@ export class Assembler {
         if (chunk.org != null) {
           pc = ` (PC=$${(chunk.org + chunk.data.length).toString(16)})`;
         }
-        this.fail(`${message}\nAssertion failed${pc}`, expr);
+        this.fail(`${message ?? 'Assertion failed'}${pc}`, expr);
       }
     } else {
       const {chunk} = this;
@@ -3246,16 +3257,44 @@ export class Assembler {
     return Array.from(new Uint8Array(buf));
   }
 
-  parseAssert(tokens: Token[]) : [Expr, string, string] {
+  parseAssert(tokens: Token[]) : [Expr, AssertAction, string|undefined] {
     const args = Tokens.parseArgList(tokens, 1);
     if (!args[0]) {
       this.fail(`No assertion expression provided`);
     }
     const expr = this.parseExpr(args[0], 0);
-    const level = Tokens.optionalIdentifier(args.at(1)?.at(0)) ?? 'error';
-    const message = Tokens.optionalString(args.at(2)?.at(0)) ?? "Assertion failed";
-    
-    return [expr, level, message]
+
+    // Skip over the error level if its not present.
+    let next = 1;
+    let action: AssertAction = 'error';
+    const actionTok = args.at(next)?.at(0);
+    if (actionTok?.token === 'ident') {
+      const found = ASSERT_ACTIONS.get(actionTok.str.toLowerCase());
+      if (!found) {
+        this.fail(`Bad assertion action: ${actionTok.str}\n` +
+                  `Expected one of warning, error, ldwarning, lderror`,
+                  actionTok);
+      }
+      action = found;
+      next++;
+    }
+
+    // The preprocessor folds .sprintf/.concat/.string down to one str token.
+    let message: string|undefined;
+    const messageArg = args.at(next);
+    if (messageArg?.length) {
+      const tok = messageArg[0];
+      if (messageArg.length > 1 || tok.token !== 'str') {
+        this.fail(`Expected a constant string message`, tok);
+      }
+      message = tok.str;
+      next++;
+    }
+
+    const extra = args.at(next);
+    if (extra?.length) this.fail(`Too many arguments to .assert`, extra[0]);
+
+    return [expr, action, message];
   }
 
   // Diagnostics
