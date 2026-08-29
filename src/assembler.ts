@@ -117,7 +117,7 @@ type MissingScope = 'fail'|'undefined'|'create';
 
 type GlobalKind = 'export'|'import'|'global';
 
-export type AssertAction = 'warning'|'error'|'ldwarning'|'lderror';
+export type AssertAction = mod.AssertAction;
 
 const ASSERT_ACTIONS = new Map<string, AssertAction>([
   ['warn', 'warning'],
@@ -2242,7 +2242,10 @@ export class Assembler {
       }
       // Unresolvable here, or deferred by request - ship it to the linker.
       const chunk = a.chunk ?? this.chunk;
-      (chunk.asserts || (chunk.asserts = [])).push(a.expr);
+      const assertion: mod.Assertion = {expr: a.expr, action: a.action};
+      if (a.message != null) assertion.message = a.message;
+      if (a.pc != null) assertion.pc = a.pc;
+      (chunk.asserts || (chunk.asserts = [])).push(assertion);
     }
     this.pendingAsserts = [];
   }

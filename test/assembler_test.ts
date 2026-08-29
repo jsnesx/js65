@@ -3446,8 +3446,9 @@ lda #.sizeof(Point)
           segments: [],
           name: 'Foo',
           data: Uint8Array.of(),
-          asserts: [{op: '>', meta: {size: 1},
-                     args: [off(0), {op: 'num', num: 8, meta: {size: 1}}]}],
+          asserts: [{expr: {op: '>', meta: {size: 1},
+                            args: [off(0), {op: 'num', num: 8, meta: {size: 1}}]},
+                     action: 'error'}],
         }],
         symbols: [], segments: []});
     });
@@ -3563,6 +3564,29 @@ lda #.sizeof(Point)
       const a = new Assembler(Cpu.P02);
       a.directive([ASSERT, num(1)]);
       expect(strip(a.module())).toEqual({chunks: [], symbols: [], segments: []});
+    });
+
+    it('round-trips action and message through the object file', function() {
+      const m = assembleModule('.import Foo\n' +
+                               '.assert Foo > 8, ldwarning, "check Foo"\n');
+      const m2 = deserializeObjectFile(serializeObjectFile(m));
+      const a = m2.chunks![0].asserts![0];
+      expect(a.action).toBe('ldwarning');
+      expect(a.message).toBe('check Foo');
+      expect(a.expr).toEqual(m.chunks![0].asserts![0].expr);
+    });
+
+    it('rejects a v1 object file with bare-expression asserts', function() {
+      const v1 = {
+        version: 1,
+        chunks: [{segments: [], data: '',
+                  asserts: [{op: 'num', num: 0, meta: {size: 1}}]}],
+      };
+      const bytes = Bun.gzipSync(new TextEncoder().encode(JSON.stringify(v1)));
+      // Structural validation runs before the version check, so this is
+      // refused on the missing `action` rather than the stale version.
+      expect(() => deserializeObjectFile(bytes, 'old.o'))
+          .toThrow(/asserts\[0\]\.action/);
     });
   });
 
@@ -5074,7 +5098,7 @@ function strip(o: Module): Module {
   for (const c of o.chunks || []) {
     if (c.name === 'Code') delete c.name;
     for (const a of c.asserts || []) {
-      stripExpr(a);
+      stripExpr(a.expr);
     }
     for (const s of c.subs || []) {
       stripExpr(s.expr);

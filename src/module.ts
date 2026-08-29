@@ -23,6 +23,15 @@ export interface Substitution {
   forceRange?: boolean;
 }
 
+export type AssertAction = 'warning' | 'error' | 'ldwarning' | 'lderror';
+
+export interface Assertion {
+  expr: Expr;
+  action: AssertAction;
+  message?: string;
+  pc?: number;
+}
+
 // Default is "allow"
 export type OverwriteMode = 'forbid' | 'allow' | 'require';
 
@@ -42,7 +51,7 @@ interface BaseChunk {
   /** Substitutions to insert into the data. */
   subs?: Substitution[];
   /** Assertions within this chunk. Each expression must be nonzero. */
-  asserts?: Expr[];
+  asserts?: Assertion[];
   /** How overwriting previously-written fixed-position data is handled. */
   overwrite?: OverwriteMode; // NOTE: only set programmatically?
   /** Source infos for each byte in the chunk. */
@@ -194,7 +203,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 1;
+export const MODULE_FORMAT_VERSION = 2;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {

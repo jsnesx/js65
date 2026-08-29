@@ -7,7 +7,7 @@ import { type ErrorCollector, FatalError, RecoverableError } from './error.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import { type CfgSymbols, type LinkerConfig, configSymbols, linkerDefines, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
-import { type Chunk, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
+import { type Assertion, type Chunk, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { buildLinkTimeEnv, replayModules } from './latepass.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
@@ -802,7 +802,7 @@ class LinkChunk {
   /** Alignment (a power of two) for placing this chunk. */
   readonly align: number|undefined;
   segments: readonly string[];
-  asserts: Expr[];
+  asserts: Assertion[];
   placement: PlacementMode;
   isMirrored: boolean = false;
 
@@ -854,7 +854,7 @@ class LinkChunk {
       this.subs.add(translateSub(sub, chunkOffset, symbolOffset));
     }
     this.asserts = (chunk.asserts || [])
-        .map(e => translateExpr(e, chunkOffset, symbolOffset));
+        .map(a => ({...a, expr: translateExpr(a.expr, chunkOffset, symbolOffset)}));
     if (chunk.org != null) this._org = chunk.org;
     this._overwrite = chunk.overwrite || 'allow';
   }
@@ -1545,8 +1545,8 @@ class Link {
       this.collect([...chunk.subs, ...chunk.selfSubs], sub => {
         sub.expr = this.resolveSymbols(sub.expr);
       });
-      this.collect(chunk.asserts.keys(), i => {
-        chunk.asserts[i] = this.resolveSymbols(chunk.asserts[i]);
+      this.collect(chunk.asserts, a => {
+        a.expr = this.resolveSymbols(a.expr);
       });
     }
 
@@ -1622,7 +1622,7 @@ class Link {
     }
     for (const c of this.chunks) {
       this.collect(c.asserts, a => {
-        if (!this.resolveExpr(a)) this.fail(`Assertion failed`, a);
+        if (!this.resolveExpr(a.expr)) this.fail(`Assertion failed`, a.expr);
       });
     }
     this.stopIfFailed('the module did not link cleanly');

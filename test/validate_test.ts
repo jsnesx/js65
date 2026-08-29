@@ -419,12 +419,12 @@ describe('module format version', () => {
   it('refuses a hand-edited stale version', () => {
     const stale = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ version: 0, chunks: [] })));
     expect(() => deserializeObjectFile(stale, 'stale.o'))
-      .toThrow(/stale\.o: stale module format \(got 0, need 1\); rebuild the \.o file/);
+      .toThrow(/stale\.o: stale module format \(got 0, need 2\); rebuild the \.o file/);
   });
 
   it('treats a missing version as stale', () => {
     const noVersion = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ chunks: [] })));
     expect(() => deserializeObjectFile(noVersion, 'noversion.o'))
-      .toThrow(/noversion\.o: stale module format \(got none, need 1\); rebuild the \.o file/);
+      .toThrow(/noversion\.o: stale module format \(got none, need 2\); rebuild the \.o file/);
   });
 });
