@@ -194,12 +194,12 @@ FREE "CODE" [$8000, $10000)
 
     it('should reject a FALLTHROUGH that is not the next address',
        function() {
-      // A forward target defers to the linker, which only keeps the expression
-      // and so reports the generic text rather than the macro's message.
+      // The forward target resolves once scopes close, so the macro's own
+      // message reports rather than the linker's generic text.
       expectCompileError(
           `.macpack common\n${SEG}.org $8000\n` +
           '  lda #1\n  FALLTHROUGH next\n  nop\nnext:\n  rts\n',
-          'Assertion failed');
+          'FALLTHROUGH target is not the next address');
     });
 
     it('should report the FALLTHROUGH message for a backward target',

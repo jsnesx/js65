@@ -3428,10 +3428,12 @@ lda #.sizeof(Point)
       expect(strip(a.module())).toEqual({chunks: [], symbols: [], segments: []});
     });
 
-    it('should fail immediately when false', function() {
+    it('should fail at module close when false', function() {
       const a = new Assembler(Cpu.P02);
-      expect(() => a.assert({op: 'num', num: 0}))
-          .toThrow(/Assertion failed/);
+      a.assert({op: 'num', num: 0});
+      a.module();
+      expect(a.getMessages().map(m => [m.level, m.message]))
+          .toEqual([['error', 'Assertion failed']]);
     });
 
     it('should defer indeterminate assertions to the linker', function() {
@@ -3483,8 +3485,9 @@ lda #.sizeof(Point)
 
     it('should report the message without doubling it', function() {
       const a = new Assembler(Cpu.P02);
-      expect(() => a.directive([ASSERT, num(0), COMMA, str('msg')]))
-          .toThrow(/^msg$/);
+      a.directive([ASSERT, num(0), COMMA, str('msg')]);
+      a.module();
+      expect(a.getMessages().map(m => m.message)).toEqual(['msg']);
     });
 
     it('should accept a .sprintf message', function() {
@@ -3520,8 +3523,46 @@ lda #.sizeof(Point)
 
     it('should default the message when none is given', function() {
       const a = new Assembler(Cpu.P02);
-      expect(() => a.directive([ASSERT, num(0)]))
-          .toThrow(/^Assertion failed$/);
+      a.directive([ASSERT, num(0)]);
+      a.module();
+      expect(a.getMessages().map(m => m.message)).toEqual(['Assertion failed']);
+    });
+
+    it('should fold a forward reference by module close', function() {
+      expect(assembleErrors('  nop\n.assert Foo = $8000, error, "wrong spot"\n' +
+                            'Foo:\n  rts\n'))
+          .toEqual(['wrong spot (PC=$8001)']);
+    });
+
+    it('should report a warning action without failing', function() {
+      expect(assembleWarnings('.assert 0, warning, "soft"\n'))
+          .toEqual(['soft (PC=$8000)']);
+    });
+
+    it('should not evaluate ldwarning at assemble time', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([ASSERT, num(0), COMMA, ident('ldwarning')]);
+      a.module();
+      expect(a.getMessages()).toEqual([]);
+    });
+
+    it('should not evaluate lderror at assemble time', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([ASSERT, num(0), COMMA, ident('lderror')]);
+      a.module();
+      expect(a.getMessages()).toEqual([]);
+    });
+
+    it('should report every failing assertion', function() {
+      expect(assembleErrors('.assert 0, error, "first"\n' +
+                            '.assert 0, error, "second"\n'))
+          .toEqual(['first (PC=$8000)', 'second (PC=$8000)']);
+    });
+
+    it('should not materialize a chunk for a passing assertion', function() {
+      const a = new Assembler(Cpu.P02);
+      a.directive([ASSERT, num(1)]);
+      expect(strip(a.module())).toEqual({chunks: [], symbols: [], segments: []});
     });
   });
 

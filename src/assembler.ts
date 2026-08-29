@@ -128,6 +128,18 @@ const ASSERT_ACTIONS = new Map<string, AssertAction>([
   ['lderror', 'lderror'],
 ]);
 
+/** Data recorded `.assert`s call site */
+interface PendingAssert {
+  expr: Expr;
+  action: AssertAction;
+  message?: string;
+  /** Chunk it was written into, or undefined if none was active. */
+  chunk?: Chunk;
+  source?: Tokens.SourceInfo;
+  /** PC at the directive, when in `.org` mode. */
+  pc?: number;
+}
+
 /** `.export`/`.import`/`.global` calls along with the scope it appeared in. */
 interface GlobalDecl {
   scope: Scope;
@@ -442,6 +454,9 @@ export class Assembler {
 
   /** All the chunks so far. */
   private chunks: Chunk[] = [];
+
+  /** `.assert`s awaiting evaluation at module close. */
+  private pendingAsserts: PendingAssert[] = [];
 
   /** Set of offsets definitely written/freed so far. */
   private written = new IntervalSet();
@@ -1181,7 +1196,7 @@ export class Assembler {
 
   /**
    * As part of closing scopes, we need to retry any expr node that couldn't
-   * fully fold on first pass - see `deferredOps`. This function was pulled
+   * fully fold on first pass (see `deferredOps`). This function was pulled
    * out just for clarities sake, but its really just an extension of
    * `closeScopes`.
    */
@@ -1215,7 +1230,9 @@ export class Assembler {
       if (chunk.subs) {
         for (const sub of chunk.subs) sub.expr = fix(sub.expr);
       }
-      if (chunk.asserts) chunk.asserts = chunk.asserts.map(fix);
+    }
+    for (const a of this.pendingAsserts) {
+      a.expr = fix(a.expr);
     }
     for (const symbol of this.symbols) {
       if (symbol.expr) symbol.expr = fix(symbol.expr);
@@ -1229,6 +1246,7 @@ export class Assembler {
     this.closeScopes();
     // Check for any deferred lints.
     this.linter?.closeModule();
+    this.checkAssertions();
 
     // TODO - handle imports and exports out of the scope
     // TODO - add .scope and .endscope and forward scope vars at end to parent
@@ -2198,23 +2216,35 @@ export class Assembler {
     return (this._chunk?.org ?? this._org!) + (this._chunk?.data.length ?? 0);
   }
 
-  assert(expr: Expr, _action: AssertAction = 'error', message?: string) {
+  assert(expr: Expr, action: AssertAction = 'error', message?: string) {
     this.linter?.assert();
-    expr = this.resolve(expr);
-    const val = this.evaluate(expr);
-    if (val != null) {
-      if (!val) {
-        let pc = '';
-        const chunk = this.chunk;
-        if (chunk.org != null) {
-          pc = ` (PC=$${(chunk.org + chunk.data.length).toString(16)})`;
-        }
-        this.fail(`${message ?? 'Assertion failed'}${pc}`, expr);
+    this.pendingAsserts.push({
+      expr: this.resolve(expr),
+      action,
+      message,
+      chunk: this._chunk,
+      source: expr.source ?? this._source,
+      pc: (this._chunk?.org ?? this._org) != null ? this.orgPc() : undefined,
+    });
+  }
+
+  private checkAssertions() {
+    for (const a of this.pendingAsserts) {
+      const linkTimeOnly = a.action === 'ldwarning' || a.action === 'lderror';
+      const val = linkTimeOnly ? undefined : this.evaluate(a.expr);
+      if (val != null) {
+        if (val) continue;
+        const pc = a.pc != null ? ` (PC=$${a.pc.toString(16)})` : '';
+        const level = a.action === 'warning' ? 'warning' : 'error';
+        this.errorCollector.add(
+            level, `${a.message ?? 'Assertion failed'}${pc}`, a.source);
+        continue;
       }
-    } else {
-      const {chunk} = this;
-      (chunk.asserts || (chunk.asserts = [])).push(expr);
+      // Unresolvable here, or deferred by request - ship it to the linker.
+      const chunk = a.chunk ?? this.chunk;
+      (chunk.asserts || (chunk.asserts = [])).push(a.expr);
     }
+    this.pendingAsserts = [];
   }
 
   byte(...args: Array<Expr|string|number>) {
