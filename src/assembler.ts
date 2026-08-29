@@ -115,6 +115,14 @@ function firstRef(sym?: Symbol): Tokens.SourceInfo|undefined {
 /** What to do when a qualified name mentions a scope that doesn't exist yet. */
 type MissingScope = 'fail'|'undefined'|'create';
 
+type GlobalKind = 'export'|'import'|'global';
+
+/** `.export`/`.import`/`.global` calls along with the scope it appeared in. */
+interface GlobalDecl {
+  scope: Scope;
+  kind: GlobalKind;
+}
+
 interface ResolveOpts {
   // Whether to create a forward reference for missing symbols.
   allowForwardRef?: boolean;
@@ -353,15 +361,13 @@ export class Assembler {
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
 
-  /** Global symbols. `.global` resolves to import or export at close time
-   *  depending on whether the symbol ends up defined in this module. */
-  // NOTE: we could add 'force-import', 'detect', or others...
-  private globals = new Map<string, 'export'|'import'|'global'>();
+  /**
+   * `.export`/`.import`/`.global` declarations
+   * We track what scope they are created in because ca65 allows exports from within a
+   * scope to export the sym as a global without scope.
+   */
+  private globals = new Map<string, GlobalDecl[]>();
   private resolvedGlobalKinds = new Map<string, 'import'|'export'>();
-  /** Scopes each `.export`/`.import`/`.global` was declared in, so the symbol is
-   *  resolved in each of them. The same name can be imported from multiple
-   *  sibling scopes and each occurrence needs its own resolution. */
-  private globalScopes = new Map<string, Scope[]>();
   /** Symbols declared zeropage (.importzp/.exportzp/.globalzp) */
   private zeropageGlobals = new Set<string>();
   /** Names a command-line `-D` defined, which an `.import` may take over. */
@@ -610,7 +616,7 @@ export class Assembler {
   definedSymbol(sym: string): boolean {
     // In this case, it's okay to traverse up the scope chain since if we
     // were to reference the symbol, it's guaranteed to be defined somehow.
-    if (this.globals.get(sym) === 'import') return true;
+    if (this.hasGlobalKind(sym, 'import')) return true;
     const s = this.walkSymbolTree(sym);
     if (s !== undefined) return Boolean(s);
     return false;
@@ -1001,10 +1007,11 @@ export class Assembler {
       return sym.expr;
     }
     // If this is a late pass, we can resolve import and globalimport now
-    const globalKind = this.globals.get(name);
-    if (this.linkEnv && (globalKind === 'import' ||
-        (globalKind === 'global' && this.globalKinds?.[name] === 'import') ||
-        (globalKind == null && this.autoImportNames?.has(name)))) {
+    const declared = this.globals.has(name);
+    if (this.linkEnv && (this.hasGlobalKind(name, 'import') ||
+        (this.hasGlobalKind(name, 'global') &&
+            this.globalKinds?.[name] === 'import') ||
+        (!declared && this.autoImportNames?.has(name)))) {
       const expr: Expr = {op: 'im', sym: name};
       const at = firstRef(sym);
       if (at) expr.source = at;
@@ -1059,7 +1066,7 @@ export class Assembler {
           const parentSym = scope.parent.symbols.get(name);
           // check if this is already recorded multiple times from different scopes
           // and don't double define it if it is.
-          const multiScopeGlobal = (this.globalScopes.get(name)?.length ?? 0) > 1;
+          const multiScopeGlobal = (this.globals.get(name)?.length ?? 0) > 1;
           if (!parentSym) {
             // just alias it directly in the parent scope
             if (!multiScopeGlobal) scope.parent.symbols.set(name, sym);
@@ -1089,12 +1096,11 @@ export class Assembler {
     close(this.currentScope);
 
     const globalScope = this.currentScope.global;
-    for (const [name, global] of this.globals) {
+    for (const [name, decls] of this.globals) {
       // Resolve the symbol in each scope the declaration appeared in - the
       // same name can be imported from multiple sibling scopes, and each
       // occurrence needs its own resolution against its own local symbol.
-      const scopes = this.globalScopes.get(name) ?? [this.currentScope];
-      for (const scope of scopes) {
+      for (const {scope, kind: global} of decls) {
         let sym = scope.symbols.get(name);
         // Try to walk the sym scope looking for the sym, but ONLY while we don't
         // already have something. This lets it choose a scoped import over an import
@@ -2570,7 +2576,7 @@ export class Assembler {
 
   /** True if explicitly imported or autoimported */
   private isImportRef(name: string): boolean {
-    return this.globals.get(name) === 'import' ||
+    return this.hasGlobalKind(name, 'import') ||
         Boolean(this.autoImportNames?.has(name));
   }
 
@@ -2636,18 +2642,29 @@ export class Assembler {
     this.autoImported.push({name, source: at});
   }
 
-  private declareGlobal(ident: string, kind: 'export'|'import'|'global', weak = false) {
-    if (weak && this.globals.has(ident)) return;
+  /** True if any declaration of `name` anywhere in the module has this kind. */
+  private hasGlobalKind(name: string, kind: GlobalKind): boolean {
+    return this.globals.get(name)?.some(d => d.kind === kind) ?? false;
+  }
+
+  private declareGlobal(ident: string, kind: GlobalKind, weak = false) {
+    const decls = this.globals.get(ident);
+    const existing = decls?.find(d => d.scope === this.currentScope);
+    // .global is replaced by an explicit .import/.export if they are in the same scope,
+    // but if the .global is in an outer scope and .export is in an inner scope, they are
+    // different. The .global should turn into an .import at close, and .export should still
+    // export that sym.
+    if (existing && weak) return;
     // Use the linker version of the -D cli define instead of the global .set version
     if (kind === 'import' && this.commandLineDefines.delete(ident)) {
       this.currentScope.global.symbols.delete(ident);
     }
-    this.globals.set(ident, kind);
-    const scopes = this.globalScopes.get(ident);
-    if (scopes) {
-      if (!scopes.includes(this.currentScope)) scopes.push(this.currentScope);
+    if (existing) {
+      existing.kind = kind;
+    } else if (decls) {
+      decls.push({scope: this.currentScope, kind});
     } else {
-      this.globalScopes.set(ident, [this.currentScope]);
+      this.globals.set(ident, [{scope: this.currentScope, kind}]);
     }
   }
 

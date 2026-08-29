@@ -4303,6 +4303,48 @@ foo = $ff
     });
   });
 
+  // ca65 keeps each .export/.import/.global bound to the scope it was written
+  // in, so a file-scope declaration is not satisfied by a .proc-scoped one.
+  describe('scoped .export/.global declarations', function() {
+    it('rejects a file-scope .export satisfied only inside a .proc', function() {
+      expect(assembleErrors(`
+.export a_after
+.proc pa
+.export a_after
+a_after:
+  rts
+.endproc
+`)).toEqual([`Exported symbol 'a_after' undefined`]);
+    });
+
+    it('rejects a file-scope .export written after the .proc defining the label',
+        function() {
+      expect(assembleErrors(`
+.proc pa
+.export a_after
+a_after:
+  rts
+.endproc
+.export a_after
+`)).toEqual([`Exported symbol 'a_after' undefined`]);
+    });
+
+    it('resolves a file-scope .global against a label defined inside a .proc',
+        function() {
+      // The .global becomes an import because its own scope never defines the
+      // name; the .proc's .export publishes it and the linker pairs them up.
+      expect(assemble(`
+.global a_after
+  jsr a_after
+.proc pa
+.export a_after
+a_after:
+  rts
+.endproc
+`)).toEqual([0x20, 0x03, 0x80, 0x60]);
+    });
+  });
+
   describe('late-assembly stream capture', function() {
     it('carries a stream and queries for a module with an unresolved size', function() {
       const m = assembleModule('.import foo\nlda foo\n');

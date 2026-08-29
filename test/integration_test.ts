@@ -1989,6 +1989,45 @@ foo = $22
       expect(data[0]).toBe(0x20); // JSR resolved, no "undefined symbol"
     });
 
+    it('links a .proc-scoped .export against an importing module via a file-scope ' +
+        '.global', function() {
+      const lib: AssemblyInput = {
+        type: 'source',
+        name: 'lib.s',
+        code: `
+.segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
+.org $8100
+.export update_player
+.global GLOBAL_player_after_update
+.proc update_player
+  nop
+.export GLOBAL_player_after_update
+GLOBAL_player_after_update:
+done:
+  rts
+.endproc
+`
+      };
+      const main: AssemblyInput = {
+        type: 'source',
+        name: 'main.s',
+        code: `
+.segment "CODE"
+.import GLOBAL_player_after_update
+.org $8000
+  jsr GLOBAL_player_after_update
+`
+      };
+      const result = compile([main, lib], { lineContinuations: true });
+      expect(result.messages.filter(m => m.level === 'error')
+                 .map(m => m.message)).toEqual([]);
+      expect(result.success).toBe(true);
+      const data = result.outputs[0].data;
+      expect(data[0]).toBe(0x20);
+      expect(data[1]).toBe(0x01); // $8101, one byte past the leading nop
+      expect(data[2]).toBe(0x81);
+    });
+
     it('.importzp sizes references to one byte', function() {
       const zp: AssemblyInput = {
         type: 'source',
