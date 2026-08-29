@@ -171,6 +171,24 @@ describe('replayModules error limit', function() {
   });
 });
 
+describe('replayModules assertions', function() {
+  const env: LinkTimeEnv = {
+    addrSize: () => 2,
+    bank: () => undefined,
+    segmentBank: () => undefined,
+  };
+
+  it('reports a module-close assertion exactly once', function() {
+    const code = '.segment "CODE" :bank $00 :size $10 :mem $8000 :off $0000\n' +
+        '.org $8000\n  lda #1\n.assert 0, error, "boom"\n';
+    const result = libAssemble(
+        [{type: 'source', code, name: 'test.s'} as AssemblyInput], {});
+    const replayed = replayModules(result.modules, result.moduleMessages, env);
+    expect(replayed.messages.filter(m => m.message.startsWith('boom')).length)
+        .toBe(1);
+  });
+});
+
 describe('mergeModuleSegments', function() {
   function moduleSegs(...segments: Segment[]): Module {
     return {segments};
