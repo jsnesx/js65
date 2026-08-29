@@ -1426,13 +1426,32 @@ class Link {
   // NOTE: so far this is only used for asserts?
   // It basically copy-pastes from resolveSubs... :-(
 
-  resolveExpr(expr: Expr): number {
+  resolveExprOrNull(expr: Expr): number|null {
     expr = Exprs.traverse(expr, (e, rec) => {
       return this.resolveLink(Exprs.evaluate(rec(e)));
     });
 
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num!;
-    this.fail(`Unable to fully resolve expr`, expr);
+    return null;
+  }
+
+  private checkAssert(a: Assertion): void {
+    const source = a.expr.source;
+    const val = this.resolveExprOrNull(a.expr);
+    if (val == null) {
+      this.errorCollector?.add('warning', `Cannot evaluate assertion`, source);
+      return;
+    }
+    if (val) return;
+    const pc = a.pc != null ? ` (PC=$${a.pc.toString(16)})` : '';
+    const msg = `${a.message ?? 'Assertion failed'}${pc}`;
+    const soft = a.action === 'warning' || a.action === 'ldwarning';
+    // No collector means fail() throws, which is the only way to report here.
+    if (!this.errorCollector) {
+      if (!soft) this.fail(msg, a.expr);
+      return;
+    }
+    this.errorCollector.add(soft ? 'warning' : 'error', msg, source);
   }
 
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
@@ -1621,9 +1640,7 @@ class Link {
       }
     }
     for (const c of this.chunks) {
-      this.collect(c.asserts, a => {
-        if (!this.resolveExpr(a.expr)) this.fail(`Assertion failed`, a.expr);
-      });
+      this.collect(c.asserts, a => this.checkAssert(a));
     }
     this.stopIfFailed('the module did not link cleanly');
     for (const c of this.chunks) {

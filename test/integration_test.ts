@@ -1189,9 +1189,8 @@ lbl2:
         [input], { lineContinuations: true, generateDebugInfo: true });
 
       expect(result.success).toBe(false);
-      const errors = result.messages.filter(
-        m => m.level === 'error' && m.message.includes('Assertion failed'));
-      expect(errors.length).toBe(2);
+      const errors = result.messages.filter(m => m.level === 'error');
+      expect(errors.map(e => e.message)).toEqual(['lbl1 too low', 'lbl2 too low']);
       expect(errors.map(e => e.source?.line)).toEqual([10, 11]);
     });
 
