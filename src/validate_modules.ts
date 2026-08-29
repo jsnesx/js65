@@ -11,7 +11,7 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
+import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -169,6 +169,23 @@ function validateSubstitution(v: unknown, path: string): Substitution {
   return out;
 }
 
+function validateAssertion(v: unknown, path: string): Assertion {
+  if (!isObject(v)) fail(path, 'expected object');
+  const action = reqString(v.action, `${path}.action`);
+  if (!ASSERT_ACTIONS.has(action)) {
+    fail(`${path}.action`, `expected one of warning|error|ldwarning|lderror`);
+  }
+  const out: Assertion = {
+    expr: validateExpr(v.expr, `${path}.expr`),
+    action: action as AssertAction,
+  };
+  const message = optString(v.message, `${path}.message`);
+  if (message !== undefined) out.message = message;
+  const pc = optNumber(v.pc, `${path}.pc`);
+  if (pc !== undefined) out.pc = pc;
+  return out;
+}
+
 function validateSymbol(v: unknown, path: string): Symbol {
   if (!isObject(v)) fail(path, 'expected object');
   const out: Symbol = {};
@@ -189,6 +206,8 @@ function mapEntries(v: unknown, path: string): Array<[unknown, unknown]> {
   });
 }
 
+const ASSERT_ACTIONS =
+    new Set<string>(['warning', 'error', 'ldwarning', 'lderror']);
 const OVERWRITE_MODES = new Set<string>(['forbid', 'allow', 'require']);
 const PLACEMENT_MODES = new Set<string>(['declarationOrder', 'any', 'all']);
 
@@ -221,7 +240,7 @@ function validateChunk(v: unknown, path: string): Chunk {
   }
   if (v.asserts !== undefined) {
     out.asserts = reqArray(v.asserts, `${path}.asserts`)
-      .map((e, i) => validateExpr(e, `${path}.asserts[${i}]`));
+      .map((a, i) => validateAssertion(a, `${path}.asserts[${i}]`));
   }
   if (v.overwrite !== undefined) {
     const ow = reqString(v.overwrite, `${path}.overwrite`);

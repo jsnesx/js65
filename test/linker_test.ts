@@ -961,7 +961,7 @@ describe('Linker', function() {
         segments: ['a'],
         org: 100,
         data: Uint8Array.of(2, 4, 6, 8),
-        asserts: [op('=', off(0, 4), num(104))],
+        asserts: [{expr: op('=', off(0, 4), num(104)), action: 'error' as const}],
       }],
       segments: [{name: 'a', size: 100, offset: 100, memory: 100}],
     };
@@ -974,7 +974,7 @@ describe('Linker', function() {
         segments: ['a'],
         org: 100,
         data: Uint8Array.of(2, 4, 6, 8),
-        asserts: [op('=', off(0, 4), num(105))],
+        asserts: [{expr: op('=', off(0, 4), num(105)), action: 'error' as const}],
       }],
       segments: [{name: 'a', size: 100, offset: 100, memory: 100}],
     };
