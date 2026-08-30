@@ -275,6 +275,86 @@ describe('Preprocessor', function() {
                  'q'],
                 /stack overflow/i);
     });
+
+    // Verified against ca65 V2.19 (Git c3e01062e).
+    // A `.macro` body is scanned with defines expanded, so a `.define` standing
+    // in for `.endmacro` closes the definition. js65 collects the body straight
+    // off the raw stream, so it never sees it and runs to EOF.
+    it('should end a macro with a .define that expands to .endmacro', async function() {
+      await test(['.define end_mac .endmacro',
+                  '.macro q',
+                  'x 1',
+                  'end_mac',
+                  'q'],
+                 await instruction('x 1'));
+    });
+
+    // The flip side: the define has to exist by the time the body is scanned,
+    // so declaring it afterwards leaves the `.macro` unterminated. ca65 swallows
+    // the `.define` into the body and then fails on the invocation.
+    it('should not end a macro with a .define declared after it', function() {
+      testError(['.macro q',
+                 'x 1',
+                 'end_mac',
+                 '.define end_mac .endmacro',
+                 'q'],
+                /endmacro/i);
+    });
+
+    // The nested-macro trick. A macro body is scanned but not expanded, so the
+    // inner `.macro` is stored verbatim and `end_mac` must NOT be defined yet,
+    // or it would close the outer definition early. It gets defined afterwards
+    // and only resolves when `outer` runs and the inner body is scanned for real.
+    it('should define a macro from inside a macro', async function() {
+      await test(['.macro outer',
+                  '.macro inner',
+                  'x 1',
+                  'end_mac',
+                  '.endmacro',
+                  '.define end_mac .endmacro',
+                  'outer',
+                  'inner'],
+                 await instruction('x 1'));
+    });
+
+    // Defining end_mac first closes `outer` at the `end_mac` line instead, which
+    // leaves the real `.endmacro` dangling.
+    it('should close the outer macro when end_mac is already defined', function() {
+      testError(['.define end_mac .endmacro',
+                 '.macro outer',
+                 '.macro inner',
+                 'x 1',
+                 'end_mac',
+                 '.endmacro',
+                 'outer'],
+                /endmacro/i);
+    });
+
+    // The user-reported macro: builds a comma separated list by rewriting a
+    // .define, with the generated push_back macro named via .ident/.concat.
+    // ca65 assembles this and emits the bytes 01 02.
+    it('should support a nested macro that accumulates a list', async function() {
+      await test(['.macro define_array name',
+                  '.macro .ident(.concat(.string(name), "_push_back")) value',
+                  '.local temp',
+                  '.define temp name',
+                  '.undefine name',
+                  '.ifblank temp',
+                  '.define name value',
+                  '.else',
+                  '.define name temp, value',
+                  '.endif',
+                  '.undefine temp',
+                  'end_mac',
+                  '.define name',
+                  '.endmacro',
+                  '.define end_mac .endmacro',
+                  'define_array tbl',
+                  'tbl_push_back 1',
+                  'tbl_push_back 2',
+                  '.byte tbl'],
+                 await directive('.byte 1, 2'));
+    });
   });
 
   describe('.repeat', function() {
@@ -312,6 +392,17 @@ describe('Preprocessor', function() {
            await instruction('foo 0 3'),
            await instruction('foo 1 3'),
            await instruction('foo 2 3'));
+    });
+
+    // Same root cause as the .macro case: the body scan reads raw lines, so a
+    // define standing in for .endrep never closes the block.
+    it('should end a repeat with a .define that expands to .endrep', async function() {
+      await test(['.define end_rep .endrep',
+                  '.repeat 2',
+                  'foo',
+                  'end_rep'],
+                 await instruction('foo'),
+                 await instruction('foo'));
     });
   });
 
@@ -376,6 +467,18 @@ describe('Preprocessor', function() {
            await instruction('f'),
            await instruction('h'),
            await instruction('z'));
+    });
+
+    // Same root cause as the .macro case: the body scan reads raw lines, so a
+    // define standing in for .endif never closes the block.
+    it('should end a conditional with a .define that expands to .endif', async function() {
+      await test(['.define end_if .endif',
+                  '.if 1',
+                  'x y',
+                  'end_if',
+                  'z'],
+                 await instruction('x y'),
+                 await instruction('z'));
     });
   });
 
