@@ -128,6 +128,9 @@ export class Preprocessor implements Tokens.Source {
   /** Sink for the conditional branches this run skipped. Only set by the LSP. */
   readonly inactiveRegionIndex?: InactiveRegionIndex;
 
+  /** Depth marker for nesting blocks that need to be expanded raw */
+  private rawMode = 0;
+
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor,
               readonly errorCollector?: ErrorCollector,
@@ -267,7 +270,6 @@ export class Preprocessor implements Tokens.Source {
 
   // Expand a single line of tokens from the front of toks.
   private readLine(): Token[]|undefined {
-    // Apply .define expansions as necessary.
     const line = this.stream.next();
     if (line == null) return line;
     return this.expandLine(line);
@@ -280,12 +282,43 @@ export class Preprocessor implements Tokens.Source {
     return this.expandLayers(line, Layer.DEFINES, pos);
   }
 
-  private expandFunctions(line: Token[], pos = 0): Token[] {
-    return this.expandLayers(line, Layer.FUNCTIONS, pos);
+  private expandLine(line: Token[], pos = 0): Token[] {
+    // Only expand functions when we aren't processing a function body
+    // like a macro, .if block, etc
+    const layers = this.rawMode ? Layer.DEFINES : Layer.ALL;
+    return this.expandLayers(line, layers, pos);
   }
 
-  private expandLine(line: Token[], pos = 0): Token[] {
-    return this.expandLayers(line, Layer.ALL, pos);
+  private inRawMode<T>(f: () => T): T {
+    this.rawMode++;
+    try {
+      return f();
+    } finally {
+      this.rawMode--;
+    }
+  }
+
+  /** Stream with defines applied and returns the define replacements in the stream */
+  private readonly defineExpanded: Tokens.Source = {
+    next: () => {
+      const line = this.stream.next();
+      return line == null ? line : this.expandDefines(line);
+    },
+  };
+
+  private collectBody<T>(f: (source: Tokens.Source) => T): T {
+    return this.inRawMode(() => f(this.defineExpanded));
+  }
+
+  /** Branch tests are evaluated live, so they need the functions back. */
+  private outsideRawMode<T>(f: () => T): T {
+    const saved = this.rawMode;
+    this.rawMode = 0;
+    try {
+      return f();
+    } finally {
+      this.rawMode = saved;
+    }
   }
 
   private expandLayers(line: Token[], layers: Layer, pos: number): Token[] {
@@ -942,7 +975,7 @@ export class Preprocessor implements Tokens.Source {
 
   private parseMacro(line: Token[]): void {
     const name = Tokens.expectIdentifier(line[1], line[0]);
-    const macro = Macro.from(line, this.stream);
+    const macro = this.collectBody(source => Macro.from(line, source));
     const prev = this.macros.get(name);
     if (prev) Tokens.fail(`Already defined: ${name}`, line[1]);
     this.macros.set(name, macro);
@@ -967,13 +1000,13 @@ export class Preprocessor implements Tokens.Source {
     let depth = 1;
     const start = line[0];
     let last = line;
-    Tokens.pullLines(this.stream, next => {
+    this.collectBody(source => Tokens.pullLines(source, next => {
       last = next ?? Tokens.fail(`.repeat with no .endrep`, start);
       if (Tokens.eq(last[0], Tokens.REPEAT)) depth++;
       if (Tokens.eq(last[0], Tokens.ENDREPEAT)) depth--;
       lines.push(last);
       return depth > 0;
-    });
+    }));
     this.repeats.push([lines, times, -1, ident]);
     this.parseEndRepeat(last);
   }
@@ -1029,7 +1062,7 @@ export class Preprocessor implements Tokens.Source {
     // (`.if`, `.elseif`, `.else`, `.endif`) stay lit, so switching branches
     // ends the run rather than extending it across the directive line.
     const dead = this.inactiveRegionIndex;
-    Tokens.pullLines(this.stream, line => {
+    this.collectBody(source => Tokens.pullLines(source, line => {
       // Report missing endif at the site of the starting .if
       if (!line) Tokens.fail(`EOF looking for .endif`, at);
       raw.push(line);
@@ -1056,12 +1089,12 @@ export class Preprocessor implements Tokens.Source {
           markerIdx.push(raw.length - 1);
           if (deferred) return true; // chain already deferred so stop evaluating
           dead?.flush();
-          const elseOutcome = this.condition(() => {
+          const elseOutcome = this.condition(() => this.outsideRawMode(() => {
             const r = this.evaluateConstOrDefer(
                 parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
                 front);
             return 'deferred' in r ? r : {value: !!r.value};
-          }, front);
+          }), front);
           if ('deferred' in elseOutcome) { deferred = true; return true; }
           cond = elseOutcome.value;
           return true;
@@ -1086,7 +1119,7 @@ export class Preprocessor implements Tokens.Source {
         dead?.skipLine(sourceOfLine(line));
       }
       return true;
-    });
+    }));
     if (deferred) {
       // Tag this depth's own markers so the late pass sends them straight
       // through instead of re-entering `parseIf`

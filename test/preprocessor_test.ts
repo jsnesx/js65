@@ -206,14 +206,18 @@ describe('Preprocessor', function() {
            await instruction('z x'));
     });
 
-    it('should not pre-expand production', async function() {
+    // Verified against ca65 V2.19: emits `05 99`. The body stores `.tcount`
+    // verbatim and evaluates it at invocation, but `b` is substituted when the
+    // body is scanned, so the later `.undefine` does not reach it.
+    it('should store token functions unexpanded but substitute defines',
+       async function() {
       await test(['.define b c',
             '.macro q a',
             'b .tcount({a})',
             '.endmacro',
             '.undefine b',
             'q a b c d e'],
-           await instruction('b 5'));
+           await instruction('c 5'));
     });
 
     it('should fill in unfilled args with blank', async function() {
@@ -278,8 +282,7 @@ describe('Preprocessor', function() {
 
     // Verified against ca65 V2.19 (Git c3e01062e).
     // A `.macro` body is scanned with defines expanded, so a `.define` standing
-    // in for `.endmacro` closes the definition. js65 collects the body straight
-    // off the raw stream, so it never sees it and runs to EOF.
+    // in for `.endmacro` closes the definition.
     it('should end a macro with a .define that expands to .endmacro', async function() {
       await test(['.define end_mac .endmacro',
                   '.macro q',
@@ -478,6 +481,42 @@ describe('Preprocessor', function() {
                   'end_if',
                   'z'],
                  await instruction('x y'),
+                 await instruction('z'));
+    });
+
+    // Verified against ca65 V2.19: emits only `77`. Define substitution sits
+    // below the IfCond gate, so it still closes a block from a dead branch.
+    it('should end a dead conditional with a .define that expands to .endif',
+       async function() {
+      await test(['.define end_if .endif',
+                  '.if 0',
+                  'x y',
+                  'end_if',
+                  'z'],
+                 await instruction('z'));
+    });
+
+    // Same, one level down: the outer block is dead and both terminators are
+    // defines. ca65 emits only `77`.
+    it('should end nested dead conditionals with .defined terminators',
+       async function() {
+      await test(['.define end_if .endif',
+                  '.if 0',
+                  '.if 1',
+                  'x y',
+                  'end_if',
+                  'end_if',
+                  'z'],
+                 await instruction('z'));
+    });
+
+    // Token functions sit above the gate, so a dead branch never evaluates
+    // them. ca65 accepts this and emits only `77`.
+    it('should not evaluate token functions in a dead branch', async function() {
+      await test(['.if 0',
+                  '.ident("nonexistent")',
+                  '.endif',
+                  'z'],
                  await instruction('z'));
     });
   });
