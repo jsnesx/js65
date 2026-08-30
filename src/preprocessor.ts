@@ -95,6 +95,19 @@ interface Env {
 //   abstract pump(): Generator<Token[]|undefined>;
 // }
 
+/**
+ * Which substitutions a walk over a line performs.
+ * `DEFINES` is for the C-like textual substitutions that run for all inputs 
+ * `FUNCTIONS` is the token functions like .ident
+ * We split this so that when reading in preprocessor blocks, we can continue
+ * running `define` substitution without expanding the functions like `.ident`
+ */
+const enum Layer {
+  DEFINES = 1,
+  FUNCTIONS = 2,
+  ALL = DEFINES | FUNCTIONS,
+}
+
 export class Preprocessor implements Tokens.Source {
   private readonly macros: Map<string, Define|Macro|string>;
   // Output lines produced by pump() but not yet consumed by next(). A single
@@ -263,7 +276,19 @@ export class Preprocessor implements Tokens.Source {
   ////////////////////////////////////////////////////////////////
   // EXPANSION
 
+  private expandDefines(line: Token[], pos = 0): Token[] {
+    return this.expandLayers(line, Layer.DEFINES, pos);
+  }
+
+  private expandFunctions(line: Token[], pos = 0): Token[] {
+    return this.expandLayers(line, Layer.FUNCTIONS, pos);
+  }
+
   private expandLine(line: Token[], pos = 0): Token[] {
+    return this.expandLayers(line, Layer.ALL, pos);
+  }
+
+  private expandLayers(line: Token[], layers: Layer, pos: number): Token[] {
     const front = line[0];
     let depth = 0;
     let maxPos = 0;
@@ -275,7 +300,7 @@ export class Preprocessor implements Tokens.Source {
         Tokens.fail(`Maximum expansion depth reached: ${
                       line.map(Tokens.name).join(' ')}`, front);
       }
-      pos = this.expandToken(line, pos);
+      pos = this.expandToken(line, pos, layers);
     }
     return line;
   }
@@ -319,9 +344,11 @@ export class Preprocessor implements Tokens.Source {
   }
 
   /** Returns the next position to expand. */
-  private expandToken(line: Token[], pos: number): number {
+  private expandToken(line: Token[], pos: number,
+                      layers: Layer = Layer.ALL): number {
     const front = line[pos]!;
     if (front.token === 'ident') {
+      if (!(layers & Layer.DEFINES)) return pos + 1;
       // define replacement has to happen first in case the scope has some
       // name that needs replaced before we turn it into a label.
       const define = this.macros.get(front.str);
@@ -334,13 +361,15 @@ export class Preprocessor implements Tokens.Source {
         }
       }
       // Whatever it expanded to still has to be joined to the scope in front.
+      // mergeScopePrefix shares this cursor with Define.expand so must stay
+      // in the define layer
       return this.mergeScopePrefix(line, pos) + 1;
     } else if (front.token === 'cs') {
-      return this.expandDirective(front.str, line, pos);
+      return this.expandDirective(front.str, line, pos, layers);
     } else if (front.token === 'grp') {
       // Expand the { ... } lists immediately instead of passing it
       // down to the callee
-      this.expandLine(front.inner);
+      this.expandLayers(front.inner, layers, 0);
     }
     return pos + 1;
   }
@@ -356,7 +385,9 @@ export class Preprocessor implements Tokens.Source {
     return true;
   }
 
-  private expandDirective(directive: string, line: Token[], i: number): number {
+  private expandDirective(directive: string, line: Token[], i: number,
+                          layers: Layer = Layer.ALL): number {
+    // Handling for the DEFINES layer
     switch (directive) {
       case '.define':
       case '.delmacro':
@@ -364,35 +395,39 @@ export class Preprocessor implements Tokens.Source {
       case '.ifndef':
       case '.undefine':
         return this.skipIdentifier(line, i);
-      case '.skip': return this.skip(line, i);
+      case '.skip': return this.skip(line, i, layers);
       case '.noexpand': return this.noexpand(line, i);
-      case '.tcount': return this.parseArgs(line, i, 1, this.tcount);
-      case '.match': return this.parseArgs(line, i, 2, this.matchTokens);
-      case '.xmatch': return this.parseArgs(line, i, 2, this.xmatchTokens);
-      case '.left': return this.parseArgs(line, i, 2, this.left);
-      case '.right': return this.parseArgs(line, i, 2, this.right);
-      case '.mid': return this.parseArgs(line, i, 3, this.mid);
-      case '.ident': return this.parseArgs(line, i, 1, this.ident);
-      case '.string': return this.parseArgs(line, i, 1, this.string);
-      case '.concat': return this.parseArgs(line, i, 0, this.concat);
-      case '.sprintf': return this.parseArgs(line, i, 0, this.sprintf);
-      case '.cond': return this.parseArgs(line, i, 3, this.cond);
+    }
+    if (!(layers & Layer.FUNCTIONS)) return i + 1;
+    // Handling for the FUNCTIONS layer
+    switch (directive) {
+      case '.tcount': return this.parseArgs(line, i, 1, this.tcount, layers);
+      case '.match': return this.parseArgs(line, i, 2, this.matchTokens, layers);
+      case '.xmatch': return this.parseArgs(line, i, 2, this.xmatchTokens, layers);
+      case '.left': return this.parseArgs(line, i, 2, this.left, layers);
+      case '.right': return this.parseArgs(line, i, 2, this.right, layers);
+      case '.mid': return this.parseArgs(line, i, 3, this.mid, layers);
+      case '.ident': return this.parseArgs(line, i, 1, this.ident, layers);
+      case '.string': return this.parseArgs(line, i, 1, this.string, layers);
+      case '.concat': return this.parseArgs(line, i, 0, this.concat, layers);
+      case '.sprintf': return this.parseArgs(line, i, 0, this.sprintf, layers);
+      case '.cond': return this.parseArgs(line, i, 3, this.cond, layers);
       case '.blank':
-        return this.parseArgs(line, i, 1, this.blank);
+        return this.parseArgs(line, i, 1, this.blank, layers);
       case '.const':
-        return this.parseArgs(line, i, 1, this.constExpr);
+        return this.parseArgs(line, i, 1, this.constExpr, layers);
       case '.defined':
-        return this.parseArgs(line, i, 1, this.definedSymbol);
+        return this.parseArgs(line, i, 1, this.definedSymbol, layers);
       case '.definedmacro':
-        return this.parseArgs(line, i, 1, this.definedMacro);
+        return this.parseArgs(line, i, 1, this.definedMacro, layers);
       case '.definedsymbol':
-        return this.parseArgs(line, i, 1, this.definedSymbol);
+        return this.parseArgs(line, i, 1, this.definedSymbol, layers);
       case '.ismnemonic':
-        return this.parseArgs(line, i, 1, this.isMnemonic);
+        return this.parseArgs(line, i, 1, this.isMnemonic, layers);
       case '.constantsymbol':
-        return this.parseArgs(line, i, 1, this.constantSymbol);
+        return this.parseArgs(line, i, 1, this.constantSymbol, layers);
       case '.referencedsymbol':
-        return this.parseArgs(line, i, 1, this.referencedSymbol);
+        return this.parseArgs(line, i, 1, this.referencedSymbol, layers);
       case '.time':
         // Seconds since the epoch, so that source can stamp a build time.
         return this.pseudoVariable(line, i, Math.floor(Date.now() / 1000));
@@ -418,14 +453,14 @@ export class Preprocessor implements Tokens.Source {
 
   // QUESTION - does skip descend into groups?
   //          - seems like it should...
-  private skip(line: Token[], i: number): number {
+  private skip(line: Token[], i: number, layers: Layer = Layer.ALL): number {
     // expand i + 1, then splice self out
     line.splice(i, 1);
     const skipped = line[i];
     if (skipped?.token === 'grp') {
-      this.expandToken(skipped.inner, 0);
+      this.expandToken(skipped.inner, 0, layers);
     } else {
-      this.expandToken(line, i + 1);
+      this.expandToken(line, i + 1, layers);
     }
     return i;
   }
@@ -443,14 +478,15 @@ export class Preprocessor implements Tokens.Source {
 
   private parseArgs(line: Token[], i: number, argCount: number,
                     fn: (this: this, cs: Token,
-                         ...args: Token[][]) => Token[]): number {
+                         ...args: Token[][]) => Token[],
+                    layers: Layer = Layer.ALL): number {
     const cs = line[i];
     Tokens.expect(Tokens.LP, line[i + 1], cs);
     const end = Tokens.findBalanced(line, i + 1);
     const args =
         Tokens.parseArgList(line, i + 2, end).map(ts => {
           if (ts.length === 1 && ts[0].token === 'grp') ts = ts[0].inner;
-          return this.expandLine(ts);
+          return this.expandLayers(ts, layers, 0);
         });
     if (argCount && args.length !== argCount) {
       Tokens.fail(`Expected ${argCount} parameters: ${Tokens.nameOf(cs)}`, cs);

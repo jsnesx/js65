@@ -40,8 +40,8 @@ export class Define {
   }
 
   /**
-   * Expands in place, possibly in the middle of a line!  Returns true
-   * if successful.  Otherwise return false and do nothing.
+   * Expands in place, possibly in the middle of a line! Returns true
+   * if successful. Otherwise return false and do nothing.
    */
   expand(tokens: Token[], start: number): Token[][]|undefined {
     const reasons = [];
