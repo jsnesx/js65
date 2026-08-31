@@ -57,7 +57,7 @@ describe('CLI', function() {
       fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsListDir: async () => [],
+      fsListDir: () => [],
       exit: () => {},
     });
 
@@ -135,7 +135,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(args);
@@ -151,7 +151,7 @@ describe('CLI', function() {
       fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsListDir: async () => [],
+      fsListDir: () => [],
       exit: () => {},
     });
     const paths = (...args: string[]) => cli.parseArgs(args).options.includePaths;
@@ -209,7 +209,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { if (code !== 0) throw new Error(`exit ${code}`); },
       });
       await cli.run(args);
@@ -290,7 +290,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { if (code !== 0) throw new Error(`exit ${code}`); },
       });
       const lines: string[] = [];
@@ -360,7 +360,7 @@ describe('CLI', function() {
       fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsListDir: async () => [],
+      fsListDir: () => [],
       exit: () => {},
     });
 
@@ -385,7 +385,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exits.push(code); },
       });
       const log = console.log;
@@ -509,7 +509,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await dep.run(args);
@@ -528,7 +528,7 @@ describe('CLI', function() {
       fsReadStdin: async () => new Uint8Array(0),
       fsWriteString: async () => {},
       fsWriteBytes: async () => {},
-      fsListDir: async () => [],
+      fsListDir: () => [],
       exit: () => {},
     });
 
@@ -541,7 +541,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exits.push(code); },
       });
       return {
@@ -893,7 +893,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async () => {},
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exits.push(code); },
       });
       const log = console.log;
@@ -1052,7 +1052,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(['--target', 'sim', '-DFOO=BAR', '-o', 'out.bin', 'a.s', 'b.s']);
@@ -1076,7 +1076,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(['--target', 'sim', '-DFOO=5', '-o', 'out.bin', 'a.s', 'b.s']);
@@ -1105,7 +1105,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(args);
@@ -1306,7 +1306,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_p, f, d) => { written.set(f, d); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(['--target', 'sim', '--feature', 'underline_in_numbers',
@@ -1345,7 +1345,7 @@ describe('CLI', function() {
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async (_p, _f, data) => { written = data; },
         fsWriteBytes: async () => {},
-        fsListDir: async (dir: string) => {
+        fsListDir: (dir: string) => {
           listed.push(dir);
           const entries = tree[dir];
           if (!entries) throw new Error(`Could not list directory: ${dir}`);
@@ -1443,7 +1443,7 @@ Start:
         fsReadStdin: async () => new Uint8Array(0),
         fsWriteString: async () => {},
         fsWriteBytes: async (_path, filename, data) => { written.set(filename, data); },
-        fsListDir: async () => [],
+        fsListDir: () => [],
         exit: (code: number) => { exitCode = code; },
       });
       await cli.run(args);
@@ -1468,10 +1468,7 @@ async function make(args: string[], input: string, bytes: Uint8Array|null = null
       dataParts.push(data)
       return await Promise.resolve(undefined);
     },
-    fsListDir: async (_dir: string) => {
-      // unused for now
-      return await Promise.resolve([]);
-    },
+    fsListDir: (_dir: string) => [], // unused for now
     exit: (code: number) => process.exit(code),
   });
 
@@ -1497,9 +1494,7 @@ async function makeFiles(args: string[], input: string, bytes: Uint8Array|null =
       files.set(filename, data);
       return await Promise.resolve(undefined);
     },
-    fsListDir: async (_dir: string) => {
-      return await Promise.resolve([]);
-    },
+    fsListDir: (_dir: string) => [],
     exit: (code: number) => { exitCode = code; },
   });
 

@@ -1,8 +1,8 @@
-
 // SPDX-License-Identifier: MPL-2.0
 
+import type { FileCallbacks } from '../libassembler.ts';
 import { joinDir } from '../util.ts';
-import { parseEntry, type DirLister } from './fs.ts';
+import { parseEntry } from './fs.ts';
 
 const META = /[*?]/;
 
@@ -77,8 +77,8 @@ export function globRoot(pattern: string): string {
   return lead.join('/');
 }
 
-/** Lists one directory the way `Callbacks.fsListDir` does, but synchronously. */
-export type SyncDirLister = (dir: string) => string[];
+/** One directory listing, in `Callbacks.fsListDir` form. */
+export type ListDir = (dir: string) => string[];
 
 /**
  * The traversal behind every expansion here. It yields the directory it wants listed
@@ -119,25 +119,8 @@ export function* globWalk(rootDir: string, pattern: string):
 }
 
 /** Expand one pattern under `rootDir`, returning sorted matching paths relative to `rootDir`. */
-export async function expandGlob(
-    cb: DirLister, rootDir: string, pattern: string): Promise<string[]> {
-  const walk = globWalk(rootDir, pattern);
-  let step = walk.next();
-  while (!step.done) {
-    let entries: string[] | null;
-    try {
-      entries = await cb.fsListDir(step.value);
-    } catch {
-      entries = null;
-    }
-    step = walk.next(entries);
-  }
-  return step.value;
-}
-
-/** `expandGlob` against a synchronous lister. */
-export function expandGlobSync(
-    list: SyncDirLister, rootDir: string, pattern: string): string[] {
+export function expandGlob(
+    list: ListDir, rootDir: string, pattern: string): string[] {
   const walk = globWalk(rootDir, pattern);
   let step = walk.next();
   while (!step.done) {
@@ -156,20 +139,10 @@ export function expandGlobSync(
  * Expand a `sources` list. Literal entries keep their declared position; each pattern's
  * matches are sorted and spliced in place, so link order is stable and predictable.
  */
-export async function expandPathPatterns(
-    cb: DirLister, rootDir: string, patterns: readonly string[]): Promise<string[]> {
-  const expansions: Array<string[] | null> = [];
-  for (const pattern of patterns) {
-    expansions.push(isGlob(pattern) ? await expandGlob(cb, rootDir, pattern) : null);
-  }
-  return mergeSources(patterns, expansions);
-}
-
-/** `expandPathPatterns` against a synchronous lister. */
-export function expandPathPatternsSync(
-    list: SyncDirLister, rootDir: string, patterns: readonly string[]): string[] {
+export function expandPathPatterns(
+    list: ListDir, rootDir: string, patterns: readonly string[]): string[] {
   return mergeSources(patterns, patterns.map(
-      p => isGlob(p) ? expandGlobSync(list, rootDir, p) : null));
+      p => isGlob(p) ? expandGlob(list, rootDir, p) : null));
 }
 
 /** Splice each pattern's expansion (`null` for a literal entry) back into the declared order. */
@@ -194,6 +167,33 @@ function mergeSources(
       throw new Error(`no files matched source pattern "${patterns[i]}"`);
     }
     for (const rel of matches) add(rel);
+  }
+  return out;
+}
+
+export interface ResolvedGlob {
+  base: string;
+  path: string;
+}
+
+export function resolveGlob(
+    cb: FileCallbacks, bases: readonly string[], pattern: string): ResolvedGlob[] {
+  if (!isGlob(pattern)) return bases.map(base => ({base, path: toPosixPattern(pattern)}));
+  if (!cb.listDir) {
+    throw new Error(
+        `"${pattern}" needs a glob, but this frontend provides no directory listing callback.`);
+  }
+  const list = cb.listDir;
+  const out: ResolvedGlob[] = [];
+  const seen = new Set<string>();
+  for (const base of bases.length ? bases : ['']) {
+    for (const path of expandGlob(list, base, pattern)) {
+      // The same file reachable through two bases is still one file.
+      const full = joinDir(base, path);
+      if (seen.has(full)) continue;
+      seen.add(full);
+      out.push({base, path});
+    }
   }
   return out;
 }

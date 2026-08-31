@@ -6,6 +6,7 @@ import type { OverwriteMode } from './module.ts';
 import type { RefExtractor } from './assembler.ts';
 import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
 import type { LintPragmas } from './lint.ts';
+import type { AssemblyAction } from './libassembler.ts';
 
 
 /**
@@ -22,6 +23,18 @@ export interface SymbolDefine {
   value: string;
 }
 
+export class JsActionTable {
+  private readonly lists: AssemblyAction[][] = [];
+
+  add(actions: AssemblyAction[]): number {
+    return this.lists.push(actions) - 1;
+  }
+
+  get(index: number): AssemblyAction[] | undefined {
+    return this.lists[index];
+  }
+}
+
 export interface TokenizerOptions {
   /**
    * When a file is included, the file path is appended to each include path and
@@ -32,6 +45,9 @@ export interface TokenizerOptions {
   binIncludePaths?: string[];
   // caseInsensitive?: boolean; // handle elsewhere?
   generateDebugInfo?: boolean;
+
+  /** Output from the JS Preprocessor that can be applied in the current assembler context */
+  jsActions?: JsActionTable;
 
   /** ca65 name: `line_continuations` `\` escapes a newline, continuing a declaration across lines. */
   lineContinuations?: boolean;
@@ -61,6 +77,7 @@ export interface AssemblerOptions {
   overwriteMode?: OverwriteMode;
   refExtractor?: RefExtractor;
   generateDebugInfo?: boolean;
+  jsActions?: JsActionTable;
   moduleName?: string;
   tokenizerOptions?: TokenizerOptions;
   /** ca65 name: `bracket_as_indirect` `[addr]` is indirect, alongside `(addr)`. */

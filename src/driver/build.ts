@@ -39,14 +39,18 @@ export class BuildSession {
   // order, so the dependency file comes out the same on every run.
   private readonly deps = new Set<string>();
 
-  constructor(readonly callbacks: Callbacks) {}
-
   // The search loop runs here so only the base that actually hits is recorded as a
   // dependency and cached; the misses along the way leave no trace.
-  readonly fileCallbacks: FileCallbacks = {
-    resolveText: searchFiles((path, filename) => this.readSource(path, filename)),
-    resolveBinary: searchFiles((path, filename) => this.readBinary(path, filename)),
-  };
+  readonly fileCallbacks: FileCallbacks;
+
+  constructor(readonly callbacks: Callbacks) {
+    this.fileCallbacks = {
+      resolveText: searchFiles((path, filename) => this.readSource(path, filename)),
+      resolveBinary: searchFiles((path, filename) => this.readBinary(path, filename)),
+      listDir: dir => callbacks.fsListDir(dir),
+    };
+  }
+
 
   reset() {
     this.sources.clear();
@@ -278,7 +282,7 @@ export class Builder {
     this.session.reset();
     const outfile = overrides.outfile ?? project.output;
     try {
-      const sources = await this.expand(config, project);
+      const sources = this.expand(config, project);
       const inputs: AssemblyInput[] = [];
       for (const source of sources) {
         inputs.push(await this.session.readInput(source));
@@ -315,9 +319,9 @@ export class Builder {
   }
 
   /** Absolute POSIX paths of the project's sources, in link order. */
-  private async expand(config: Js65Config, project: Js65Project): Promise<string[]> {
-    const matches =
-        await expandPathPatterns(this.session.callbacks, config.rootDir, project.sourcePatterns);
+  private expand(config: Js65Config, project: Js65Project): string[] {
+    const matches = expandPathPatterns(dir => this.session.callbacks.fsListDir(dir),
+                                       config.rootDir, project.sourcePatterns);
     return matches.map(s => resolveProjectPath(config.rootDir, s));
   }
 

@@ -5,12 +5,15 @@
 
 import { Cli } from '../src/driver/cli.ts';
 import { dirname, resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
-import { mkdir, writeFile, readdir } from 'node:fs/promises';
+import { readFileSync, readdirSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { setGzipCodec } from '../src/driver/codec/codec.ts';
 import { nodeZlibCodec } from '../src/driver/codec/node.ts';
+import { setJsEngine } from '../src/driver/js/engine.ts';
+import { functionEngine } from '../src/driver/js/function.ts';
 
 setGzipCodec(nodeZlibCodec);
+setJsEngine(functionEngine);
 
 async function writeAt(path: string, filename: string, data: Uint8Array): Promise<void> {
   const full = resolve(path, filename);
@@ -49,10 +52,10 @@ const cli = new Cli({
     if (filename === Cli.STDOUT) await writeStdout(data);
     else await writeAt(path, filename, data);
   },
-  fsListDir: async (dir: string) => {
-    // withFileTypes so directories can be marked; readdir rejects on a missing dir,
+  fsListDir: (dir: string) => {
+    // withFileTypes so directories can be marked; readdirSync throws on a missing dir,
     // which is exactly the contract callers rely on.
-    const entries = await readdir(resolve(dir), { withFileTypes: true });
+    const entries = readdirSync(resolve(dir), { withFileTypes: true });
     return entries.map(e => e.isDirectory() ? `${e.name}/` : e.name);
   },
   exit: (code: number) => { process.exitCode = code; },

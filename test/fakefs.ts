@@ -17,6 +17,19 @@ export function fakeFs(files: Record<string, string|Uint8Array> = {}): FakeFs {
   const join = (dir: string, name: string) => dir && dir !== '.' ? `${dir}/${name}` : name;
   const find = (full: string) => files[full] ?? written.get(full);
   const names = () => [...Object.keys(files), ...written.keys()];
+  const listDir = (dir: string): string[] => {
+    const prefix = !dir || dir === '.' ? '' : `${dir}/`;
+    const entries = new Set<string>();
+    for (const full of names()) {
+      if (!full.startsWith(prefix)) continue;
+      const rest = full.substring(prefix.length);
+      const slash = rest.indexOf('/');
+      entries.add(slash < 0 ? rest : `${rest.substring(0, slash)}/`);
+    }
+    // A directory only exists here if something is under it, and the root always does.
+    if (prefix.length && !entries.size) throw new Error(`no such directory: ${dir}`);
+    return [...entries];
+  };
   const callbacks: Callbacks = {
     fsReadString: (dir, name) => {
       const data = find(join(dir, name));
@@ -33,19 +46,7 @@ export function fakeFs(files: Record<string, string|Uint8Array> = {}): FakeFs {
       written.set(join(dir, name), new TextEncoder().encode(data));
     },
     fsWriteBytes: async (dir, name, data) => { written.set(join(dir, name), data); },
-    fsListDir: async (dir) => {
-      const prefix = !dir || dir === '.' ? '' : `${dir}/`;
-      const entries = new Set<string>();
-      for (const full of names()) {
-        if (!full.startsWith(prefix)) continue;
-        const rest = full.substring(prefix.length);
-        const slash = rest.indexOf('/');
-        entries.add(slash < 0 ? rest : `${rest.substring(0, slash)}/`);
-      }
-      // A directory only exists here if something is under it, and the root always does.
-      if (prefix.length && !entries.size) throw new Error(`no such directory: ${dir}`);
-      return [...entries];
-    },
+    fsListDir: listDir,
     exit: () => {},
   };
   return {callbacks, written,

@@ -6,12 +6,15 @@
 import { Cli } from '../src/driver/cli.ts';
 import { setGzipCodec } from '../src/driver/codec/codec.ts';
 import { bunCodec } from '../src/driver/codec/bun.ts';
+import { setJsEngine } from '../src/driver/js/engine.ts';
+import { functionEngine } from '../src/driver/js/function.ts';
 
 setGzipCodec(bunCodec);
+setJsEngine(functionEngine);
 
 const { dirname, resolve } = require('path');
-const { mkdir, readdir } = require('fs').promises;
-const { readFileSync } = require('fs');
+const { mkdir } = require('fs').promises;
+const { readFileSync, readdirSync } = require('fs');
 
 async function mkdirFor(fullpath: string): Promise<void> {
   await mkdir(dirname(fullpath), { recursive: true });
@@ -42,10 +45,10 @@ const cli = new Cli({
     await mkdirFor(fullpath);
     await Bun.write(fullpath, data);
   },
-  fsListDir: async (dir: string) => {
-    // withFileTypes so directories can be marked; readdir rejects on a missing dir,
+  fsListDir: (dir: string) => {
+    // withFileTypes so directories can be marked; readdirSync throws on a missing dir,
     // which is exactly the contract callers rely on.
-    const entries = await readdir(resolve(dir), {withFileTypes: true});
+    const entries = readdirSync(resolve(dir), {withFileTypes: true});
     return entries.map((e: {name: string, isDirectory(): boolean}) =>
         e.isDirectory() ? `${e.name}/` : e.name);
   },

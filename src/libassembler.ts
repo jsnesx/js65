@@ -17,6 +17,7 @@
  * crowded, but you have free reign to do what you need.
  */
 
+import { runActions, type CodeRunner } from './actions.ts';
 import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
@@ -24,6 +25,7 @@ import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { applyFeatures,
+         JsActionTable,
          type AssemblerOptions as AsmOptions,
          type LintOptions,
          type SymbolDefine,
@@ -33,10 +35,8 @@ import * as Tokens from './token.ts';
 import { TokenStream, SourceContents, type ResolvedFile } from './tokenstream.ts';
 import { MODULE_FORMAT_VERSION, type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest, staleModuleVersion } from "./validate_modules.ts";
-import * as Exprs from './expr.ts';
 import type { Expr } from './expr.ts';
-import { MaxKeySizeCacheMap } from './util.ts';
-import { ErrorCollector, SourceError, type SourceInfo, type AssemblerMessage } from './error.ts';
+import { ErrorCollector, SourceError, type AssemblerMessage } from './error.ts';
 import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
 import { gzipCodec } from './driver/codec/codec.ts';
 
@@ -47,6 +47,8 @@ export type { Expr, Module, Segment, SymbolDefine, SymbolIndex };
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
 export { AsmEngine, AsmModule, sym } from './builder.ts';
+
+export { JsActionTable };
 
 /** Source location for an action (from the caller's code) */
 export interface ActionSource {
@@ -113,6 +115,8 @@ export interface AssemblerOptions {
   generateDebugInfo?: boolean;
   defines?: SymbolDefine[];
   features?: string[];
+  /** Results from the JS Preprocessor that can be inserted with .jsactions */
+  jsActions?: JsActionTable;
 
   lineContinuations?: boolean;
   numberSeparators?: boolean;
@@ -234,6 +238,7 @@ export interface OutputFile {
 export interface FileCallbacks {
   resolveText: (bases: readonly string[], filename: string) => ResolvedFile<string> | undefined;
   resolveBinary: (bases: readonly string[], filename: string) => ResolvedFile<Uint8Array | string> | undefined;
+  listDir?: (dir: string) => string[];
 }
 
 /**
@@ -265,16 +270,6 @@ export interface AssembleResult {
   /** All messages (errors, warnings, info) from assembly */
   messages: AssemblerMessage[];
   moduleMessages: AssemblerMessage[][];
-}
-
-// Helper to convert ActionSource to SourceInfo
-function toSourceInfo(source?: ActionSource): SourceInfo | undefined {
-  if (!source) return undefined;
-  return { file: source.file, line: source.line, column: 0 };
-}
-
-function toValueExpr(v: number | { op: 'sym', sym: string }): Expr {
-  return typeof v === 'number' ? { op: 'num', num: v } : v;
 }
 
 function applyDefines(asm: Assembler, pre: Preprocessor,
@@ -330,6 +325,7 @@ export function assemble(
     // One shared instance: pragmas are keyed by file, and every module's
     // tokenizer records into the same table the linter later consults.
     lintPragmas: options?.lint?.enabled === false ? undefined : new LintPragmas(),
+    jsActions: options?.jsActions,
   };
   const baseAsmOpts: AsmOptions = {
     generateDebugInfo: options?.generateDebugInfo,
@@ -341,6 +337,7 @@ export function assemble(
     symbolIndex: options?.symbolIndex,
     errorLimit: options?.errorLimit,
     lint: options?.lint,
+    jsActions: options?.jsActions,
   };
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
   allMessages.push(...featureMessages);
@@ -381,142 +378,29 @@ export function assemble(
         const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
         const original_module_name = module_name;
 
-        for (const action of input.actions) {
-          // Set source info for debug purposes before processing each action
-          asm.setSource(toSourceInfo(action.source));
-
-          switch (action.action) {
-            case 'code': {
-              // For code actions, we need to tokenize and process through the full pipeline
-              const toks = new TokenStream(
-                callbacks?.resolveText,
-                callbacks?.resolveBinary,
-                opts,
-                sourceContents,
-                asm.errorCollector
-              );
-              // Use the first name provided through a code action as the outer module name
-              if (module_name === original_module_name && action.name) {
-                module_name = action.name;
-              }
-              const tokenizer = new Tokenizer(action.code, module_name, opts, sourceContents, asm.errorCollector);
-              toks.enter(tokenizer);
-              const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
-                                           options?.macroIndex,
-                                           options?.inactiveRegionIndex);
-              applyDefines(asm, pre, options?.defines, opts);
-              asm.tokens(pre, signal);
-              break;
-            }
-
-            case 'label':
-              asm.label(action.label);
-              break;
-
-            case 'byte':
-              asm.byte(...action.bytes);
-              break;
-
-            case 'word':
-              asm.word(...action.words);
-              break;
-
-            case 'hibytes':
-              asm.byte(...action.values.map(v => Exprs.hiByte(toValueExpr(v))));
-              break;
-
-            case 'lobytes':
-              asm.byte(...action.values.map(v => Exprs.loByte(toValueExpr(v))));
-              break;
-
-            case 'literal':
-              asm.byteInternal(action.values, new MaxKeySizeCacheMap());
-              break;
-
-            case 'org':
-              asm.org(action.addr, action.name);
-              break;
-
-            case 'segment':
-              asm.segment(...action.name);
-              break;
-
-            case 'reloc':
-              asm.reloc(action.name);
-              break;
-
-            case 'export':
-              asm.export(action.name);
-              break;
-
-            case 'exportzp':
-              asm.exportzp(...action.names);
-              break;
-
-            case 'import':
-              asm.import(...action.names);
-              break;
-
-            case 'importzp':
-              asm.importzp(...action.names);
-              break;
-
-            case 'global':
-              asm.global(...action.names);
-              break;
-
-            case 'globalzp':
-              asm.globalzp(...action.names);
-              break;
-
-            case 'align':
-              asm.align(action.boundary, action.fill);
-              break;
-
-            case 'res':
-              asm.res(action.count, action.value);
-              break;
-
-            case 'charmap':
-              asm.charMap(action.code, action.target);
-              break;
-
-            case 'strmap':
-              asm.strMap(action.key, action.bytes);
-              break;
-
-            case 'pushcharmap':
-              asm.pushCharmap();
-              break;
-
-            case 'popcharmap':
-              asm.popCharmap();
-              break;
-
-            case 'assign': {
-              const value = typeof action.value === 'string'
-                ? parseInt(action.value, 10)
-                : action.value;
-              asm.assign(action.name, value);
-              break;
-            }
-
-            case 'set': {
-              const value = typeof action.value === 'string'
-                ? parseInt(action.value, 10)
-                : action.value;
-              asm.set(action.name, value);
-              break;
-            }
-
-            case 'free':
-              asm.free(action.size);
-              break;
-
-            default:
-              console.warn(`Unknown action type:`, action);
+        // For code actions, we need to tokenize and process through the full pipeline
+        const runCode: CodeRunner = (asm, code, name) => {
+          const toks = new TokenStream(
+            callbacks?.resolveText,
+            callbacks?.resolveBinary,
+            opts,
+            sourceContents,
+            asm.errorCollector
+          );
+          // Use the first name provided through a code action as the outer module name
+          if (module_name === original_module_name && name) {
+            module_name = name;
           }
-        }
+          const tokenizer = new Tokenizer(code, module_name, opts, sourceContents, asm.errorCollector);
+          toks.enter(tokenizer);
+          const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
+                                       options?.macroIndex,
+                                       options?.inactiveRegionIndex);
+          applyDefines(asm, pre, options?.defines, opts);
+          asm.tokens(pre, signal);
+        };
+
+        runActions(asm, input.actions, runCode);
 
         const module = asm.module();
         module.name = module_name;
