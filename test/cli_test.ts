@@ -1,8 +1,10 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {describe, it, expect, spyOn} from 'bun:test';
+import {describe, it, expect, spyOn, beforeAll, afterAll} from 'bun:test';
 import {Cli} from '../src/driver/cli.ts'
+import {setJsEngine} from '../src/driver/js/engine.ts';
+import {functionEngine} from '../src/driver/js/function.ts';
 import { fromHexString, fromByteString, joinDir } from "../src/util.ts";
 import { VERSION } from '../src/version.ts';
 import { createHash } from "sha1-uint8array";
@@ -1502,3 +1504,27 @@ async function makeFiles(args: string[], input: string, bytes: Uint8Array|null =
   if (exitCode !== 0) throw new Error(`cli exited with code ${exitCode}`);
   return files;
 }
+
+describe('--allow-javascript', function() {
+  // The CLI object itself registers no engine; only the frontend entry points do.
+  beforeAll(() => setJsEngine(functionEngine));
+  afterAll(() => setJsEngine(undefined));
+
+  const BLOCK = '.segment "CODE"\n.jsbegin\n  a.byte([0x11, 0x22]);\n.jsend\n';
+
+  it('assembles a block when the flag is given', async function() {
+    const files = await makeFiles(
+        ['--target', 'sim', '--stdin', '-o', 'out.nes', '--allow-javascript'], BLOCK);
+    expect(Array.from(files.get('out.nes')!.slice(0, 2))).toEqual([0x11, 0x22]);
+  });
+
+  it('fails without the flag', async function() {
+    await expect(makeFiles(['--target', 'sim', '--stdin'], BLOCK)).rejects.toThrow();
+  });
+
+  it('still assembles a file that has no block, with no flag', async function() {
+    const files = await makeFiles(
+        ['--target', 'sim', '--stdin', '-o', 'out.nes'], 'lda #3');
+    expect(Array.from(files.get('out.nes')!.slice(0, 2))).toEqual([0xa9, 3]);
+  });
+});

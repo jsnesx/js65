@@ -57,6 +57,8 @@ export interface Js65Project {
   features: string[];
   /** `debugLevel`: 0 and up add debug info, -1 turns it off. */
   debug?: number;
+  /** Lets this project's `.jsbegin` blocks run, same as `--allow-javascript`. */
+  allowJavascript?: boolean;
 }
 
 /** A parsed `js65.json`. */
@@ -83,6 +85,7 @@ const CONFIG_KEYS = ['$schema', 'outDir', 'projects', 'lint'];
 const PROJECT_KEYS = [
   'name', 'sources', 'includePaths', 'binIncludePaths', 'linkerConfig', 'target',
   'output', 'dbgfile', 'mapfile', 'format', 'baseRom', 'defines', 'features', 'debug',
+  'allowJavascript',
 ];
 
 /**
@@ -150,6 +153,9 @@ function parseOne(
   const debug = p.debug === undefined ? undefined :
       typeof p.debug === 'number' && Number.isInteger(p.debug) ? p.debug :
       fail(`${where}.debug must be an integer`);
+  const allowJavascript = p.allowJavascript === undefined ? undefined :
+      typeof p.allowJavascript === 'boolean' ? p.allowJavascript :
+      fail(`${where}.allowJavascript must be a boolean`);
 
   return {
     name,
@@ -169,6 +175,7 @@ function parseOne(
     defines: parseDefines(fail, p.defines, `${where}.defines`),
     features: stringArray(fail, p.features, `${where}.features`) ?? [],
     debug,
+    allowJavascript,
   };
 }
 

@@ -21,6 +21,7 @@ import { runActions, type CodeRunner } from './actions.ts';
 import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
+import { jsPreprocess } from './jspreprocessor.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
@@ -117,6 +118,8 @@ export interface AssemblerOptions {
   features?: string[];
   /** Results from the JS Preprocessor that can be inserted with .jsactions */
   jsActions?: JsActionTable;
+  /** Enables the Javascript Preprocessor. Without this .js* will error out. */
+  allowJavascript?: boolean;
 
   lineContinuations?: boolean;
   numberSeparators?: boolean;
@@ -175,6 +178,8 @@ export interface Js65Options {
   includePaths?: string[];
   binIncludePaths?: string[];
   generateDebugInfo?: boolean;
+  /** `--allow-javascript`. Enables use of the Javascript preprocessor */
+  allowJavascript?: boolean;
 
   lineContinuations?: boolean;
   numberSeparators?: boolean;
@@ -234,6 +239,9 @@ export interface OutputFile {
  * trying to load the file `filename` and resolve the file location if found.
  * Report the hit as the index into `bases`, not the path string.
  * If the file is not found, then return null/undefined.
+ * 
+ * listDir is optional, and only used if you have js preprocessor enabled in order
+ * to support globbing.
  */
 export interface FileCallbacks {
   resolveText: (bases: readonly string[], filename: string) => ResolvedFile<string> | undefined;
@@ -314,6 +322,8 @@ export function assemble(
   const moduleMessages: AssemblerMessage[][] = [];
   const allMessages: AssemblerMessage[] = [];
 
+  const jsActions = options?.jsActions ?? new JsActionTable();
+
   const baseOpts: TokenizerOptions = {
     includePaths: options?.includePaths || [],
     binIncludePaths: options?.binIncludePaths,
@@ -325,7 +335,7 @@ export function assemble(
     // One shared instance: pragmas are keyed by file, and every module's
     // tokenizer records into the same table the linter later consults.
     lintPragmas: options?.lint?.enabled === false ? undefined : new LintPragmas(),
-    jsActions: options?.jsActions,
+    jsActions,
   };
   const baseAsmOpts: AsmOptions = {
     generateDebugInfo: options?.generateDebugInfo,
@@ -337,7 +347,7 @@ export function assemble(
     symbolIndex: options?.symbolIndex,
     errorLimit: options?.errorLimit,
     lint: options?.lint,
-    jsActions: options?.jsActions,
+    jsActions,
   };
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
   allMessages.push(...featureMessages);
@@ -422,8 +432,20 @@ export function assemble(
         asm.errorCollector
       );
 
+      const staged = jsPreprocess(input.code, input.name, {
+        jsActions,
+        allowJavascript: options?.allowJavascript,
+        callbacks,
+        includePaths: options?.includePaths,
+        binIncludePaths: options?.binIncludePaths,
+        defines: options?.defines,
+      });
+
       // Tokenize and assemble source code
-      const tokenizer = new Tokenizer(input.code, input.name, opts, sourceContents, asm.errorCollector);
+      const tokenizer = new Tokenizer(staged.code, input.name, opts, sourceContents, asm.errorCollector);
+      // The tokenizer wiped out any of the .js* directives
+      // but for the dbg info later, we want to put it back
+      if (staged.usedJavascript) sourceContents?.data.set(input.name, input.code);
       toks.enter(tokenizer);
       const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
                                    options?.macroIndex,
@@ -715,6 +737,7 @@ export function compile(
       generateDebugInfo: options.generateDebugInfo,
       defines: options.defines,
       features: options.features,
+      allowJavascript: options.allowJavascript,
       allowBrackets: options.allowBrackets,
       labelsWithoutColons: options.labelsWithoutColons,
       pcAssignment: options.pcAssignment,
@@ -754,6 +777,7 @@ export function compile(
             ? {baseIndex: found.baseIndex, content: base64.decode(found.content)}
             : found;
       },
+      listDir: callbacks?.listDir,
     };
 
     const asm = assemble(inputs, asmOpts, fileCallbacks, sourceContents, signal);

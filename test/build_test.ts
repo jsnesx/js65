@@ -1,13 +1,15 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {describe, it, expect} from 'bun:test';
+import {describe, it, expect, beforeAll, afterAll} from 'bun:test';
 import {Builder, BuildSession, selectProjects, STDIN,
         type BuildOverrides} from '../src/driver/build.ts';
 import {Cli} from '../src/driver/cli.ts';
 import type {Callbacks} from '../src/driver/fs.ts';
 import {parseProject} from '../src/driver/project.ts';
 import type {CompileResult, OutputFile, OutputType} from '../src/libassembler.ts';
+import {setJsEngine} from '../src/driver/js/engine.ts';
+import {functionEngine} from '../src/driver/js/function.ts';
 import {fakeFs} from './fakefs.ts';
 
 /** An in-memory filesystem, so a session can be driven without argv or a real disk. */
@@ -596,5 +598,141 @@ describe('BuildSession source cache', function() {
     files['main.s'] = 'second\n';
     await s.readInput('main.s');
     expect(s.sourceLine('main.s', 1)).toBe('second');
+  });
+});
+
+describe('JavaScript blocks in a build', function() {
+  // Only the frontend entry points register an engine, so a test has to do it too.
+  beforeAll(() => setJsEngine(functionEngine));
+  afterAll(() => setJsEngine(undefined));
+
+  const PROJECT = JSON.stringify({projects: [{
+    name: 'game', sources: ['src/a.s'], target: 'sim', allowJavascript: true,
+  }]});
+
+  it('puts the bytes a block emitted into the linked output', async function() {
+    const files = {
+      'js65.json': PROJECT,
+      'src/a.s': [
+        '.segment "CODE"',
+        '.jsbegin',
+        '  a.byte([0x11, 0x22]);',
+        '.jsend',
+        '  lda #3',
+      ].join('\n'),
+    };
+    const {written, result} = await runBuild(files);
+    expect(result.success).toBe(true);
+    expect([...written.get('build/game.nes')!].slice(0, 4))
+        .toEqual([0x11, 0x22, 0xa9, 3]);
+  });
+
+  it('resolves a label a block defined from ordinary assembly', async function() {
+    const files = {
+      'js65.json': PROJECT,
+      'src/a.s': [
+        '.segment "CODE"',
+        '.jsbegin',
+        '  a.label("gen");',
+        '  a.byte(0x42);',
+        '.jsend',
+        '  lda gen',
+      ].join('\n'),
+    };
+    const {written, result} = await runBuild(files);
+    expect(result.success).toBe(true);
+    expect([...written.get('build/game.nes')!].slice(0, 2)).toEqual([0x42, 0xad]);
+  });
+
+  it('reads assets through .jsinput and lists them as dependencies', async function() {
+    const files = {
+      'js65.json': PROJECT,
+      'src/a.s': [
+        '.jsinclude "enc.js"',
+        '.jsinput tiles, "assets/*.bin"',
+        '.segment "CODE"',
+        '.jsbegin',
+        '  a.byte(tiles.map(t => encode(t.bytes[0])));',
+        '.jsend',
+      ].join('\n'),
+      'src/enc.js': 'function encode(b) { return b ^ 0xff; }',
+      'assets/a.bin': '\x01',
+      'assets/b.bin': '\x02',
+    };
+    const {written, text, result} = await runBuild(files, [], {depfile: 'game.d'});
+    expect(result.success).toBe(true);
+    expect([...written.get('build/game.nes')!].slice(0, 2)).toEqual([0xfe, 0xfd]);
+    // Touching any asset or helper has to trigger a rebuild, so all of them
+    // belong in the dep file alongside the source.
+    const dep = text('game.d');
+    for (const path of ['src/a.s', 'src/enc.js', 'assets/a.bin', 'assets/b.bin']) {
+      expect(dep).toContain(path);
+    }
+  });
+
+  it('passes -D values into the block as defines', async function() {
+    const files = {
+      'js65.json': PROJECT,
+      'src/a.s': '.segment "CODE"\n.jsbegin\na.byte(defines.LEVEL);\n.jsend\n',
+    };
+    const {written} = await runBuild(files, [], {defines: [{name: 'LEVEL', value: '7'}]});
+    expect([...written.get('build/game.nes')!].slice(0, 1)).toEqual([7]);
+  });
+
+  it('reports a block error against its line in the source file', async function() {
+    const files = {
+      'js65.json': PROJECT,
+      'src/a.s': '.segment "CODE"\n\n.jsbegin\nthrow new Error("boom");\n.jsend\n',
+    };
+    const {messages} = await runBuild(files);
+    expect(messages.join('\n')).toContain('boom');
+  });
+
+  it('leaves a file with no block completely alone', async function() {
+    const files = {'js65.json': PROJECT, 'src/a.s': 'lda #3\n'};
+    const {written, result, messages} = await runBuild(files);
+    expect(result.success).toBe(true);
+    expect(messages).toEqual([]);
+    expect([...written.get('build/game.nes')!].slice(0, 2)).toEqual([0xa9, 3]);
+  });
+});
+
+describe('the --allow-javascript gate in a build', function() {
+  beforeAll(() => setJsEngine(functionEngine));
+  afterAll(() => setJsEngine(undefined));
+
+  const BLOCK = '.segment "CODE"\n.jsbegin\n  a.byte(1);\n.jsend\n';
+
+  function project(extra: Record<string, unknown> = {}) {
+    return JSON.stringify({projects: [{
+      name: 'game', sources: ['src/a.s'], target: 'sim', ...extra,
+    }]});
+  }
+
+  it('fails with a message naming the flag when nothing opted in', async function() {
+    const {result, messages} = await runBuild(
+        {'js65.json': project(), 'src/a.s': BLOCK});
+    expect(result.success).toBe(false);
+    expect(messages.join('\n')).toContain('--allow-javascript');
+    expect(messages.join('\n')).toContain('arbitrary code at build time');
+  });
+
+  it('builds when js65.json sets allowJavascript', async function() {
+    const {result, written} = await runBuild(
+        {'js65.json': project({allowJavascript: true}), 'src/a.s': BLOCK});
+    expect(result.success).toBe(true);
+    expect([...written.get('build/game.nes')!].slice(0, 1)).toEqual([1]);
+  });
+
+  it('builds when the flag is passed, whatever the project file says',
+     async function() {
+    const {result} = await runBuild(
+        {'js65.json': project(), 'src/a.s': BLOCK}, [], {allowJavascript: true});
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a non-boolean allowJavascript in js65.json', function() {
+    expect(() => parseProject('js65.json', project({allowJavascript: 'yes'})))
+        .toThrow(/allowJavascript must be a boolean/);
   });
 });
