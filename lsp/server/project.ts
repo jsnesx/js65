@@ -7,7 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import {expandPathPatternsSync} from '../../src/driver/glob.ts';
+import {expandPathPatterns} from '../../src/driver/glob.ts';
 import {
   type Js65Config,
   parseProject,
@@ -50,7 +50,7 @@ export function loadProject(projectFile: string, fsImpl = fs): Js65Config {
   for (const project of config.projects) {
     let expanded: string[];
     try {
-      expanded = expandPathPatternsSync(listDir, config.rootDir, project.sourcePatterns);
+      expanded = expandPathPatterns(listDir, config.rootDir, project.sourcePatterns);
     } catch (err) {
       throw new Error(`${config.projectFile}: ${project.name}: ${errText(err)}`);
     }

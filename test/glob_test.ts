@@ -1,24 +1,22 @@
-
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
 import {
-  expandGlob, expandPathPatterns, globRoot, isGlob, matchGlob,
+  expandGlob, expandPathPatterns, globRoot, isGlob, matchGlob, resolveGlob,
 } from '../src/driver/glob.ts';
-import type {DirLister} from '../src/driver/fs.ts';
+import type {ListDir} from '../src/driver/glob.ts';
+import type {FileCallbacks} from '../src/libassembler.ts';
 
-/** A `fsListDir` over a literal tree, recording which directories were read. */
-function lister(tree: Record<string, string[]>): DirLister & {calls: string[]} {
+/** A lister over a literal tree, recording which directories were read. */
+function lister(tree: Record<string, string[]>): ListDir & {calls: string[]} {
   const calls: string[] = [];
-  return {
-    calls,
-    fsListDir: async (dir: string) => {
-      calls.push(dir);
-      const entries = tree[dir];
-      if (!entries) throw new Error(`Could not list directory: ${dir}`);
-      return entries;
-    },
+  const list = (dir: string) => {
+    calls.push(dir);
+    const entries = tree[dir];
+    if (!entries) throw new Error(`Could not list directory: ${dir}`);
+    return entries;
   };
+  return Object.assign(list, {calls});
 }
 
 describe('isGlob', function() {
@@ -98,45 +96,45 @@ describe('expandGlob', function() {
     '.git': ['config'],
   };
 
-  it('expands ** recursively and sorts the result', async function() {
-    expect(await expandGlob(lister(tree), '.', 'src/**/*.s'))
+  it('expands ** recursively and sorts the result', function() {
+    expect(expandGlob(lister(tree), '.', 'src/**/*.s'))
         .toEqual(['src/a.s', 'src/b.s', 'src/deep/z.s']);
   });
 
-  it('does not descend for a pattern without **', async function() {
+  it('does not descend for a pattern without **', function() {
     const l = lister(tree);
-    expect(await expandGlob(l, '.', 'src/*.s')).toEqual(['src/a.s', 'src/b.s']);
+    expect(expandGlob(l, '.', 'src/*.s')).toEqual(['src/a.s', 'src/b.s']);
     // src/deep is below the fixed match depth, so it is never even listed.
     expect(l.calls).not.toContain('src/deep');
   });
 
   // The whole point of rooting: a pattern under src/ must not read sibling trees.
-  it('roots traversal at the pattern\'s literal prefix', async function() {
+  it('roots traversal at the pattern\'s literal prefix', function() {
     const l = lister(tree);
-    await expandGlob(l, '.', 'src/**/*.s');
+    expandGlob(l, '.', 'src/**/*.s');
     expect(l.calls).toEqual(['src', 'src/deep']);
     expect(l.calls).not.toContain('inc');
   });
 
-  it('skips dot-entries so ** stays out of .git', async function() {
+  it('skips dot-entries so ** stays out of .git', function() {
     const l = lister(tree);
-    const found = await expandGlob(l, '.', '**/*');
+    const found = expandGlob(l, '.', '**/*');
     expect(l.calls).not.toContain('.git');
     expect(found.some(f => f.startsWith('.git'))).toBe(false);
   });
 
-  it('only matches files, never directories', async function() {
-    expect(await expandGlob(lister(tree), '.', 'src/*')).toEqual(
+  it('only matches files, never directories', function() {
+    expect(expandGlob(lister(tree), '.', 'src/*')).toEqual(
         ['src/a.s', 'src/b.s', 'src/notes.txt']);
   });
 
-  it('returns nothing when the root directory is absent', async function() {
-    expect(await expandGlob(lister(tree), '.', 'missing/**/*.s')).toEqual([]);
+  it('returns nothing when the root directory is absent', function() {
+    expect(expandGlob(lister(tree), '.', 'missing/**/*.s')).toEqual([]);
   });
 
-  it('resolves patterns against the given root directory', async function() {
+  it('resolves patterns against the given root directory', function() {
     const l = lister({'/proj': ['src/'], '/proj/src': ['a.s']});
-    expect(await expandGlob(l, '/proj', 'src/*.s')).toEqual(['src/a.s']);
+    expect(expandGlob(l, '/proj', 'src/*.s')).toEqual(['src/a.s']);
   });
 });
 
@@ -147,32 +145,80 @@ describe('expandPathPatterns', function() {
     'gen': ['tables.s'],
   };
 
-  it('keeps a literal entry in its declared position', async function() {
-    expect(await expandPathPatterns(lister(tree), '.', ['gen/tables.s', 'src/*.s']))
+  it('keeps a literal entry in its declared position', function() {
+    expect(expandPathPatterns(lister(tree), '.', ['gen/tables.s', 'src/*.s']))
         .toEqual(['gen/tables.s', 'src/a.s', 'src/b.s']);
-    expect(await expandPathPatterns(lister(tree), '.', ['src/*.s', 'gen/tables.s']))
+    expect(expandPathPatterns(lister(tree), '.', ['src/*.s', 'gen/tables.s']))
         .toEqual(['src/a.s', 'src/b.s', 'gen/tables.s']);
   });
 
   // A typo'd pattern would otherwise silently link an empty ROM.
-  it('throws when a pattern matches nothing', async function() {
-    await expect(expandPathPatterns(lister(tree), '.', ['src/*.asm']))
-        .rejects.toThrow(/no files matched source pattern "src\/\*\.asm"/);
+  it('throws when a pattern matches nothing', function() {
+    expect(() => expandPathPatterns(lister(tree), '.', ['src/*.asm']))
+        .toThrow(/no files matched source pattern "src\/\*\.asm"/);
   });
 
-  it('does not throw for a literal entry that does not exist', async function() {
+  it('does not throw for a literal entry that does not exist', function() {
     // The read that follows reports the missing file with a better message.
-    expect(await expandPathPatterns(lister(tree), '.', ['src/nope.s']))
+    expect(expandPathPatterns(lister(tree), '.', ['src/nope.s']))
         .toEqual(['src/nope.s']);
   });
 
-  it('assembles an overlapping file only once', async function() {
-    expect(await expandPathPatterns(lister(tree), '.', ['src/a.s', 'src/*.s']))
+  it('assembles an overlapping file only once', function() {
+    expect(expandPathPatterns(lister(tree), '.', ['src/a.s', 'src/*.s']))
         .toEqual(['src/a.s', 'src/b.s']);
   });
 
-  it('normalizes a backslash-separated literal', async function() {
-    expect(await expandPathPatterns(lister(tree), '.', ['src\\a.s']))
+  it('normalizes a backslash-separated literal', function() {
+    expect(expandPathPatterns(lister(tree), '.', ['src\\a.s']))
         .toEqual(['src/a.s']);
+  });
+});
+
+describe('resolveGlob', function() {
+  const tree = {
+    '.': ['assets/'],
+    'assets': ['b.png', 'a.png', 'notes.txt'],
+    'vendor': ['c.png'],
+    'vendor/assets': ['c.png'],
+  };
+
+  /** A `FileCallbacks` whose resolvers are never reached by these tests. */
+  function callbacks(listDir?: (dir: string) => string[]): FileCallbacks {
+    return {
+      resolveText: () => undefined,
+      resolveBinary: () => undefined,
+      listDir,
+    };
+  }
+
+  it('expands a pattern under each base, sorted within the base', function() {
+    expect(resolveGlob(callbacks(lister(tree)), ['.'], 'assets/*.png'))
+        .toEqual([{base: '.', path: 'assets/a.png'}, {base: '.', path: 'assets/b.png'}]);
+  });
+
+  it('searches the bases in order', function() {
+    expect(resolveGlob(callbacks(lister(tree)), ['.', 'vendor'], 'assets/*.png'))
+        .toEqual([
+          {base: '.', path: 'assets/a.png'},
+          {base: '.', path: 'assets/b.png'},
+          {base: 'vendor', path: 'assets/c.png'},
+        ]);
+  });
+
+  it('returns nothing for a pattern that matches nothing', function() {
+    expect(resolveGlob(callbacks(lister(tree)), ['.'], 'assets/*.chr')).toEqual([]);
+  });
+
+  it('passes a literal path through against every base, unexpanded', function() {
+    // The caller reads it through the resolve callbacks, which report a real miss.
+    expect(resolveGlob(callbacks(), ['.', 'vendor'], 'assets\\nope.png'))
+        .toEqual([{base: '.', path: 'assets/nope.png'},
+                  {base: 'vendor', path: 'assets/nope.png'}]);
+  });
+
+  it('errors on a glob when the frontend cannot list directories', function() {
+    expect(() => resolveGlob(callbacks(), ['.'], 'assets/*.png'))
+        .toThrow(/no directory listing callback/);
   });
 });

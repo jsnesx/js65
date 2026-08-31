@@ -33,7 +33,7 @@ function session(files: Record<string, string|Uint8Array> = {}) {
     fsWriteBytes: async (path, filename, data) => {
       written.set(path ? `${path}/${filename}` : filename, data);
     },
-    fsListDir: async () => [],
+    fsListDir: () => [],
     exit: () => {},
   };
   function read(path: string, filename: string): string|Uint8Array {
@@ -76,6 +76,16 @@ describe('BuildSession inputs', function() {
     await expect(s.readInput('main.o'))
         .rejects.toThrow('main.o: not a valid object file');
   });
+});
+
+describe('BuildSession directory listing', function() {
+  it('exposes the frontend listing as FileCallbacks.listDir', function() {
+    const {callbacks} = fakeFs({'assets/a.png': 'x', 'assets/b.png': 'y'});
+    const s = new BuildSession(callbacks);
+    expect(s.fileCallbacks.listDir).toBeDefined();
+    expect(s.fileCallbacks.listDir!('assets').sort()).toEqual(['a.png', 'b.png']);
+  });
+
 });
 
 describe('BuildSession dependency tracking', function() {

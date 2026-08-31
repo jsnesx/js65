@@ -14,8 +14,8 @@ export interface Callbacks {
   fsWriteString: (path: string, filename: string, data: string) => Promise<void>,
   /** Creates any missing parent directories before writing. */
   fsWriteBytes: (path: string, filename: string, data: Uint8Array) => Promise<void>,
-  /** List all paths in a directory, not recursive. */
-  fsListDir: (dir: string) => Promise<string[]>,
+  /** List all paths in a directory, not recursive. Throws when the directory is missing. */
+  fsListDir: (dir: string) => string[],
   exit: (code: number) => void,
 }
 
@@ -38,7 +38,7 @@ export async function walkFiles(
     visit: (file: string) => Promise<boolean>): Promise<boolean> {
   let entries: string[];
   try {
-    entries = await cb.fsListDir(root);
+    entries = cb.fsListDir(root);
   } catch {
     return false;
   }

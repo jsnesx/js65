@@ -15,6 +15,7 @@ import type { SymbolKind } from './lspindex.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from './options.ts';
 import type { LinkTimeEnv } from './latepass.ts';
+import { runActions } from './actions.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 import { createHash } from 'sha1-uint8array';
 
@@ -1469,6 +1470,7 @@ export class Assembler {
         case '.faraddr': return this.faraddr(...this.parseDataList(tokens));
         case '.dword': return this.dword(...this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
+        case '.jsactions': return this.jsActions(tokens);
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
         case '.import': return this.import(...this.parseIdentifierList(tokens));
         case '.export': return this.export(...this.parseIdentifierList(tokens));
@@ -2593,6 +2595,18 @@ export class Assembler {
     (s.free || (s.free = [])).push([this._org, this._org + size]);
     // Advance past the free space.
     this._org += size;
+  }
+
+  /** Replays the action list stage 0 parked at this index. */
+  private jsActions(tokens: Token[]) {
+    const index = this.parseConst(tokens, 1);
+    const actions = this.opts.jsActions?.get(index);
+    if (!actions) this.fail(`No JS action list at index ${index}`, tokens[0]);
+    // runActions rewrites the source location per action, so put it back for
+    // whatever follows the marker in the enclosing file.
+    const saved = this._source;
+    runActions(this, actions);
+    this.setSource(saved);
   }
 
   segmentPrefix(prefix: string) {

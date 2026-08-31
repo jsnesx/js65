@@ -13,7 +13,7 @@ function lister(tree: Record<string, string[]>): DirLister & {calls: string[]} {
   const calls: string[] = [];
   return {
     calls,
-    fsListDir: async (dir: string) => {
+    fsListDir: (dir: string) => {
       calls.push(dir);
       const entries = tree[dir];
       if (!entries) throw new Error(`Could not list directory: ${dir}`);

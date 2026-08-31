@@ -134,7 +134,7 @@ const cli = new Cli({
     if (filename === Cli.STDOUT) { __js65_stdoutBytes(data); return; }
     __js65_writeBytes(resolvePath(path, filename), data);
   },
-  fsListDir: async (dir: string): Promise<string[]> => __js65_listDir(dir),
+  fsListDir: (dir: string): string[] => __js65_listDir(dir),
   exit: (code: number) => __js65_exit(code),
 });
 
