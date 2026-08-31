@@ -156,6 +156,8 @@ const OPTIONS: Option[] = [
        out.options.features!.push(name.trim());
      }
    }},
+  {names: ['--allow-javascript'], arity: 0,
+   apply(out) { out.options.allowJavascript = true; }},
   {names: ['--no-lint'], arity: 0,
    apply(out) { out.options.lint!.enabled = false; }},
   {names: ['-W'], arity: 1, attached: true,
@@ -185,7 +187,7 @@ const SUBCOMMANDS = new Map<string, (src: string, cpu: Cpu, prg: Uint8Array) => 
  */
 const BUILD_OPTIONS = new Set([
   '-h', '-V', '-p', '-o', '--dbgfile', '-m', DEPFILE_FLAGS[0], '-I',
-  '--bin-include-dir', '-D', '--feature', '--no-lint', '-W',
+  '--bin-include-dir', '-D', '--feature', '--allow-javascript', '--no-lint', '-W',
 ]);
 
 /** The options `js65 init` takes. Scaffolding a folder needs almost nothing. */
@@ -425,6 +427,7 @@ export class Cli {
       binIncludePaths: args.options.binIncludePaths,
       defines: args.options.defines,
       features: args.options.features,
+      allowJavascript: args.options.allowJavascript,
       lint: args.options.lint,
       outfile: args.outfile || undefined,
       dbgfile: args.dbgfile || undefined,
@@ -647,6 +650,8 @@ optional arguments:
                           Define NAME for every selected project, overriding a
                           \`defines\` entry of the same name. Repeatable.
   --feature NAME[,NAME]   Enable a feature for every selected project. Repeatable.
+  --allow-javascript      Let \`.jsbegin\` blocks run in every selected project. Off by
+                          default. A project file can set \`allowJavascript\` instead.
   --no-lint               Turn off every lint, whatever the project file's \`lint\` says.
   -Wno-RULE               Turn off a single lint rule. Repeatable.
   -h/--help               Print this help text and exit.
@@ -737,6 +742,9 @@ optional arguments:
                           file started with \`.feature NAME\`. Takes a comma separated
                           list. Repeatable.
                           EX: --feature c_comments --feature pc_assignment,force_range
+  --allow-javascript      Let \`.jsbegin\` blocks run. They execute arbitrary code at
+                          build time, so they are disabled by default and any \`.js\`
+                          directive is an error without this flag.
   --no-lint               Turn off every lint. Lints are warnings/notes about code that
                           assembles cleanly but probably isn't what was meant; they never
                           fail the build.

@@ -191,6 +191,8 @@ export interface BuildOverrides {
   /** Applied after the project's, so `-D NAME=x` wins over the file's value. */
   defines?: SymbolDefine[];
   features?: string[];
+  /** `--allow-javascript`, which a project file's own setting cannot turn back off. */
+  allowJavascript?: boolean;
   lint?: LintOptions;
   outfile?: string;
   dbgfile?: string;
@@ -354,6 +356,8 @@ export async function projectOptions(
     ],
     defines: [...project.defines, ...(overrides.defines ?? [])],
     features: [...project.features, ...(overrides.features ?? [])],
+    // Either the flag or the project file is enough; both are explicit opt-ins.
+    allowJavascript: overrides.allowJavascript || project.allowJavascript,
     target: project.target,
     outputFormat: project.format,
     lineContinuations: true,
