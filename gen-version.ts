@@ -4,7 +4,7 @@
 // used by the build bot to take the current tag and apply it to all the builds.
 
 import { execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, renameSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { join } from 'path';
 
 const ROOT = import.meta.dirname;
@@ -79,12 +79,22 @@ export const VERSION = ${JSON.stringify(version)};
 `);
 }
 
-// The VS Code marketplace only accepts a strict `major.minor.patch`, so the
-// extension gets the release version with any prerelease/build metadata dropped.
-function marketplaceVersion(version: string): string {
-  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+// The VS Code marketplace only accepts a strict `major.minor.patch`, and marks
+// a version as a pre-release by an odd minor num. Doubling the minor keeps the two
+// channels on disjoint numbers: 1.1.0 ships as 1.2.0, and 1.1.0-alpha.2 as
+// 1.3.2, so a stable release never lands on an odd minor by accident.
+// The prerelease ordinal becomes the patch, keeping successive alphas ordered.
+function marketplaceVersion(version: string): { version: string, preRelease: boolean } {
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?(?:-([^+]+))?/.exec(version);
   if (!m) throw new Error(`cannot derive a marketplace version from ${version}`);
-  return `${m[1]}.${m[2]}.${m[3]}`;
+  const [, major, minor, patch, rawSuffix] = m;
+  const suffix = rawSuffix?.replace(/(^|\.)dev\.\d+$/, '');
+  if (!suffix) return { version: `${major}.${Number(minor) * 2}.${patch ?? 0}`, preRelease: false };
+  const ordinal = /(\d+)$/.exec(suffix);
+  return {
+    version: `${major}.${Number(minor) * 2 + 1}.${ordinal ? ordinal[1] : '0'}`,
+    preRelease: true,
+  };
 }
 
 // The tag itself, with any `dev.N+ghash` suffix a between-tags build appends
@@ -94,9 +104,18 @@ function releaseVersion(version: string): string {
 }
 
 const version = computeVersion();
+const marketplace = marketplaceVersion(version);
 updatePackageJson(join(ROOT, 'package.json'), version);
-updatePackageJson(join(ROOT, 'lsp/client/package.json'), marketplaceVersion(version));
+updatePackageJson(join(ROOT, 'lsp/client/package.json'), marketplace.version);
 updateDirectoryBuildProps(join(ROOT, 'integrations/dotnet/Directory.Build.props'), version);
 updateVersionTs(join(ROOT, 'src/version.ts'), version);
 updateHugoConfig(join(ROOT, 'website/hugo.yaml'), releaseVersion(version));
-process.stderr.write(`version: ${version}\n`);
+
+// Let the release workflow read back what it should publish.
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`
+    + `marketplace_version=${marketplace.version}\n`
+    + `pre_release=${marketplace.preRelease}\n`);
+}
+process.stderr.write(`version: ${version} (marketplace: ${marketplace.version}`
+  + `${marketplace.preRelease ? ', pre-release' : ''})\n`);
