@@ -15,4 +15,5 @@ node_modules/**
 tsconfig.json
 package-lock.json
 **/*.ts
+!types/js65-globals.d.ts
 **/.gitignore

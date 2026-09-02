@@ -197,14 +197,15 @@
 		}
 	},
 	"scripts": {
-		"vscode:prepublish": "bun run build:server && bun run bundle --minify",
+		"vscode:prepublish": "bun run build:jsglobals && bun run build:server && bun run bundle --minify",
 		"bundle": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20 --sourcemap",
 		"compile": "tsc -p ./",
 		"build": "bun run bundle && bun run compile",
 		"watch": "tsc -watch -p ./",
 		"build:server": "bun run scripts/build-server.mjs",
-		"package": "bun run build:server && bun run scripts/copy-license.mjs && vsce package --no-dependencies",
-		"pretest": "bun run build:server && bun run build",
+		"build:jsglobals": "bun ../gen-jsglobals.ts",
+		"package": "bun run build:jsglobals && bun run build:server && bun run scripts/copy-license.mjs && vsce package --no-dependencies",
+		"pretest": "bun run build:jsglobals && bun run build:server && bun run build",
 		"test": "node ./out/test/runTest.js"
 	},
 	"dependencies": {
