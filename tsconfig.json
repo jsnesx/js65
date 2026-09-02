@@ -10,6 +10,7 @@
         "src/**/*.ts",
         "test/**/*.ts",
         "lsp/server/**/*.ts",
-        "gen-version.ts"
+        "gen-version.ts",
+        "lsp/gen-jsglobals.ts"
     ],
 }

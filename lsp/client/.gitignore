@@ -4,6 +4,8 @@ dist
 .vscode-test
 # The language server bundle is copied in by `npm run build:server`.
 server/
+# Generated from src/builder.ts by `npm run build:jsglobals`.
+types/
 # Staged from the repo root by `npm run package` so it ships in the VSIX.
 LICENSE.txt
 *.vsix

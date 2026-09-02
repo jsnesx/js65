@@ -48,6 +48,7 @@
   ],
   "scripts": {
     "gen-version": "bun gen-version.ts",
+    "gen-jsglobals": "bun lsp/gen-jsglobals.ts",
     "cli-watch": "bun --watch --inspect ./integrations/bun.ts",
     "exe": "bun build --compile --minify --sourcemap --bytecode ./integrations/bun.ts --outfile ./build/js65-bun",
     "node": "bun build --target=node --format=esm --outfile build/js65-node.mjs integrations/node.ts",
