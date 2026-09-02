@@ -175,6 +175,7 @@ jobs:
       - name: Stamp the version from the git tag
         # Also rewrites lsp/client/package.json, which is the version the
         # packaged VSIX carries.
+        id: version
         run: bun run gen-version
       - name: Install deps
         run: bun install
@@ -188,8 +189,10 @@ jobs:
         working-directory: lsp/client
         run: xvfb-run -a bun run test
       - name: Package the VSIX
+        # `--pre-release` is recorded inside the VSIX, so a prerelease tag has to
+        # be packaged with it, not just published with it.
         working-directory: lsp/client
-        run: bun run package
+        run: bun run package ${{ steps.version.outputs.pre_release == 'true' && '--pre-release' || '' }}
       - name: Upload VSIX
         uses: actions/upload-artifact@v7
         with:
@@ -378,6 +381,30 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - run: npm publish ./js65-*.tgz --access public --tag ${{ steps.npm_tag.outputs.tag }}
+
+  publish-vscode:
+    needs: vscode-extension
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Download the VSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: js65-vscode
+          path: .
+      - name: Publish to the VS Code Marketplace
+        run: npx --yes @vscode/vsce@3 publish --packagePath js65-vscode-*.vsix --skip-duplicate
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        run: npx --yes ovsx@latest publish --packagePath js65-vscode-*.vsix --skip-duplicate
 
   github-release:
     runs-on: ubuntu-latest
