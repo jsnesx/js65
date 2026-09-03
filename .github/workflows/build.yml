@@ -383,7 +383,7 @@ jobs:
       - run: npm publish ./js65-*.tgz --access public --tag ${{ steps.npm_tag.outputs.tag }}
 
   publish-vscode:
-    needs: vscode-extension
+    needs: [build, vscode-extension]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
