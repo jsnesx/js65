@@ -3,6 +3,7 @@
 import {describe, it, expect, beforeAll, afterAll} from 'bun:test';
 import {setJsEngine} from '../src/driver/js/engine.ts';
 import {functionEngine} from '../src/driver/js/function.ts';
+import {JS_MODULES} from '../src/jsmodule/index.ts';
 import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
 import type {FileCallbacks} from '../src/libassembler.ts';
 import {JsActionTable} from '../src/options.ts';
@@ -165,43 +166,43 @@ describe('.jsinclude', function() {
 
 describe('.jsmodule', function() {
   it('binds the module name for the block to call', function() {
-    const result = run('.jsmodule sample\n.jsbegin\na.byte(sample.double(3));\n.jsend\n');
-    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [6]});
+    const result = run('.jsmodule bmp\n.jsbegin\na.byte(bmp.load ? 1 : 0);\n.jsend\n');
+    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [1]});
   });
 
   it('blanks the declaration so the tokenizer never sees it', function() {
-    const result = run('.jsmodule sample\n.jsbegin\n.jsend\n');
+    const result = run('.jsmodule bmp\n.jsbegin\n.jsend\n');
     expect(result.code.split('\n')[0]).toBe('');
   });
 
   it('loads a module even with no block in the file', function() {
-    const result = run('.jsmodule sample\nlda #3\n');
+    const result = run('.jsmodule bmp\nlda #3\n');
     expect(result.usedJavascript).toBe(true);
     expect(result.code.split('\n')).toEqual(['', 'lda #3', '']);
   });
 
   it('deduplicates a repeated module instead of emitting a second const', function() {
     const result = run(
-        '.jsmodule sample\n.jsmodule sample\n.jsbegin\na.byte(sample.double(2));\n.jsend\n');
+        '.jsmodule bmp\n.jsmodule bmp\n.jsbegin\na.byte(bmp.load ? 4 : 0);\n.jsend\n');
     expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
     expect(result.code.split('\n').slice(0, 2)).toEqual(['', '']);
   });
 
   it('comes before .jsinclude, so an include can build on it', function() {
-    const files = {'lib/on-top.js': 'const four = sample.double(2);'};
+    const files = {'lib/on-top.js': 'const four = bmp.load ? 4 : 0;'};
     const result = run(
-        '.jsinclude "lib/on-top.js"\n.jsmodule sample\n.jsbegin\na.byte(four);\n.jsend\n',
+        '.jsinclude "lib/on-top.js"\n.jsmodule bmp\n.jsbegin\na.byte(four);\n.jsend\n',
         files);
     expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
   });
 
   it('reports an unknown module and lists the known ones', function() {
     expect(() => run('.jsmodule nope\n.jsbegin\n.jsend\n'))
-        .toThrow(/Unknown \.jsmodule: nope[\s\S]*Known modules: sample/);
+        .toThrow(/Unknown \.jsmodule: nope[\s\S]*Known modules: bmp/);
   });
 
   it('rejects a quoted name, since it is an identifier not a path', function() {
-    expect(() => run('.jsmodule "sample"\n')).toThrow(/Expected \.jsmodule <name>/);
+    expect(() => run('.jsmodule "bmp"\n')).toThrow(/Expected \.jsmodule <name>/);
   });
 
   it('rejects a bare .jsmodule with no name', function() {
@@ -286,7 +287,7 @@ describe('jsPreprocess rejections', function() {
     });
 
     it(`rejects a .jsmodule inside ${open.split(' ')[0]}`, function() {
-      expect(() => run(`${open}\n.jsmodule sample\n${close}\n`))
+      expect(() => run(`${open}\n.jsmodule bmp\n${close}\n`))
           .toThrow(/cannot appear inside/);
     });
   }
@@ -388,7 +389,7 @@ describe('the --allow-javascript gate', function() {
   });
 
   it('rejects a bare .jsmodule, even with no block', function() {
-    expect(() => denied('.jsmodule sample\n'))
+    expect(() => denied('.jsmodule bmp\n'))
         .toThrow(/\.jsmodule requires --allow-javascript/);
   });
 
@@ -454,5 +455,249 @@ describe('a block inside a conditional', function() {
     expect(lines[0]).toBe('.if 0');
     expect(lines[1]).toBe('.jsactions 0');
     expect(lines[4]).toBe('.endif');
+  });
+});
+
+// -----
+// The `bmp` module. Its tests live here rather than in their own file so that every
+// .jsmodule behaviour, plumbing and payload alike, stays in one place.
+
+type Rgb = [number, number, number];
+
+interface BmpApi {
+  load(bytes: Uint8Array, opts?: {palette?: Rgb[], exact?: boolean}):
+      {width: number, height: number, pixels: Uint8Array, palette: Rgb[]};
+  loadRgba(bytes: Uint8Array): {width: number, height: number, data: Uint8Array};
+  encode(image: unknown, opts?: {bits?: number, palette?: Rgb[]}): Uint8Array;
+  lib: {decode: unknown, encode: unknown};
+}
+
+/**
+ * Evaluates the module text the way the prelude does. The `.jsmodule` describe above
+ * covers the directive itself; these tests are about what the module does once bound.
+ */
+function loadModule(): BmpApi {
+  const out: BmpApi[] = [];
+  new Function('out', `"use strict";\n${JS_MODULES.get('bmp')}\nout.push(bmp);`)(out);
+  return out[0];
+}
+
+const bmp = loadModule();
+
+// -----
+// Fixtures are built here rather than checked in: a hand-written header is the only way
+// to assert on exact palette indices, and it keeps binary assets out of the repo.
+
+function u16(v: number): number[] { return [v & 0xff, (v >> 8) & 0xff]; }
+function u32(v: number): number[] {
+  return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff];
+}
+
+/**
+ * An indexed BMP at 1, 4 or 8 bits. `rows` is top-down, one palette index per pixel;
+ * the rows are written bottom-up, which is what an ordinary BMP does.
+ */
+function indexedBmp(bits: 1 | 4 | 8, palette: Rgb[], rows: number[][]): Uint8Array {
+  const height = rows.length, width = rows[0].length;
+  const stride = Math.ceil((width * bits) / 32) * 4;
+  const perByte = 8 / bits;
+  const pixels: number[] = [];
+  for (let y = height - 1; y >= 0; y--) {
+    const row = new Array(stride).fill(0);
+    rows[y].forEach((idx, x) => {
+      const shift = 8 - bits - (x % perByte) * bits;
+      row[Math.floor(x / perByte)] |= (idx & ((1 << bits) - 1)) << shift;
+    });
+    pixels.push(...row);
+  }
+  const table = palette.flatMap(([r, g, b]) => [b, g, r, 0]);
+  const offset = 14 + 40 + table.length;
+  return new Uint8Array([
+    0x42, 0x4d, ...u32(offset + pixels.length), ...u16(0), ...u16(0), ...u32(offset),
+    ...u32(40), ...u32(width), ...u32(height), ...u16(1), ...u16(bits),
+    ...u32(0), ...u32(pixels.length), ...u32(2835), ...u32(2835),
+    ...u32(palette.length), ...u32(0),
+    ...table, ...pixels,
+  ]);
+}
+
+/** A 24-bit truecolor BMP, rows given top-down as [r, g, b] triples. */
+function truecolorBmp(rows: Rgb[][]): Uint8Array {
+  const height = rows.length, width = rows[0].length;
+  const stride = Math.ceil((width * 3) / 4) * 4;
+  const pixels: number[] = [];
+  for (let y = height - 1; y >= 0; y--) {
+    const row = new Array(stride).fill(0);
+    rows[y].forEach(([r, g, b], x) => {
+      row[x * 3] = b;
+      row[x * 3 + 1] = g;
+      row[x * 3 + 2] = r;
+    });
+    pixels.push(...row);
+  }
+  const offset = 14 + 40;
+  return new Uint8Array([
+    0x42, 0x4d, ...u32(offset + pixels.length), ...u16(0), ...u16(0), ...u32(offset),
+    ...u32(40), ...u32(width), ...u32(height), ...u16(1), ...u16(24),
+    ...u32(0), ...u32(pixels.length), ...u32(2835), ...u32(2835), ...u32(0), ...u32(0),
+  ].concat(pixels));
+}
+
+const RED: Rgb = [0xff, 0, 0];
+const GREEN: Rgb = [0, 0xff, 0];
+const BLUE: Rgb = [0, 0, 0xff];
+const BLACK: Rgb = [0, 0, 0];
+
+describe('bmp.load on an indexed source', function() {
+  it('reads 1-bit indices straight out of the file', function() {
+    const image = indexedBmp(1, [BLACK, RED], [[0, 1, 1, 0], [1, 0, 0, 1]]);
+    const out = bmp.load(image);
+    expect(out.width).toBe(4);
+    expect(out.height).toBe(2);
+    expect(Array.from(out.pixels)).toEqual([0, 1, 1, 0, 1, 0, 0, 1]);
+    expect(out.palette).toEqual([BLACK, RED]);
+  });
+
+  it('reads 4-bit indices, including ones past the low nibble', function() {
+    const palette: Rgb[] = [BLACK, RED, GREEN, BLUE, [1, 1, 1], [2, 2, 2]];
+    const out = bmp.load(indexedBmp(4, palette, [[0, 5, 3, 1, 2]]));
+    expect(Array.from(out.pixels)).toEqual([0, 5, 3, 1, 2]);
+    expect(out.palette).toEqual(palette);
+  });
+
+  it('reads 8-bit indices', function() {
+    const palette: Rgb[] = Array.from({length: 200}, (_, i) => [i, 0, 0]);
+    const out = bmp.load(indexedBmp(8, palette, [[0, 199, 7], [42, 42, 1]]));
+    expect(Array.from(out.pixels)).toEqual([0, 199, 7, 42, 42, 1]);
+  });
+
+  // The whole reason indices are read at the source: neither of these survives a
+  // round trip through RGBA and back.
+  it('keeps distinct indices that share a color', function() {
+    const out = bmp.load(indexedBmp(4, [RED, RED, RED], [[0, 1, 2]]));
+    expect(Array.from(out.pixels)).toEqual([0, 1, 2]);
+  });
+
+  it('preserves index order as authored rather than by first appearance', function() {
+    const out = bmp.load(indexedBmp(4, [BLUE, GREEN, RED], [[2, 2, 0]]));
+    expect(Array.from(out.pixels)).toEqual([2, 2, 0]);
+    expect(out.palette[0]).toEqual(BLUE);
+  });
+
+  // An 8-bit RLE stream can end a row early, leaving pixels with no index at all.
+  // Upstream paints those white; claiming they are palette entry 0 would be a lie.
+  it('refuses an RLE image that leaves a pixel undefined', function() {
+    const table = [0, 0, 0, 0, 0, 0, 0xff, 0]; // black, then red
+    const rle = [0x02, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00, 0x01]; // row of 2, EOL, row, EOF
+    const offset = 14 + 40 + table.length;
+    const image = new Uint8Array([
+      0x42, 0x4d, ...u32(offset + rle.length), ...u16(0), ...u16(0), ...u32(offset),
+      ...u32(40), ...u32(3), ...u32(2), ...u16(1), ...u16(8),
+      ...u32(1), ...u32(rle.length), ...u32(2835), ...u32(2835), ...u32(2), ...u32(0),
+      ...table, ...rle,
+    ]);
+    expect(() => bmp.load(image)).toThrow(/leaves the pixel at \(2, \d\) undefined/);
+  });
+
+  it('needs no palette option, and ignores one that is passed', function() {
+    const out = bmp.load(indexedBmp(1, [BLACK, RED], [[1, 0]]), {palette: [GREEN]});
+    expect(Array.from(out.pixels)).toEqual([1, 0]);
+    expect(out.palette).toEqual([BLACK, RED]);
+  });
+});
+
+describe('bmp.load on a truecolor source', function() {
+  const image = truecolorBmp([[RED, GREEN], [BLUE, RED]]);
+
+  it('maps each pixel through a supplied palette', function() {
+    const out = bmp.load(image, {palette: [GREEN, BLUE, RED]});
+    expect(Array.from(out.pixels)).toEqual([2, 0, 1, 2]);
+    expect(out.palette).toEqual([GREEN, BLUE, RED]);
+  });
+
+  it('throws without a palette, since it carries none of its own', function() {
+    expect(() => bmp.load(image)).toThrow(/24-bit image with no palette of its own/);
+  });
+
+  it('names the color and its coordinate when it is not in the palette', function() {
+    expect(() => bmp.load(image, {palette: [RED, GREEN]}))
+        .toThrow(/rgb\(0, 0, 255\) at \(0, 1\)/);
+  });
+
+  it('takes the nearest match when exact is off', function() {
+    // Blue is unmapped; a dark blue is much closer to it than red or green.
+    const out = bmp.load(image, {palette: [RED, GREEN, [0, 0, 0xc0]], exact: false});
+    expect(Array.from(out.pixels)).toEqual([0, 1, 2, 0]);
+  });
+
+  it('breaks a nearest-match tie toward the lower index', function() {
+    const out = bmp.load(image, {palette: [RED, GREEN], exact: false});
+    expect(Array.from(out.pixels)).toEqual([0, 1, 0, 0]);
+  });
+
+  it('picks the lowest index when a color appears twice in the palette', function() {
+    const out = bmp.load(image, {palette: [RED, GREEN, BLUE, RED]});
+    expect(Array.from(out.pixels)).toEqual([0, 1, 2, 0]);
+  });
+
+  it('rejects a malformed palette entry', function() {
+    expect(() => bmp.load(image, {palette: [[1, 2] as unknown as Rgb]}))
+        .toThrow(/not an \[r, g, b\] triple/);
+  });
+
+  it('rejects a channel outside 0-255', function() {
+    expect(() => bmp.load(image, {palette: [[0, 0, 300]]}))
+        .toThrow(/channel outside 0-255/);
+  });
+});
+
+describe('bmp.loadRgba', function() {
+  it('hands back straight RGBA in row-major order', function() {
+    const out = bmp.loadRgba(truecolorBmp([[RED, GREEN]]));
+    expect(out.width).toBe(2);
+    expect(Array.from(out.data)).toEqual([255, 0, 0, 255, 0, 255, 0, 255]);
+  });
+
+  it('expands an indexed source through its own palette', function() {
+    const out = bmp.loadRgba(indexedBmp(1, [BLACK, RED], [[1, 0]]));
+    expect(Array.from(out.data)).toEqual([255, 0, 0, 255, 0, 0, 0, 255]);
+  });
+});
+
+describe('bmp.encode', function() {
+  it('round trips an indexed image back to the same indices', function() {
+    const palette: Rgb[] = [BLACK, RED, GREEN, BLUE];
+    const rows = [[0, 1, 2, 3], [3, 2, 1, 0]];
+    const encoded = bmp.encode(
+        {width: 4, height: 2, pixels: new Uint8Array(rows.flat()), palette}, {bits: 8});
+    const out = bmp.load(encoded);
+    expect(out.width).toBe(4);
+    expect(out.height).toBe(2);
+    expect(Array.from(out.pixels)).toEqual(rows.flat());
+  });
+
+  it('round trips at 4 bits', function() {
+    const palette: Rgb[] = [BLACK, RED, GREEN, BLUE];
+    const encoded = bmp.encode(
+        {width: 3, height: 1, pixels: new Uint8Array([3, 0, 2]), palette}, {bits: 4});
+    expect(Array.from(bmp.load(encoded).pixels)).toEqual([3, 0, 2]);
+  });
+
+  it('round trips an RGBA image at 24 bits', function() {
+    const source = bmp.loadRgba(truecolorBmp([[RED, GREEN], [BLUE, BLACK]]));
+    const out = bmp.loadRgba(bmp.encode(source));
+    expect(Array.from(out.data)).toEqual(Array.from(source.data));
+  });
+
+  it('rejects an index the palette does not reach', function() {
+    expect(() => bmp.encode(
+        {width: 2, height: 1, pixels: new Uint8Array([0, 9]), palette: [RED, GREEN]}))
+        .toThrow(/index 9, outside a palette of 2/);
+  });
+
+  it('needs no deflate, so it works wherever the module loads', function() {
+    // BMP carries no compression, unlike PNG: this is the whole reason bmp lands first.
+    expect(bmp.encode({width: 1, height: 1, pixels: new Uint8Array([0]), palette: [RED]}))
+        .toBeInstanceOf(Uint8Array);
   });
 });

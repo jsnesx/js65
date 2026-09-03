@@ -15,5 +15,5 @@
     "rewriteRelativeImportExtensions": true
   },
   "include": ["src/**/*.ts", "integrations/node.ts"],
-  "exclude": ["test/**", "tools/**", "bench/**"]
+  "exclude": ["test/**", "tools/**", "bench/**", "src/jsmodule/*/**"]
 }

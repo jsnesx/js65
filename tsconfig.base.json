@@ -25,5 +25,6 @@
     "exclude": [
         "unused/*.ts",
         "asm/*.ts",
+        "src/jsmodule/*/**",
     ]
 }
