@@ -8,6 +8,9 @@ import {Analyzer, type AnalysisResult} from '../worker/analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {toPosix} from '../project.ts';
 import {pathToUri} from '../convert.ts';
+import {installNodeHost} from '../nodehost.ts';
+
+installNodeHost();
 
 /**
  * LSP 3.18 widened `Diagnostic.message` to `string | MarkupContent`. Everything
@@ -564,6 +567,8 @@ describe('analyzer', () => {
     });
     const flagged = [...withFlag.diagnostics.values()].flat();
     expect(flagged.filter(d => /allow-javascript/.test(messageOf(d)))).toHaveLength(0);
+    // The engine has to be registered too, or the block trades one error for another.
+    expect(flagged.map(messageOf)).toEqual([]);
 
     // Without the setting the block must still be rejected, same as the CLI.
     const without = await runAnalyzer(new MemFs(), [{path: '/proj/main.s', text: code}], {
