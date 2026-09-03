@@ -677,6 +677,39 @@ describe('spawned worker', function() {
       await client.terminate();
     }
   });
+
+  it('registers its own JS engine, so a .jsbegin block runs inside the worker', async function() {
+    const {client} = spawnWorker();
+    try {
+      const code = `${HEADER}.segment "PRG"\n.org $8000\n` +
+          `.jsbegin\na.byte([0x4c, 0x42]);\n.jsend\n`;
+      const result = await client.compile({
+        request: JSON.stringify({
+          inputs: [source(code)],
+          options: {lineContinuations: true, allowJavascript: true},
+        }),
+      });
+      expect(result.success).toBe(true);
+      const rom = result.outputs[0].data;
+      expect(Array.from(rom.slice(0x10, 0x12))).toEqual([0x4c, 0x42]);
+    } finally {
+      await client.terminate();
+    }
+  });
+});
+
+// A browser worker cannot be spawned under bun, so assert the registration by import.
+describe('browser worker entry', function() {
+  it('registers a JS engine when the entry module is loaded', async function() {
+    const {setJsEngine, jsEngine} = await import('../src/driver/js/engine.ts');
+    setJsEngine(undefined);
+    try {
+      await import('../src/driver/entry-worker-browser.ts');
+      expect(jsEngine()).toBeTruthy();
+    } finally {
+      setJsEngine(undefined);
+    }
+  });
 });
 
 describe('worker bundle boundary', function() {

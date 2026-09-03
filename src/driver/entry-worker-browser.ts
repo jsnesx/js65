@@ -3,10 +3,13 @@
 
 import { setGzipCodec } from './codec/codec.ts';
 import { pakoCodec } from './codec/pako.ts';
+import { setJsEngine } from './js/engine.ts';
+import { functionEngine } from './js/function.ts';
 import { serveWorker } from '../worker/handler.ts';
 import type { WorkerPort } from '../worker/port.ts';
 
 setGzipCodec(pakoCodec);
+setJsEngine(functionEngine);
 
 // Just the slice of DedicatedWorkerGlobalScope this file touches, declared locally rather
 // than pulling the whole "WebWorker" lib into every tsconfig that compiles src/.

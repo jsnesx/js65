@@ -656,6 +656,7 @@ function validateOptions(v: unknown, path: string): Js65Options {
   flag('numberSeparators');
   flag('cComments');
   flag('allowBrackets');
+  flag('allowJavascript');
   flag('labelsWithoutColons');
   flag('pcAssignment');
   flag('forceRange');

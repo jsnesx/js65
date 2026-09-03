@@ -35,6 +35,20 @@ describe('functionEngine', () => {
     expect(() => functionEngine.run('this is not javascript', {})).toThrow(SyntaxError);
   });
 
+  it('reports a CSP block rather than the raw EvalError', () => {
+    const real = globalThis.Function;
+    // A page without 'unsafe-eval' fails here at construction.
+    globalThis.Function = function() {
+      throw new EvalError(`call to Function() blocked by CSP`);
+    } as unknown as FunctionConstructor;
+    try {
+      expect(() => functionEngine.run('void 0;', {}))
+          .toThrow(/blocked by this page's Content-Security-Policy/);
+    } finally {
+      globalThis.Function = real;
+    }
+  });
+
   it('does not leak bindings between two runs', () => {
     functionEngine.run('const local = 5;', {});
     expect(() => functionEngine.run('void local;', {}))
