@@ -162,31 +162,57 @@ describe('analyzer worker', () => {
     }
   }, 15000);
 
-  // The behavior this whole effort exists for: while the worker is inside a synchronous
-  // assemble, the host thread is free, so a request that does not need the index comes back
-  // before the assemble does.
-  itIfBuilt('answers folding while a long assemble is in flight', async () => {
+  // Folding is one of the two methods that deliberately skip `settled()`, so it answers off
+  // the open buffer while an analysis is still pending rather than waiting for the index.
+  // A long debounce keeps that pass pending for the whole test, so nothing here is a race.
+  // It stays under `settled()`'s 10s timeout, so a folding request that started waiting on
+  // the index would block on the debounce rather than being let through by that timeout.
+  itIfBuilt('answers folding off the buffer without waiting for the index', async () => {
     const {root, mainPath, cleanup} = makeProject();
-    const {client} = spawnAnalyzer();
+    const {client} = spawnAnalyzer(4000);
     try {
       const config = loadProject(findProjectFile(mainPath)!);
       new FileSync(client).loadProject(config, root);
       client.setProject(config, root);
-      // Big enough that the assemble is unambiguously still running when folding answers.
-      const huge = 'main:\n' + '  lda #$01\n'.repeat(120000) + '.proc Foo\n  rts\n.endproc\n';
-      let assembleDone = false;
-      const analysis = nextDiagnostics(client).then((r) => { assembleDone = true; return r; });
-      client.open(pathToUri(mainPath), huge, 1);
-      const folding = await client.request<unknown[]>(
+      let analysed = false;
+      client.onDiagnostics = () => { analysed = true; };
+      client.open(pathToUri(mainPath),
+                  'main:\n  rts\n.proc Foo\n  rts\n.endproc\n', 1);
+      const folding = await client.request<Array<Record<string, unknown>>>(
           'textDocument/foldingRange', {textDocument: {uri: pathToUri(mainPath)}});
-      expect(Array.isArray(folding)).toBe(true);
-      expect(assembleDone).toBe(false);
-      await analysis;
+      // The `.proc`/`.endproc` pair, straight off the buffer that was just opened.
+      expect(folding).toEqual([{startLine: 2, endLine: 4, kind: 'region'}]);
+      expect(analysed).toBe(false);
     } finally {
       await client.terminate();
       cleanup();
     }
-  }, 30000);
+  }, 15000);
+
+  // The other half of that split: everything below the early-return in `feature()` does wait
+  // for `settled()`, so a hover issued the same way only answers once the pass has run.
+  itIfBuilt('makes a hover wait for the analysis the folding request skipped', async () => {
+    const {root, mainPath, cleanup} = makeProject();
+    const {client} = spawnAnalyzer(150);
+    try {
+      const config = loadProject(findProjectFile(mainPath)!);
+      new FileSync(client).loadProject(config, root);
+      client.setProject(config, root);
+      let analysed = false;
+      client.onDiagnostics = () => { analysed = true; };
+      client.open(pathToUri(mainPath),
+                  '.include "defs.inc"\nmain:\n  lda #DEFINED_VALUE\n  rts\n', 1);
+      const hover = await client.request<{contents: {value: string}} | undefined>(
+          'textDocument/hover',
+          {textDocument: {uri: pathToUri(mainPath)}, position: {line: 1, character: 1}});
+      // Gated on `settled()`, so the debounced pass has to have finished by now.
+      expect(analysed).toBe(true);
+      expect(hover).toBeDefined();
+    } finally {
+      await client.terminate();
+      cleanup();
+    }
+  }, 15000);
 
   itIfBuilt('collapses a burst of rapid edits into one analysis pass', async () => {
     const {root, mainPath, cleanup} = makeProject();
