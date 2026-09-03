@@ -4,6 +4,7 @@ import { AsmModule } from './builder.ts';
 import { jsEngine } from './driver/js/engine.ts';
 import { isGlob, resolveGlob } from './driver/glob.ts';
 import { SourceError, type SourceInfo } from './error.ts';
+import { JS_MODULES, jsModuleNames } from './jsmodule/index.ts';
 import type { FileCallbacks } from './libassembler.ts';
 import type { JsActionTable, SymbolDefine } from './options.ts';
 import { dirOf, joinDir } from './util.ts';
@@ -37,6 +38,7 @@ export interface JsInputFile {
 // Intentionally looks for ones that start a line for a "poormans" comment handler
 const RE_DIRECTIVE = /^\s*(\.[a-z_][a-z0-9_]*)\s*(.*?)\s*$/i;
 const RE_INPUT_ARGS = /^([A-Za-z_$][\w$]*)\s*,\s*(.*)$/;
+const RE_MODULE_NAME = /^[A-Za-z_$][\w$]*$/;
 
 // Nesting that would make a declaration conditional or repeated.
 const OPENERS = new Set([
@@ -51,7 +53,7 @@ const CLOSERS = new Set([
   '.endrep', '.endrepeat', '.endstruct', '.endunion', '.endenum',
 ]);
 
-const DECLARATIONS = new Set(['.jsinclude', '.jsinput']);
+const DECLARATIONS = new Set(['.jsinclude', '.jsinput', '.jsmodule']);
 
 function fail(file: string, line: number, message: string): never {
   const source: SourceInfo = {file, line, column: 0};
@@ -102,6 +104,7 @@ function definesScope(defines: readonly SymbolDefine[] | undefined): Record<stri
 interface Declarations {
   includes: {path: string, line: number}[];
   inputs: {name: string, pattern: string, line: number}[];
+  modules: {name: string, line: number}[];
 }
 
 interface Block {
@@ -114,7 +117,7 @@ interface Block {
 
 /** Splits the file into declarations, blocks, and the lines that are neither. */
 function scan(lines: readonly string[], file: string): {decls: Declarations, blocks: Block[]} {
-  const decls: Declarations = {includes: [], inputs: []};
+  const decls: Declarations = {includes: [], inputs: [], modules: []};
   const blocks: Block[] = [];
   // Depth is used for a basic check to see if the `.jsinclude/jsinput` are inside `.if` blocks
   // which is likely an error.
@@ -153,6 +156,11 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
         block = {start: lineNo, body: []};
       } else if (directive === '.jsinclude') {
         decls.includes.push({path: unquote(file, lineNo, rest), line: lineNo});
+      } else if (directive === '.jsmodule') {
+        if (!RE_MODULE_NAME.test(rest)) {
+          fail(file, lineNo, `Expected .jsmodule <name>, got: ${rest || '(nothing)'}`);
+        }
+        decls.modules.push({name: rest, line: lineNo});
       } else {
         const args = RE_INPUT_ARGS.exec(rest);
         if (!args) fail(file, lineNo, `Expected .jsinput <name>, "<path>"`);
@@ -168,6 +176,23 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
 
   if (block) fail(file, block.start, `.jsbegin without a matching .jsend`);
   return {decls, blocks};
+}
+
+function loadModules(file: string, decls: Declarations): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const {name, line} of decls.modules) {
+    const text = JS_MODULES.get(name);
+    if (text == null) {
+      fail(file, line,
+           `Unknown .jsmodule: ${name}\n` +
+           `  Known modules: ${jsModuleNames().join(', ')}`);
+    }
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push(text);
+  }
+  return out;
 }
 
 function loadInclude(file: string, path: string, opts: JsPreprocessOptions): string {
@@ -226,13 +251,15 @@ export function jsPreprocess(code: string, file: string,
                              opts: JsPreprocessOptions): JsPreprocessResult {
   const lines = code.split('\n');
   const {decls, blocks} = scan(lines, file);
-  if (!blocks.length && !decls.includes.length && !decls.inputs.length) {
+  if (!blocks.length && !decls.includes.length && !decls.inputs.length &&
+      !decls.modules.length) {
     return {code, usedJavascript: false, blocks: 0};
   }
   if (!opts.allowJavascript) {
     const first = [...blocks.map(b => ({line: b.start, what: '.jsbegin'})),
                    ...decls.includes.map(d => ({line: d.line, what: '.jsinclude'})),
-                   ...decls.inputs.map(d => ({line: d.line, what: '.jsinput'}))]
+                   ...decls.inputs.map(d => ({line: d.line, what: '.jsinput'})),
+                   ...decls.modules.map(d => ({line: d.line, what: '.jsmodule'}))]
         .sort((x, y) => x.line - y.line)[0];
     fail(file, first.line,
          `${first.what} requires --allow-javascript\n` +
@@ -246,7 +273,8 @@ export function jsPreprocess(code: string, file: string,
          `This frontend has no JavaScript engine, so .jsbegin blocks cannot run`);
   }
 
-  const prelude = decls.includes.map(d => loadInclude(file, d.path, opts)).join('\n');
+  const prelude = [...loadModules(file, decls),
+                   ...decls.includes.map(d => loadInclude(file, d.path, opts))].join('\n');
   const inputs = resolveInputs(file, decls, opts);
   const defines = definesScope(opts.defines);
 
@@ -261,6 +289,7 @@ export function jsPreprocess(code: string, file: string,
     blank(out, b.start, b.end, `.jsactions ${opts.jsActions.add(a.actions)}`);
   }
   for (const {line} of decls.inputs) blank(out, line, line);
+  for (const {line} of decls.modules) blank(out, line, line);
   for (let i = 0; i < lines.length; i++) {
     const m = RE_DIRECTIVE.exec(lines[i]);
     if (m && m[1].toLowerCase() === '.jsinclude') out[i] = '';

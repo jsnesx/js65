@@ -163,6 +163,52 @@ describe('.jsinclude', function() {
   });
 });
 
+describe('.jsmodule', function() {
+  it('binds the module name for the block to call', function() {
+    const result = run('.jsmodule sample\n.jsbegin\na.byte(sample.double(3));\n.jsend\n');
+    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [6]});
+  });
+
+  it('blanks the declaration so the tokenizer never sees it', function() {
+    const result = run('.jsmodule sample\n.jsbegin\n.jsend\n');
+    expect(result.code.split('\n')[0]).toBe('');
+  });
+
+  it('loads a module even with no block in the file', function() {
+    const result = run('.jsmodule sample\nlda #3\n');
+    expect(result.usedJavascript).toBe(true);
+    expect(result.code.split('\n')).toEqual(['', 'lda #3', '']);
+  });
+
+  it('deduplicates a repeated module instead of emitting a second const', function() {
+    const result = run(
+        '.jsmodule sample\n.jsmodule sample\n.jsbegin\na.byte(sample.double(2));\n.jsend\n');
+    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
+    expect(result.code.split('\n').slice(0, 2)).toEqual(['', '']);
+  });
+
+  it('comes before .jsinclude, so an include can build on it', function() {
+    const files = {'lib/on-top.js': 'const four = sample.double(2);'};
+    const result = run(
+        '.jsinclude "lib/on-top.js"\n.jsmodule sample\n.jsbegin\na.byte(four);\n.jsend\n',
+        files);
+    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
+  });
+
+  it('reports an unknown module and lists the known ones', function() {
+    expect(() => run('.jsmodule nope\n.jsbegin\n.jsend\n'))
+        .toThrow(/Unknown \.jsmodule: nope[\s\S]*Known modules: sample/);
+  });
+
+  it('rejects a quoted name, since it is an identifier not a path', function() {
+    expect(() => run('.jsmodule "sample"\n')).toThrow(/Expected \.jsmodule <name>/);
+  });
+
+  it('rejects a bare .jsmodule with no name', function() {
+    expect(() => run('.jsmodule\n')).toThrow(/Expected \.jsmodule <name>, got: \(nothing\)/);
+  });
+});
+
 describe('.jsinput', function() {
   const assets = {'assets/b.bin': 'BB', 'assets/a.bin': 'AA', 'assets/notes.txt': 'x'};
 
@@ -236,6 +282,11 @@ describe('jsPreprocess rejections', function() {
                                ['.proc p', '.endproc'], ['.repeat 2', '.endrepeat']]) {
     it(`rejects a declaration inside ${open.split(' ')[0]}`, function() {
       expect(() => run(`${open}\n.jsinput t, "a.bin"\n${close}\n`))
+          .toThrow(/cannot appear inside/);
+    });
+
+    it(`rejects a .jsmodule inside ${open.split(' ')[0]}`, function() {
+      expect(() => run(`${open}\n.jsmodule sample\n${close}\n`))
           .toThrow(/cannot appear inside/);
     });
   }
@@ -334,6 +385,17 @@ describe('the --allow-javascript gate', function() {
   it('rejects a bare .jsinput, even with no block', function() {
     expect(() => denied('.jsinput t, "a.bin"\n', {'a.bin': 'x'}))
         .toThrow(/\.jsinput requires --allow-javascript/);
+  });
+
+  it('rejects a bare .jsmodule, even with no block', function() {
+    expect(() => denied('.jsmodule sample\n'))
+        .toThrow(/\.jsmodule requires --allow-javascript/);
+  });
+
+  // The gate is about running JS at all, so it outranks whether the name resolves.
+  it('reports the gate, not the unknown name, for an unknown module', function() {
+    expect(() => denied('.jsmodule nope\n'))
+        .toThrow(/\.jsmodule requires --allow-javascript/);
   });
 
   it('reports the earliest .js construct in the file', function() {
