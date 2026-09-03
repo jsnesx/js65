@@ -395,6 +395,8 @@ export class Analyzer {
       // Without these every `.ifdef` guarded block is invisible to the LSP, so
       // whole banks go undeclared and the symbols inside them never resolve.
       defines: project.defines,
+      features: project.features,
+      allowJavascript: project.allowJavascript,
       errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
       // Workspace-wide, so a standalone file in a project folder lints the same
       // way the projects around it do.

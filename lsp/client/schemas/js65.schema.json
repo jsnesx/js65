@@ -1,7 +1,7 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
 	"title": "js65 project file",
-	"description": "The projects `js65 build` assembles and the language server analyzes. Paths resolve against this file's directory.",
+	"description": "Project descriptor. `js65 build` and the language server uses this to build your project.",
 	"type": "object",
 	"required": ["projects"],
 	"properties": {
@@ -16,37 +16,37 @@
 		},
 		"projects": {
 			"type": "array",
-			"description": "One entry per independently-assembled program.",
+			"description": "Each entry is for a fully assembled and linked program.",
 			"items": {
 				"type": "object",
 				"required": ["sources"],
 				"properties": {
 					"name": {
 						"type": "string",
-						"description": "Human-readable project name, and the default stem of its output files. Defaults to the first literal source's basename, or the directory holding this file."
+						"description": "Project name. Used as the default name for output files. Defaults to the first source file's basename, or the directory holding this file."
 					},
 					"sources": {
 						"type": "array",
-						"description": "Source files assembled for this project; each match is its own module. Globs are allowed: `*` and `?` stay inside one path segment, `**` spans whole segments. Matching is case-sensitive on every platform, matches are sorted, and a pattern that matches nothing is an error.",
+						"description": "Source files assembled for this project. Globs are allowed: `*` and `?` stay inside one folder, `**` spans folders. Matching is case-sensitive on every platform, matches are sorted, and a pattern that matches nothing is an error.",
 						"items": { "type": "string" }
 					},
 					"includePaths": {
 						"type": "array",
-						"description": "Search path for `.include`. Literal directories, no globs.",
+						"description": "Search path for `.include`. Globs not allowed here.",
 						"items": { "type": "string" }
 					},
 					"binIncludePaths": {
 						"type": "array",
-						"description": "Search path for `.incbin`. Literal directories, no globs.",
+						"description": "Search path for `.incbin`. Globs not allowed here.",
 						"items": { "type": "string" }
 					},
 					"linkerConfig": {
 						"type": "string",
-						"description": "Path to an ld65 config file, in place of a built-in `target`. In the editor, linking runs on save to surface segment-overflow errors."
+						"description": "Optional path to an ld65 config file, used in place of a built-in `target` or `segment` definitions."
 					},
 					"target": {
 						"type": "string",
-						"description": "Built-in segment layout, used when no linkerConfig is given. `nes-nrom` is a 40976-byte NROM-256 cartridge; `sim` is a headerless 64KB address space for tests and tools.",
+						"description": "Built-in basic segment layout. `sim` is a headerless 64KB address space for tests and tools.",
 						"enum": ["nes-nrom", "sim"]
 					},
 					"output": {
@@ -69,7 +69,7 @@
 					},
 					"baseRom": {
 						"type": "string",
-						"description": "ROM a patch or `ips` build assembles against, relative to this file."
+						"description": "ROM file that is used as the original data for the patch or final output."
 					},
 					"defines": {
 						"type": "object",
@@ -88,6 +88,11 @@
 						"type": "integer",
 						"description": "Debug info level. -1 disables debug info entirely.",
 						"default": 0
+					},
+					"allowJavascript": {
+						"type": "boolean",
+						"description": "Lets this project's `.jsbegin` blocks run, as if passed with `--allow-javascript`.",
+						"default": false
 					}
 				},
 				"additionalProperties": false
@@ -95,7 +100,7 @@
 		},
 		"lint": {
 			"type": "object",
-			"description": "Lint configuration for every project in this file. Lints run by default; a single line can also be silenced with a `; js65-lint-disable-next-line RULE` comment.",
+			"description": "Lint configuration for every project in this file. Lints run by default. A single line can also be silenced with a `; js65-lint-disable-next-line RULE` comment.",
 			"properties": {
 				"enabled": {
 					"type": "boolean",

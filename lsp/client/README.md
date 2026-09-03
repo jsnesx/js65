@@ -1,6 +1,6 @@
 # js65 for VS Code
 
-Language support for js65 6502 assembler, backed by the [js65](https://github.com/jsnesx/js65) assembler itself.
+Language support for js65 6502 assembler, backed by the [js65](https://github.com/jsnesx/js65) assembler.
 
 ## Features
 
@@ -20,7 +20,7 @@ Language support for js65 6502 assembler, backed by the [js65](https://github.co
 
 ## Project setup
 
-Add a `js65.json` at the workspace root to describe how your sources fit together
+Add a `js65.json` at the workspace root to describe how your sources are built into the final output
 
 ```json
 {
@@ -35,10 +35,14 @@ Add a `js65.json` at the workspace root to describe how your sources fit togethe
 }
 ```
 
-`js65 init` writes one of these, along with a project that builds as it stands.
+Or call `js65 init <foldername>` to create a basic project folder structure.
+`<foldername>` is an optional folder to create the project in, it will use the current folder if its not provided.
 
-Each project is one independently assembled program.
-Without a `js65.json`, files are analyzed standalone  syntax errors, navigation, and hover still work, and references to symbols defined in other files are reported as warnings rather than errors.
+Each `project` in the `js65.json` file is one independently assembled and linked program.
+If you need to compile multiple files in sequence, the sources field is compiled in order from first to last.
+If that is not enough, then you can always create multiple projects with compileOnly: true, and then combine all the outputs at the end.
+
+Without a `js65.json`, files are analyzed standalone so things like syntax errors, navigation, and hover still work, and references to symbols defined in other files are reported as warnings rather than errors.
 
 ## Language id
 
@@ -71,7 +75,7 @@ If you have a different language extension that takes the `.s`, then you can ass
 Requires [bun](https://bun.sh) on PATH.
 
 ```sh
-bun install          # from the repo root; this is a workspace package
+bun install
 bun run build        # bundle the extension and compile the tests
 bun run build:server # build lsp/server and copy the bundle into server/
 bun run package      # produce a .vsix

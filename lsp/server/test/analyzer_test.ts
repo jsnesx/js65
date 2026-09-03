@@ -553,6 +553,27 @@ describe('analyzer', () => {
     expect(header.filter(d => /hex/i.test(messageOf(d)))).toHaveLength(1);
   });
 
+  it('honors allowJavascript so .jsbegin blocks do not error in the editor', async () => {
+    const fs = new MemFs();
+    const code = '.jsbegin\na.byte(1);\n.jsend\n';
+    const withFlag = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}], {
+      rootDir: '/proj',
+      json: JSON.stringify({
+        projects: [{name: 'main', sources: ['main.s'], allowJavascript: true}],
+      }),
+    });
+    const flagged = [...withFlag.diagnostics.values()].flat();
+    expect(flagged.filter(d => /allow-javascript/.test(messageOf(d)))).toHaveLength(0);
+
+    // Without the setting the block must still be rejected, same as the CLI.
+    const without = await runAnalyzer(new MemFs(), [{path: '/proj/main.s', text: code}], {
+      rootDir: '/proj',
+      json: JSON.stringify({projects: [{name: 'main', sources: ['main.s']}]}),
+    });
+    const plain = [...without.diagnostics.values()].flat();
+    expect(plain.filter(d => /allow-javascript/.test(messageOf(d))).length).toBeGreaterThan(0);
+  });
+
   // Finding #14: the bucketing comment promised a dedupe that didn't exist.
   it('dedupes identical diagnostics from a header included twice', async () => {
     const fs = new MemFs();
