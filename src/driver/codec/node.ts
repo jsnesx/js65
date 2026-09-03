@@ -19,4 +19,5 @@ function toUint8Array(buf: Uint8Array): Uint8Array {
 export const nodeZlibCodec: GzipCodec = {
   gzip: (data) => toUint8Array(zlib().gzipSync(data, { level: 1 })),
   gunzip: (data) => toUint8Array(zlib().gunzipSync(data)),
+  deflate: (data, level) => toUint8Array(zlib().deflateSync(data, level === undefined ? {} : { level })),
 };

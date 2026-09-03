@@ -7,10 +7,12 @@
  * gzip libraries available too.
  */
 export interface GzipCodec {
-  /** Compress at level 1, no FNAME/mtime header if possible. */
+  /** Compress at level 1. No FNAME/mtime header if possible. */
   gzip(data: Uint8Array): Uint8Array;
-  /** Decompress a gzip member; throws on malformed/truncated input. */
+  /** Decompress a gzip member. Throws on malformed/truncated input. */
   gunzip(data: Uint8Array): Uint8Array;
+  /** Optional zlib deflate wrapper used by the UPNG library used in `.jsmodule png` */
+  deflate?(data: Uint8Array, level?: number): Uint8Array;
 }
 
 let codec: GzipCodec | undefined;

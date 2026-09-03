@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect, afterAll} from 'bun:test';
+import {inflateSync} from 'node:zlib';
 import {jsEngine, setJsEngine, type JsEngine} from '../src/driver/js/engine.ts';
 import {functionEngine} from '../src/driver/js/function.ts';
+import type {GzipCodec} from '../src/driver/codec/codec.ts';
+import {bunCodec} from '../src/driver/codec/bun.ts';
+import {nodeZlibCodec} from '../src/driver/codec/node.ts';
+import {pakoCodec} from '../src/driver/codec/pako.ts';
 
 // The registry is module-global; nothing registers one under bun test, so leave it that way.
 afterAll(() => setJsEngine(undefined));
@@ -74,5 +79,39 @@ describe('the engine registry', () => {
     setJsEngine(fake);
     jsEngine()!.run('anything', {});
     expect(calls).toEqual(['anything']);
+  });
+});
+
+// Every codec paired with a JS engine has to supply the zlib deflate that png.encode needs.
+const CODECS: [string, GzipCodec][] = [
+  ['bun', bunCodec],
+  ['node', nodeZlibCodec],
+  ['pako', pakoCodec],
+];
+
+function sample(len: number): Uint8Array {
+  return new Uint8Array(len).map((_, i) => (i * 13 + (i >> 5)) & 0xff);
+}
+
+describe.each(CODECS)('%s codec deflate', (_name, codec) => {
+  // UPNG hands the output to a decoder expecting zlib framing, not raw or gzip.
+  it('emits a zlib-wrapped stream', () => {
+    expect(codec.deflate!(sample(64))[0]).toBe(0x78);
+  });
+
+  it('round-trips through zlib inflate', () => {
+    const data = sample(20000);
+    expect(Buffer.from(inflateSync(codec.deflate!(data)))).toEqual(Buffer.from(data));
+  });
+
+  it('round-trips at an explicit level', () => {
+    const data = sample(4096);
+    for (const level of [1, 6, 9]) {
+      expect(Buffer.from(inflateSync(codec.deflate!(data, level)))).toEqual(Buffer.from(data));
+    }
+  });
+
+  it('round-trips empty input', () => {
+    expect(inflateSync(codec.deflate!(new Uint8Array(0))).length).toBe(0);
   });
 });
