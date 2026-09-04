@@ -24,9 +24,27 @@ const SEVERITY_MAP: Record<AssemblerMessage['level'], DiagnosticSeverity> = {
   info: 3,
 };
 
+/** URI scheme for the read-only view of a bundled jsmodule's original source. */
+export const JSMODULE_SCHEME = 'js65-jsmodule';
+
+const JSMODULE_PATH = /^<jsmodule ([A-Za-z_$][\w$]*)>\/(.+)$/;
+
 export function pathToUri(path: string): string {
   if (!path) return '';
+  // A jsmodule is bundled into js65 rather than read from disk, so it gets a
+  // URI the client serves read-only instead of a file:// path resolving nowhere.
+  const m = JSMODULE_PATH.exec(path);
+  if (m) return `${JSMODULE_SCHEME}:/${m[1]}/${m[2]}`;
   return URI.file(path).toString();
+}
+
+/** Splits a `js65-jsmodule:` URI back into the module and one of its sources. */
+export function jsModuleSourceOf(uri: string): {module: string, source: string} | undefined {
+  const parsed = URI.parse(uri);
+  if (parsed.scheme !== JSMODULE_SCHEME) return undefined;
+  const [, module, ...rest] = parsed.path.split('/');
+  if (!module || !rest.length) return undefined;
+  return {module, source: rest.join('/')};
 }
 
 export function uriToPath(uri: string): string {

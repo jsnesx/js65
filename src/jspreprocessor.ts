@@ -5,7 +5,8 @@ import { gzipCodec } from './driver/codec/codec.ts';
 import { getJsFrames, jsEngine, type JsFrame } from './driver/js/engine.ts';
 import { isGlob, resolveGlob } from './driver/glob.ts';
 import { SourceError, type SourceInfo } from './error.ts';
-import { JS_MODULES, jsModuleNames } from './jsmodule/index.ts';
+import { JS_MODULES, jsModuleMap, jsModuleNames } from './jsmodule/index.ts';
+import { mapPosition } from './jsmodule/sourcemap.ts';
 import type { FileCallbacks } from './libassembler.ts';
 import type { JsActionTable, SymbolDefine } from './options.ts';
 import { dirOf, joinDir } from './util.ts';
@@ -184,8 +185,8 @@ interface JsSegment {
   text: string;
   file: string;
   firstLine: number;
-  /** Set when `file` names no file on disk for things like a jsmodule */
-  virtual?: boolean;
+  /** Module name when `file` isnt a on disk file (for jsmodule) */
+  module?: string;
 }
 
 function loadModules(file: string, decls: Declarations): JsSegment[] {
@@ -200,7 +201,7 @@ function loadModules(file: string, decls: Declarations): JsSegment[] {
     }
     if (seen.has(name)) continue;
     seen.add(name);
-    out.push({text, file: `<jsmodule ${name}>`, firstLine: 1, virtual: true});
+    out.push({text, file: `<jsmodule ${name}>`, firstLine: 1, module: name});
   }
   return out;
 }
@@ -278,17 +279,29 @@ function combine(prelude: readonly JsSegment[], body: JsSegment): {code: string,
   spans.push({start: lineCount(text) + 1, segment: body});
   return {code: `${text}\n${body.text}`, spans};
 }
+// project - user included file
+// module - jsmodule WITH a sourceMap
+// unplaceable - jsmodule WITHOUT a sourceMap
+type Placement = 'project' | 'module' | 'unplaceable';
 
-/** Turns an engine line/column into the segment and file position it came from. */
-function locate(spans: readonly Span[], frame: JsFrame): {segment: JsSegment, source: SourceInfo} {
+/** Turns an engine line/column into the file position it came from. */
+function locate(spans: readonly Span[], frame: JsFrame): {source: SourceInfo, kind: Placement} {
   let span = spans[0];
   for (const s of spans) {
     if (s.start <= frame.line) span = s;
   }
-  return {segment: span.segment,
-          source: {file: span.segment.file,
-                   line: span.segment.firstLine + (frame.line - span.start),
-                   column: Math.max(0, frame.column - 1)}};
+  const segment = span.segment;
+  const line = segment.firstLine + (frame.line - span.start);
+  const column = Math.max(0, frame.column - 1);
+  const here = {file: segment.file, line, column};
+  if (segment.module == null) return {source: here, kind: 'project'};
+  // The bundle starts on line 2 of the module text, so the map's own numbering
+  // is one line back. See `generated` in gen-jsmodules.ts.
+  const mapped = mapPosition(jsModuleMap(segment.module), line - 1, column);
+  if (!mapped) return {source: here, kind: 'unplaceable'};
+  return {source: {file: `${segment.file}/${mapped.source}`,
+                   line: mapped.line, column: mapped.column},
+          kind: 'module'};
 }
 
 /**
@@ -301,14 +314,19 @@ function blockError(err: unknown, file: string, block: Block,
       err instanceof Error ? err.message : String(err)}`;
   const frames = getJsFrames(err) ?? [];
   const located = frames.map(f => locate(spans, f));
-  let source: SourceInfo = {file, line: block.start, column: 0};
-  // Outermost frame first, so the innermost ends up at the head of the chain.
-  // Skip over jsmodule frames for now since we can't view those without source mapping
-  for (let i = located.length - 1; i >= 0; i--) {
-    if (located[i].segment.virtual) continue;
-    source = {...located[i].source, parent: source};
+  // drop frames without a source mapping
+  const placed = located.filter(l => l.kind !== 'unplaceable');
+  const head = placed.findIndex(l => l.kind === 'project');
+  const rest = placed.filter((_, i) => i !== head);
+  let source: SourceInfo | undefined =
+      head >= 0 ? {file, line: block.start, column: 0} : undefined;
+  // Outermost first, so the innermost frame ends up nearest the head.
+  for (let i = rest.length - 1; i >= 0; i--) {
+    source = {...rest[i].source, parent: source};
   }
-  const out = new SourceError(message, source);
+  const out = new SourceError(message, head >= 0
+      ? {...placed[head].source, parent: source}
+      : {file, line: block.start, column: 0, parent: source});
   if (located.length) {
     out.stack = [`${out.name}: ${message}`,
                  ...located.map(({source: s}, i) =>

@@ -21,7 +21,9 @@ import {LspWorkerClient, type AnalyzerDiagnostics,
 import {spawnAnalyzerWorker} from './spawnworker.ts';
 import {FileSync} from './filesync.ts';
 import {watchedFilesGlob} from './filecachebuilder.ts';
-import {uriToPath} from './convert.ts';
+import {jsModuleSourceOf, uriToPath} from './convert.ts';
+import {jsModuleMap} from '../../src/jsmodule/index.ts';
+import {sourceContent} from '../../src/jsmodule/sourcemap.ts';
 import {registerNavigationFeatures} from './features/navigation.ts';
 import {registerHoverFeatures} from './features/hover.ts';
 import {registerCompletionFeatures} from './features/completion.ts';
@@ -182,6 +184,15 @@ export async function main(opts: ServerOptions = {}): Promise<void> {
         watchers: [{globPattern: '**/js65.json'}, {globPattern: watchedFilesGlob()}],
       });
     }
+  });
+
+  // Serves the original source behind a `js65-jsmodule:` link in a diagnostic.
+  // The text is the `sourcesContent` of the module's own map, so a build that
+  // ships no maps answers `found: false` rather than an empty document.
+  connection.onRequest('js65/jsmoduleSource', (params: {uri: string}) => {
+    const target = jsModuleSourceOf(params.uri);
+    const text = target && sourceContent(jsModuleMap(target.module), target.source);
+    return text == null ? {text: '', found: false} : {text, found: true};
   });
 
   connection.onDidChangeWatchedFiles((params) => {

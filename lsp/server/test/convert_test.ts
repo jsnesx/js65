@@ -2,7 +2,8 @@
 
 import {describe, it, expect} from 'bun:test';
 
-import {messageToDiagnostic, sourceInfoToRange, rangeContains, pathToUri, uriToPath} from '../convert.ts';
+import {messageToDiagnostic, sourceInfoToRange, rangeContains, pathToUri, uriToPath,
+        jsModuleSourceOf, JSMODULE_SCHEME} from '../convert.ts';
 import type {AssemblerMessage, SourceInfo} from '../../../src/error.ts';
 
 describe('convert', () => {
@@ -82,6 +83,25 @@ describe('convert', () => {
       expect(uri.startsWith('file://')).toBe(true);
       // On non-Windows hosts, fsPath comes back POSIX.
       expect(uriToPath(uri).replace(/\\/g, '/')).toBe(p);
+    });
+  });
+
+  describe('jsmodule locations', () => {
+    // A frame the js preprocessor mapped through a bundled module's source map.
+    const path = '<jsmodule bmp>/vendor/decoder.ts';
+
+    it('gives a bundled module its own scheme instead of a file:// path', () => {
+      expect(pathToUri(path)).toBe(`${JSMODULE_SCHEME}:/bmp/vendor/decoder.ts`);
+    });
+
+    it('splits that uri back into the module and its source', () => {
+      expect(jsModuleSourceOf(pathToUri(path)))
+          .toEqual({module: 'bmp', source: 'vendor/decoder.ts'});
+    });
+
+    it('leaves ordinary paths on file://', () => {
+      expect(pathToUri('/proj/main.s')).toStartWith('file://');
+      expect(jsModuleSourceOf(pathToUri('/proj/main.s'))).toBeUndefined();
     });
   });
 });

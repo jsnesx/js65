@@ -4,7 +4,8 @@ import {describe, it, expect, beforeAll, afterAll} from 'bun:test';
 import {setJsEngine} from '../src/driver/js/engine.ts';
 import {functionEngine} from '../src/driver/js/function.ts';
 import {bunCodec} from '../src/driver/codec/bun.ts';
-import {JS_MODULES} from '../src/jsmodule/index.ts';
+import {JS_MODULES, jsModuleMap} from '../src/jsmodule/index.ts';
+import {mapPosition, parseSourceMap, sourceContent} from '../src/jsmodule/sourcemap.ts';
 import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
 import type {FileCallbacks} from '../src/libassembler.ts';
 import {JsActionTable} from '../src/options.ts';
@@ -361,13 +362,35 @@ describe('jsPreprocess rejections', function() {
     expect(source!.parent).toMatchObject({file: 'main.s', line: 3});
   });
 
+  /** The whole `file:line` chain of a diagnostic, innermost first. */
+  function chainOf(source: SourceInfo | undefined): string[] {
+    const out: string[] = [];
+    for (let s = source; s; s = s.parent) out.push(`${s.file}:${s.line}`);
+    return out;
+  }
+
+  const BAD_BMP = '.jsmodule bmp\n.jsbegin\nbmp.load(new Uint8Array([1, 2, 3]));\n.jsend\n';
+
   it('anchors a throw inside a .jsmodule at the block, not the bundled module', function() {
-    // `<jsmodule bmp>` is no file an editor can open, so the diagnostic has to
-    // land on the caller; the module frame stays in the stack.
-    const source = errorSource(
-        '.jsmodule bmp\n.jsbegin\nbmp.load(new Uint8Array([1, 2, 3]));\n.jsend\n');
-    expect(source).toMatchObject({file: 'main.s', line: 3});
-    expect(source!.parent).toMatchObject({file: 'main.s', line: 2});
+    // A jsmodule position is viewable at best, never a file the editor has
+    // open, so the diagnostic itself has to land on the caller either way.
+    const chain = chainOf(errorSource(BAD_BMP));
+    expect(chain[0]).toBe('main.s:3');
+    expect(chain[chain.length - 1]).toBe('main.s:2');
+  });
+
+  it('maps module frames back to the vendor source when the build ships maps', function() {
+    // Browser builds are generated with --no-maps, so the mapped shape is only
+    // asserted when this build actually has the map.
+    const chain = chainOf(errorSource(BAD_BMP));
+    const inModule = chain.filter(entry => entry.startsWith('<jsmodule bmp>/'));
+    if (!jsModuleMap('bmp')) {
+      expect(inModule).toEqual([]);
+      return;
+    }
+    expect(inModule.length).toBeGreaterThan(0);
+    // The innermost frame is the range check that threw, in the decoder.
+    expect(chain[1]).toMatch(/^<jsmodule bmp>\/vendor\/decoder\.ts:\d+$/);
   });
 
   it('remaps the error stack into source coordinates', function() {
@@ -972,5 +995,66 @@ describe('png.encode', function() {
     const noDeflate = loadPng(undefined);
     expect(Array.from(noDeflate.load(indexedPng(1, [BLACK, RED], [[1, 0]])).pixels))
         .toEqual([1, 0]);
+  });
+});
+
+// Two segments on generated line 1: column 0 comes from a.ts:1:0, and column 10
+// from b.ts:5:2. VLQ digits are [genCol, sourceIndex, sourceLine, sourceColumn]
+// deltas, so `UCIE` is +10, +1, +4, +2 on top of the first segment.
+const MAP = JSON.stringify({
+  version: 3,
+  sources: ['a.ts', 'b.ts'],
+  sourcesContent: ['const a = 1;\n', 'const b = 2;\n'],
+  mappings: 'AAAA,UCIE',
+});
+
+describe('parseSourceMap', () => {
+  it('decodes the sources and their embedded text', () => {
+    const map = parseSourceMap(MAP)!;
+    expect(map.sources).toEqual(['a.ts', 'b.ts']);
+    expect(sourceContent(map, 'b.ts')).toBe('const b = 2;\n');
+  });
+
+  // A build that ships no maps is the browser bundle's permanent state, so
+  // every one of these has to be a value rather than a throw.
+  it('returns undefined for a map that is missing or unusable', () => {
+    expect(parseSourceMap(undefined)).toBeUndefined();
+    expect(parseSourceMap('')).toBeUndefined();
+    expect(parseSourceMap('not json at all')).toBeUndefined();
+    expect(parseSourceMap('{"version":3}')).toBeUndefined();
+  });
+
+  it('survives a truncated VLQ segment', () => {
+    // `U` alone is a generated column with no original position.
+    const map = parseSourceMap(JSON.stringify(
+        {version: 3, sources: ['a.ts'], mappings: 'AAAA,U'}))!;
+    expect(mapPosition(map, 1, 0)).toMatchObject({source: 'a.ts', line: 1});
+  });
+
+  it('leaves sourcesContent undefined when the map embedded none', () => {
+    const map = parseSourceMap(JSON.stringify(
+        {version: 3, sources: ['a.ts'], mappings: 'AAAA'}))!;
+    expect(sourceContent(map, 'a.ts')).toBeUndefined();
+  });
+});
+
+describe('mapPosition', () => {
+  const map = parseSourceMap(MAP);
+
+  it('resolves a column to the segment that starts at or before it', () => {
+    expect(mapPosition(map, 1, 0)).toEqual({source: 'a.ts', line: 1, column: 0});
+    expect(mapPosition(map, 1, 9)).toEqual({source: 'a.ts', line: 1, column: 0});
+    expect(mapPosition(map, 1, 10)).toEqual({source: 'b.ts', line: 5, column: 2});
+    expect(mapPosition(map, 1, 999)).toEqual({source: 'b.ts', line: 5, column: 2});
+  });
+
+  it('has nothing to say about a line the map does not cover', () => {
+    expect(mapPosition(map, 2, 0)).toBeUndefined();
+    expect(mapPosition(map, 0, 0)).toBeUndefined();
+  });
+
+  it('maps nothing when the build shipped no map', () => {
+    expect(mapPosition(undefined, 1, 0)).toBeUndefined();
+    expect(sourceContent(undefined, 'a.ts')).toBeUndefined();
   });
 });

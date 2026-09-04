@@ -16,6 +16,7 @@ import {
 import { registerMacroExpansion } from './expandMacro';
 import { registerInactiveRegions, type RebindInactiveRegions } from './inactiveRegions';
 import { registerJsGlobals } from './jsGlobals';
+import { registerJsModuleSource } from './jsModuleSource';
 import { resolveServerModule, serverOptionsFor } from './server';
 
 let client: LanguageClient | undefined;
@@ -38,6 +39,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Js65Ap
 		vscode.commands.registerCommand('js65.showOutput', () => outputChannel?.show(true)),
 	);
 	registerMacroExpansion(context, () => client);
+	registerJsModuleSource(context, () => client);
 	rebindInactiveRegions = registerInactiveRegions(context);
 	registerJsGlobals(context);
 

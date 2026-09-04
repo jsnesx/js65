@@ -7,7 +7,8 @@ import type {Diagnostic} from 'vscode-languageserver-protocol';
 import {Analyzer, type AnalysisResult} from '../worker/analyzer.ts';
 import {MemFs} from './memfs.ts';
 import {toPosix} from '../project.ts';
-import {pathToUri} from '../convert.ts';
+import {pathToUri, JSMODULE_SCHEME} from '../convert.ts';
+import {jsModuleMap} from '../../../src/jsmodule/index.ts';
 import {installNodeHost} from '../nodehost.ts';
 
 installNodeHost();
@@ -595,6 +596,36 @@ describe('analyzer', () => {
     expect(failed[0].range.start.line).toBe(2);
     // The block itself stays reachable as the expansion chain.
     expect(failed[0].relatedInformation?.[0].location.range.start.line).toBe(0);
+  });
+
+  it('files a jsmodule failure under the user file, linking into the module', async () => {
+    const fs = new MemFs();
+    const code = '.jsmodule bmp\n.jsbegin\nbmp.load(new Uint8Array([1, 2, 3]));\n.jsend\n';
+    const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}], {
+      rootDir: '/proj',
+      json: JSON.stringify({
+        projects: [{name: 'main', sources: ['main.s'], allowJavascript: true}],
+      }),
+    });
+    // Nothing may be published against the bundled module itself: it is no
+    // document the user opened.
+    for (const uri of result.diagnostics.keys()) {
+      expect(uri).not.toStartWith(JSMODULE_SCHEME);
+    }
+    const diags = result.diagnostics.get(pathToUri('/proj/main.s')) ?? [];
+    const failed = diags.filter(d => /JavaScript block failed/.test(messageOf(d)));
+    expect(failed).toHaveLength(1);
+    expect(failed[0].range.start.line).toBe(2);
+    const related = failed[0].relatedInformation ?? [];
+    // With maps the chain walks into the module; without them it only names the
+    // block, since a build that ships no maps can place nothing in there.
+    const inModule = related.filter(r => r.location.uri.startsWith(`${JSMODULE_SCHEME}:`));
+    if (jsModuleMap('bmp')) {
+      expect(inModule.length).toBeGreaterThan(0);
+      expect(inModule[0].location.uri).toStartWith(`${JSMODULE_SCHEME}:/bmp/`);
+    } else {
+      expect(inModule).toEqual([]);
+    }
   });
 
   // Finding #14: the bucketing comment promised a dedupe that didn't exist.
