@@ -98,10 +98,34 @@ One more way to use `.segment` which is similar to the `Memory Definition` mode 
 ; Make a 16kb bank without a name starting from `.org $8000`
 ; Most of the same memory definitions can work here too if needed
 .segment $8000 :size $4000 :bank 0
+; code and data for bank 0 must go here as you can't re-enter a segment
+.segment $8000 :size $4000 :bank 1
+; this creates a second bank
 ```
 
 To add code/data to a bank, you need to place the data after the anon segment.
 This is intended to just make it quick and easy to get started if you come from a single file assembler.
+
+Reserve RAM with `:bss` or `:zp`
+
+```asm6502
+.segment $00 :size $0100 :zp
+Temp:   .res 2
+.segment $0200 :size $0600 :bss
+Frame:  .res 1
+Scroll: .res 2
+; Can also create banked RAM segments
+.segment $6000 :size $2000 :bss :bank $0
+.segment $6000 :size $2000 :bss :bank $1
+```
+
+Just like how ROM anon segments work, you cannot re-enter a RAM segment.
+
+> WARNING - `.include` for defining variables is probably not what you want.
+
+Be careful that you don't use `.include` and put the ram anon segment declarations into a file that gets `.include`d multiple times.
+Each time it is included, it will create duplicates of each of the RAM segment declarations which effectively functions as creating another RAM bank.
+This isn't likely what you intended to do, either just include it only once in your main file, or just rely on the multipass assembly feature to handle the symbol resolution across modules for you.
 
 ## `.free`
 

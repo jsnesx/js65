@@ -55,13 +55,10 @@ const PREDECLARED_SEGMENTS = new Map<string, mod.Segment>([
 const ANON_SEGMENT_ATTR_REASONS = new Map<string, string>([
   ['off', `output offset is determined by the position in the file`],
   ['mem', `PC address is determined by the segment value`],
-  ['out', `it always goes to the main output file`],
+  ['out', `anon ROM segments always goes to the main output file`],
   ['load', ''],
   ['run', ''],
   ['alignload', ''],
-  ['zp', `cannot write to a ram segment`],
-  ['zeropage', `cannot write to a ram segment`],
-  ['bss', `cannot write to a ram segment`],
   ['optional', ''],
   ['dedupe', ''],
   ['default', `cannot write to a default segment`],
@@ -3162,6 +3159,8 @@ export class Assembler {
     let size: number|undefined;
     let fill: number|undefined;
     let bank: number|undefined;
+    let bss = false;
+    let addressing: number|undefined;
     for (const [key, val] of Tokens.parseAttrList(ts, colon)) {
       const rejected = ANON_SEGMENT_ATTR_REASONS.get(key);
       if (rejected != null) {
@@ -3174,6 +3173,8 @@ export class Assembler {
         case 'fill': fill = val.length ? this.parseConst(val, 0) : 0; break;
         // Pure metadata, for `^` bank-byte exprs and LinkSegment.bank.
         case 'bank': bank = this.parseConst(val, 0); break;
+        case 'zp': case 'zeropage': addressing = 1; bss = true; break;
+        case 'bss': bss = this.parseFlag(val, key); break;
         // js65 has no read-only concept, so accept and ignore ld65's types.
         case 'ro': case 'rw': break;
         default: this.fail(`Unknown segment attr: ${key}`, ts[0]);
@@ -3182,8 +3183,16 @@ export class Assembler {
     if (size === undefined) {
       this.fail(`An anonymous .segment requires :size`, ts[0]);
     }
+    if (bss && fill !== undefined) {
+      this.fail(`Segment attr fill is not allowed on an anonymous ram ` +
+                `segment: a ram segment writes nothing to the file`, ts[0]);
+    }
 
-    const seg: mod.Segment = {name: this.generateAnonSegmentName(memory, size), memory, size};
+    const seg: mod.Segment = {
+      name: this.generateAnonSegmentName(memory, size), memory, size,
+    };
+    if (bss) seg.bss = true;
+    if (addressing !== undefined) seg.addressing = addressing;
     if (bank !== undefined) seg.bank = bank;
     if (fill !== undefined) {
       seg.fill = fill;

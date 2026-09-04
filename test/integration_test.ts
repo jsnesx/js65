@@ -336,6 +336,65 @@ Exported:
       expect([...data.slice(0x10, 0x13)]).toEqual([0x22, 0x00, 0x80]);
     });
 
+    it('should reserve ram with an anonymous :bss segment', function() {
+      const source = `
+.segment $0200 :size $600 :bss
+Var:  .res 2
+Var2: .res 2
+.segment $0000 :size $100 :zp
+ZpVar: .res 1
+.segment $8000 :size $20 :fill $ff
+  lda ZpVar
+  sta Var
+  .word Var, Var2
+`;
+      const result = compileSource(source);
+      // Only the rom segment writes anything, and `:zp` gets zp addressing.
+      expect(result.length).toBe(0x20);
+      expect([...result.slice(0, 5)]).toEqual([0xa5, 0x00, 0x8d, 0x00, 0x02]);
+      expect([...result.slice(5, 9)]).toEqual([0x00, 0x02, 0x02, 0x02]);
+    });
+
+    it('should overlap two ram areas that share an address', function() {
+      // Banked ram: two declarations are two areas, so both start at $6000.
+      const source = `
+.segment $6000 :size $2000 :bss
+Bank0Var: .res 2
+.segment $6000 :size $2000 :bss
+Bank1Var: .res 2
+.segment $8000 :size $10 :fill $ff
+  .word Bank0Var, Bank1Var
+`;
+      const result = compileSource(source);
+      const word = (i: number) => result[i] | (result[i + 1] << 8);
+      expect(word(0)).toBe(0x6000);
+      expect(word(2)).toBe(0x6000);
+    });
+
+    it('should let a ram area live in its own module', function() {
+      // The layout doesn't have to be included anywhere: one module reserves
+      // the variables and the rest just reference them.
+      const vars: AssemblyInput = {type: 'source', name: 'vars.s', code: `
+.segment $0200 :size $600 :bss
+Frame:  .res 1
+Scroll: .res 2
+.export Frame, Scroll
+`};
+      const main: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.import Frame, Scroll
+.segment $8000 :size $10 :fill $ff
+  .word Frame, Scroll
+`};
+      const result = compile([vars, main], {lineContinuations: true});
+      if (!result.success) {
+        throw new Error(JSON.stringify(result.messages));
+      }
+      const data = result.outputs[0].data;
+      const word = (i: number) => data[i] | (data[i + 1] << 8);
+      expect(word(0)).toBe(0x200);
+      expect(word(2)).toBe(0x201);
+    });
+
     it('should leave base ROM bytes alone without :fill', function() {
       const baseRom = new Uint8Array(0x20).fill(0xff);
       const input: AssemblyInput = {type: 'source', name: 'test.s', code: `

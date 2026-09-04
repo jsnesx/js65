@@ -1883,7 +1883,7 @@ lda bar
     });
 
     for (const attr of ['off $0', 'mem $8000', 'out "x.bin"', 'load "A"',
-                        'run "A"', 'alignload $10', 'zp', 'zeropage', 'bss',
+                        'run "A"', 'alignload $10',
                         'optional', 'dedupe', 'default', 'align $10',
                         'define']) {
       const key = attr.split(' ')[0];
@@ -1893,6 +1893,42 @@ lda bar
                 `Segment attr ${key} is not allowed on an anonymous \\.segment`));
       });
     }
+
+    it('should declare a ram area with :bss', function() {
+      const m = assembleModule(`.segment $0200 :size $600 :bss\n.res 2\n`);
+      const [seg] = m.segments!;
+      expect(seg.name).toMatch(ANON);
+      expect(seg.memory).toBe(0x200);
+      expect(seg.size).toBe(0x600);
+      expect(seg.bss).toBe(true);
+      // Positional address is an implicit `.org`, the same as for a rom bank.
+      expect(m.chunks![0].org).toBe(0x200);
+    });
+
+    it('should set the addressing size with :zp', function() {
+      const m = assembleModule(`.segment $0000 :size $100 :zp\n.res 1\n`);
+      const [seg] = m.segments!;
+      expect(seg.name).toMatch(ANON);
+      expect(seg.bss).toBe(true);
+      expect(seg.addressing).toBe(1);
+    });
+
+    it('should make two ram areas at one address, like two rom banks',
+       function() {
+      // Banked ram: each declaration is its own area, so the addresses overlap
+      // rather than packing one after the other.
+      const m = assembleModule(
+          `.segment $6000 :size $2000 :bss\n.res 1\n` +
+          `.segment $6000 :size $2000 :bss\n.res 1\n`);
+      expect(m.segments!.length).toBe(2);
+      expect(m.segments![0].name).not.toBe(m.segments![1].name);
+      expect(m.chunks!.map(c => c.org)).toEqual([0x6000, 0x6000]);
+    });
+
+    it('should reject :fill on a ram area', function() {
+      expect(() => assembleModule(`.segment $0200 :size $10 :bss :fill $00\n`))
+          .toThrow(/fill is not allowed on an anonymous ram segment/);
+    });
 
     it('should reject an unknown segment attribute', function() {
       expect(() => assembleModule(`.segment $8000 :size $10 :overlay "A"\n`))
