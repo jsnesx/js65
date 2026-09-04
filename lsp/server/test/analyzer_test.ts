@@ -579,6 +579,24 @@ describe('analyzer', () => {
     expect(plain.filter(d => /allow-javascript/.test(messageOf(d))).length).toBeGreaterThan(0);
   });
 
+  it('points a failing .jsbegin block at the line that threw', async () => {
+    const fs = new MemFs();
+    const code = '.jsbegin\nlet x = 1;\nthrow new Error("boom");\n.jsend\n';
+    const result = await runAnalyzer(fs, [{path: '/proj/main.s', text: code}], {
+      rootDir: '/proj',
+      json: JSON.stringify({
+        projects: [{name: 'main', sources: ['main.s'], allowJavascript: true}],
+      }),
+    });
+    const diags = result.diagnostics.get(pathToUri('/proj/main.s')) ?? [];
+    const failed = diags.filter(d => /JavaScript block failed: boom/.test(messageOf(d)));
+    expect(failed).toHaveLength(1);
+    // Ranges are 0-based, so the `throw` on source line 3 lands here.
+    expect(failed[0].range.start.line).toBe(2);
+    // The block itself stays reachable as the expansion chain.
+    expect(failed[0].relatedInformation?.[0].location.range.start.line).toBe(0);
+  });
+
   // Finding #14: the bucketing comment promised a dedupe that didn't exist.
   it('dedupes identical diagnostics from a header included twice', async () => {
     const fs = new MemFs();

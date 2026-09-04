@@ -8,6 +8,7 @@ import {JS_MODULES} from '../src/jsmodule/index.ts';
 import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
 import type {FileCallbacks} from '../src/libassembler.ts';
 import {JsActionTable} from '../src/options.ts';
+import type {SourceInfo} from '../src/error.ts';
 
 // Every test here needs an engine; nothing else in the suite registers one.
 beforeAll(() => setJsEngine(functionEngine));
@@ -330,14 +331,53 @@ describe('jsPreprocess rejections', function() {
     expect(() => run('.jsbegin\n.jsbegin\n.jsend\n')).toThrow(/inside a block/);
   });
 
-  it('reports a runtime error against the .jsbegin line', function() {
-    let source;
+  /** The `source` chain a failed block reports, innermost first. */
+  function errorSource(code: string, files: Record<string, string> = {}) {
     try {
-      run('\n\n.jsbegin\nthrow new Error("boom");\n.jsend\n');
+      run(code, files);
     } catch (err) {
-      source = (err as {source?: {line: number}}).source;
+      return (err as {source?: SourceInfo}).source;
     }
-    expect(source).toMatchObject({line: 3});
+    throw new Error('expected the block to fail');
+  }
+
+  it('reports a runtime error against the line that threw', function() {
+    expect(errorSource('\n\n.jsbegin\na.byte(1);\nthrow new Error("boom");\n.jsend\n'))
+        .toMatchObject({file: 'main.s', line: 5, parent: {line: 3}});
+  });
+
+  it('walks the frames back to the throwing line inside a block function', function() {
+    const source = errorSource(
+        '.jsbegin\nfunction f() {\n  throw new Error("boom");\n}\nf();\n.jsend\n');
+    expect(source).toMatchObject({file: 'main.s', line: 3});
+    expect(source!.parent).toMatchObject({file: 'main.s', line: 5, parent: {line: 1}});
+  });
+
+  it('maps a frame in a .jsinclude back to that file', function() {
+    const source = errorSource(
+        '.jsinclude "lib.js"\n.jsbegin\nboom();\n.jsend\n',
+        {'lib.js': '// helper\nfunction boom() {\n  throw new Error("nope");\n}\n'});
+    expect(source).toMatchObject({file: 'lib.js', line: 3});
+    expect(source!.parent).toMatchObject({file: 'main.s', line: 3});
+  });
+
+  it('anchors a throw inside a .jsmodule at the block, not the bundled module', function() {
+    // `<jsmodule bmp>` is no file an editor can open, so the diagnostic has to
+    // land on the caller; the module frame stays in the stack.
+    const source = errorSource(
+        '.jsmodule bmp\n.jsbegin\nbmp.load(new Uint8Array([1, 2, 3]));\n.jsend\n');
+    expect(source).toMatchObject({file: 'main.s', line: 3});
+    expect(source!.parent).toMatchObject({file: 'main.s', line: 2});
+  });
+
+  it('remaps the error stack into source coordinates', function() {
+    try {
+      run('.jsbegin\nthrow new Error("boom");\n.jsend\n');
+    } catch (err) {
+      expect((err as Error).stack).toContain('main.s:2:');
+      return;
+    }
+    throw new Error('expected the block to fail');
   });
 
   it('reports the block error message', function() {

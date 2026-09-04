@@ -2,7 +2,7 @@
 
 import { AsmModule } from './builder.ts';
 import { gzipCodec } from './driver/codec/codec.ts';
-import { jsEngine } from './driver/js/engine.ts';
+import { getJsFrames, jsEngine, type JsFrame } from './driver/js/engine.ts';
 import { isGlob, resolveGlob } from './driver/glob.ts';
 import { SourceError, type SourceInfo } from './error.ts';
 import { JS_MODULES, jsModuleNames } from './jsmodule/index.ts';
@@ -179,8 +179,17 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
   return {decls, blocks};
 }
 
-function loadModules(file: string, decls: Declarations): string[] {
-  const out: string[] = [];
+/** Starts a code block that we use to map back to the original source for error reporting */
+interface JsSegment {
+  text: string;
+  file: string;
+  firstLine: number;
+  /** Set when `file` names no file on disk for things like a jsmodule */
+  virtual?: boolean;
+}
+
+function loadModules(file: string, decls: Declarations): JsSegment[] {
+  const out: JsSegment[] = [];
   const seen = new Set<string>();
   for (const {name, line} of decls.modules) {
     const text = JS_MODULES.get(name);
@@ -191,7 +200,7 @@ function loadModules(file: string, decls: Declarations): string[] {
     }
     if (seen.has(name)) continue;
     seen.add(name);
-    out.push(text);
+    out.push({text, file: `<jsmodule ${name}>`, firstLine: 1, virtual: true});
   }
   return out;
 }
@@ -202,10 +211,12 @@ function deflate(): ((data: Uint8Array, level?: number) => Uint8Array) | undefin
   return codec?.deflate ? (data, level) => codec.deflate!(data, level) : undefined;
 }
 
-function loadInclude(file: string, path: string, opts: JsPreprocessOptions): string {
-  const found = opts.callbacks?.resolveText?.(includeSearch(file, opts), path);
+function loadInclude(file: string, path: string, opts: JsPreprocessOptions): JsSegment {
+  const bases = includeSearch(file, opts);
+  const found = opts.callbacks?.resolveText?.(bases, path);
   if (!found) fail(file, 1, `Could not find .jsinclude file: ${path}`);
-  return found.content;
+  return {text: found.content, file: joinDir(bases[found.baseIndex] ?? '', path),
+          firstLine: 1};
 }
 
 function loadInput(bases: readonly string[], path: string,
@@ -245,6 +256,70 @@ function resolveInputs(file: string, decls: Declarations,
   return scope;
 }
 
+/** Where a segment lands in the combined code, ordered by `start`. */
+interface Span {
+  start: number;
+  segment: JsSegment;
+}
+
+function lineCount(text: string): number {
+  return text.split('\n').length;
+}
+
+function combine(prelude: readonly JsSegment[], body: JsSegment): {code: string, spans: Span[]} {
+  const spans: Span[] = [];
+  let start = 1;
+  for (const segment of prelude) {
+    spans.push({start, segment});
+    start += lineCount(segment.text);
+  }
+  const text = prelude.map(s => s.text).join('\n');
+  // An empty prelude still costs the line the join below adds.
+  spans.push({start: lineCount(text) + 1, segment: body});
+  return {code: `${text}\n${body.text}`, spans};
+}
+
+/** Turns an engine line/column into the segment and file position it came from. */
+function locate(spans: readonly Span[], frame: JsFrame): {segment: JsSegment, source: SourceInfo} {
+  let span = spans[0];
+  for (const s of spans) {
+    if (s.start <= frame.line) span = s;
+  }
+  return {segment: span.segment,
+          source: {file: span.segment.file,
+                   line: span.segment.firstLine + (frame.line - span.start),
+                   column: Math.max(0, frame.column - 1)}};
+}
+
+/**
+ * Create the actual stack trace for the error starting with the `.jsbegin` block
+ * and adding in each of the javascript stacks to it.
+ */
+function blockError(err: unknown, file: string, block: Block,
+                    spans: readonly Span[]): SourceError {
+  const message = `JavaScript block failed: ${
+      err instanceof Error ? err.message : String(err)}`;
+  const frames = getJsFrames(err) ?? [];
+  const located = frames.map(f => locate(spans, f));
+  let source: SourceInfo = {file, line: block.start, column: 0};
+  // Outermost frame first, so the innermost ends up at the head of the chain.
+  // Skip over jsmodule frames for now since we can't view those without source mapping
+  for (let i = located.length - 1; i >= 0; i--) {
+    if (located[i].segment.virtual) continue;
+    source = {...located[i].source, parent: source};
+  }
+  const out = new SourceError(message, source);
+  if (located.length) {
+    out.stack = [`${out.name}: ${message}`,
+                 ...located.map(({source: s}, i) =>
+                     `    at ${frames[i].name ?? '<anonymous>'} (` +
+                     `${s.file}:${s.line}:${s.column + 1})`)].join('\n');
+  } else if (err instanceof Error && err.stack) {
+    out.stack = err.stack;
+  }
+  return out;
+}
+
 /**
  * Used to blank out lines from the source file to keep the line number matching when removing the
  * .jsinclude/.jsinput lines.
@@ -281,7 +356,7 @@ export function jsPreprocess(code: string, file: string,
   }
 
   const prelude = [...loadModules(file, decls),
-                   ...decls.includes.map(d => loadInclude(file, d.path, opts))].join('\n');
+                   ...decls.includes.map(d => loadInclude(file, d.path, opts))];
   const inputs = resolveInputs(file, decls, opts);
   const defines = definesScope(opts.defines);
 
@@ -289,10 +364,13 @@ export function jsPreprocess(code: string, file: string,
   const jsDeflate = deflate();
   for (const b of blocks) {
     const a = new AsmModule(file, {file, line: b.start});
+    // The body starts on the line after `.jsbegin`.
+    const {code: src, spans} =
+        combine(prelude, {text: b.body, file, firstLine: b.start + 1});
     try {
-      engine.run(`${prelude}\n${b.body}`, {a, defines, __js65_deflate: jsDeflate, ...inputs});
+      engine.run(src, {a, defines, __js65_deflate: jsDeflate, ...inputs});
     } catch (err) {
-      fail(file, b.start, `JavaScript block failed: ${(err as Error).message}`);
+      throw blockError(err, file, b, spans);
     }
     blank(out, b.start, b.end, `.jsactions ${opts.jsActions.add(a.actions)}`);
   }
