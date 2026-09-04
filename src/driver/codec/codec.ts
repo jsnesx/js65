@@ -21,7 +21,6 @@ export function setGzipCodec(c: GzipCodec): void {
   codec = c;
 }
 
-export function gzipCodec(): GzipCodec {
-  if (!codec) throw new Error('no gzip codec registered; the frontend must call setGzipCodec()');
+export function gzipCodec(): GzipCodec | undefined {
   return codec;
 }

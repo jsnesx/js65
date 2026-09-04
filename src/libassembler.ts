@@ -669,16 +669,20 @@ export function isGzip(data: Uint8Array): boolean {
  * `pako` gzip library if you don't care.
  */
 export function serializeObjectFile(m: Module, keepDebugInfo = true): Uint8Array {
-  return gzipCodec().gzip(new TextEncoder().encode(serializeModule(m, keepDebugInfo)));
+  const codec = gzipCodec();
+  if (!codec) throw new Error('no gzip codec registered, The frontend must call setGzipCodec()');
+  return codec.gzip(new TextEncoder().encode(serializeModule(m, keepDebugInfo)));
 }
 
 /**
  * Decode a `.o` file produced by serializeObjectFile back into a Module.
  */
 export function deserializeObjectFile(data: Uint8Array, name = 'object file'): Module {
+  const codec = gzipCodec();
+  if (!codec) throw new Error('no gzip codec registered. The frontend must call setGzipCodec()');
   let json: string;
   try {
-    json = new TextDecoder().decode(gzipCodec().gunzip(data));
+    json = new TextDecoder().decode(codec.gunzip(data));
   } catch (err) {
     throw new Error(`${name}: could not decompress: ${err instanceof Error ? err.message : String(err)}`);
   }

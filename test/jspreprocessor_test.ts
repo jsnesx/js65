@@ -3,6 +3,7 @@
 import {describe, it, expect, beforeAll, afterAll} from 'bun:test';
 import {setJsEngine} from '../src/driver/js/engine.ts';
 import {functionEngine} from '../src/driver/js/function.ts';
+import {bunCodec} from '../src/driver/codec/bun.ts';
 import {JS_MODULES} from '../src/jsmodule/index.ts';
 import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
 import type {FileCallbacks} from '../src/libassembler.ts';
@@ -196,9 +197,19 @@ describe('.jsmodule', function() {
     expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
   });
 
+  it('gives a png block the frontend deflate, so encode works end to end', function() {
+    // The module is bundled on its own, so the deflate can only arrive through the scope.
+    const result = run(
+        '.jsmodule png\n.jsbegin\n' +
+        'const p = [[0, 0, 0], [255, 0, 0]];\n' +
+        'const b = png.encode({width: 2, height: 1, pixels: new Uint8Array([1, 0]), palette: p});\n' +
+        'a.byte([...png.load(b).pixels]);\n.jsend\n');
+    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [1, 0]});
+  });
+
   it('reports an unknown module and lists the known ones', function() {
     expect(() => run('.jsmodule nope\n.jsbegin\n.jsend\n'))
-        .toThrow(/Unknown \.jsmodule: nope[\s\S]*Known modules: bmp/);
+        .toThrow(/Unknown \.jsmodule: nope[\s\S]*Known modules: bmp, png/);
   });
 
   it('rejects a quoted name, since it is an identifier not a path', function() {
@@ -699,5 +710,227 @@ describe('bmp.encode', function() {
     // BMP carries no compression, unlike PNG: this is the whole reason bmp lands first.
     expect(bmp.encode({width: 1, height: 1, pixels: new Uint8Array([0]), palette: [RED]}))
         .toBeInstanceOf(Uint8Array);
+  });
+});
+
+// -----
+// png
+
+interface PngApi {
+  load(bytes: Uint8Array, opts?: {palette?: Rgb[], exact?: boolean}):
+      {width: number, height: number, pixels: Uint8Array, palette: Rgb[]};
+  loadRgba(bytes: Uint8Array): {width: number, height: number, data: Uint8Array};
+  encode(image: unknown, opts?: {palette?: Rgb[], colors?: number}): Uint8Array;
+  upng: {decode: unknown, encode: unknown};
+}
+
+/**
+ * Same as loadModule, plus the deflate binding jsPreprocess injects for png.encode.
+ * Takes the deflate positionally, not defaulted, so passing undefined really does bind
+ * undefined and exercises the frontend-without-a-deflate path.
+ */
+function loadPng(deflate: unknown): PngApi {
+  const out: PngApi[] = [];
+  new Function('out', '__js65_deflate',
+               `"use strict";\n${JS_MODULES.get('png')}\nout.push(png);`)(out, deflate);
+  return out[0];
+}
+
+const png = loadPng(bunCodec.deflate);
+
+function be32(v: number): number[] {
+  return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+}
+
+function crc32(bytes: number[]): number {
+  let crc = 0xffffffff;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let i = 0; i < 8; i++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** A PNG chunk: length, type, body, CRC. */
+function chunk(type: string, body: number[]): number[] {
+  const bytes = [...type].map(c => c.charCodeAt(0)).concat(body);
+  return [...be32(body.length), ...bytes, ...be32(crc32(bytes))];
+}
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** An indexed PNG at 1, 2, 4 or 8 bits, rows top-down as palette indices. */
+function indexedPng(bits: 1 | 2 | 4 | 8, palette: Rgb[], rows: number[][]): Uint8Array {
+  const height = rows.length, width = rows[0].length;
+  const bpl = Math.ceil((width * bits) / 8);
+  const perByte = 8 / bits;
+  const raw = new Uint8Array((bpl + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const off = y * (bpl + 1);
+    raw[off] = 0;
+    rows[y].forEach((idx, x) => {
+      const shift = 8 - bits - (x % perByte) * bits;
+      raw[off + 1 + Math.floor(x / perByte)] |= idx << shift;
+    });
+  }
+  const ihdr = [...be32(width), ...be32(height), bits, 3, 0, 0, 0];
+  return new Uint8Array([
+    ...PNG_SIGNATURE,
+    ...chunk('IHDR', ihdr),
+    ...chunk('PLTE', palette.flat()),
+    ...chunk('IDAT', Array.from(bunCodec.deflate!(raw))),
+    ...chunk('IEND', []),
+  ]);
+}
+
+/** A truecolor PNG, rows given top-down as [r, g, b] triples. */
+function truecolorPng(rows: Rgb[][]): Uint8Array {
+  const height = rows.length, width = rows[0].length;
+  const raw = new Uint8Array((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const off = y * (width * 3 + 1);
+    rows[y].forEach(([r, g, b], x) => {
+      raw[off + 1 + x * 3] = r;
+      raw[off + 2 + x * 3] = g;
+      raw[off + 3 + x * 3] = b;
+    });
+  }
+  return new Uint8Array([
+    ...PNG_SIGNATURE,
+    ...chunk('IHDR', [...be32(width), ...be32(height), 8, 2, 0, 0, 0]),
+    ...chunk('IDAT', Array.from(bunCodec.deflate!(raw))),
+    ...chunk('IEND', []),
+  ]);
+}
+
+describe('png.load on an indexed source', function() {
+  it('reads 1-bit indices straight out of the file', function() {
+    const out = png.load(indexedPng(1, [BLACK, RED], [[0, 1, 1, 0], [1, 0, 0, 1]]));
+    expect(out.width).toBe(4);
+    expect(out.height).toBe(2);
+    expect(Array.from(out.pixels)).toEqual([0, 1, 1, 0, 1, 0, 0, 1]);
+    expect(out.palette).toEqual([BLACK, RED]);
+  });
+
+  it('reads 2-bit indices', function() {
+    const palette = [BLACK, RED, GREEN, BLUE];
+    const out = png.load(indexedPng(2, palette, [[0, 1, 2, 3], [3, 2, 1, 0]]));
+    expect(Array.from(out.pixels)).toEqual([0, 1, 2, 3, 3, 2, 1, 0]);
+    expect(out.palette).toEqual(palette);
+  });
+
+  it('reads 4-bit indices', function() {
+    const palette = [BLACK, RED, GREEN, BLUE];
+    const out = png.load(indexedPng(4, palette, [[3, 0, 2]]));
+    expect(Array.from(out.pixels)).toEqual([3, 0, 2]);
+  });
+
+  it('reads 8-bit indices', function() {
+    const palette = [BLACK, RED, GREEN, BLUE];
+    const out = png.load(indexedPng(8, palette, [[2, 3], [1, 0]]));
+    expect(Array.from(out.pixels)).toEqual([2, 3, 1, 0]);
+  });
+
+  // A row is padded to a byte boundary, so an odd width is where a stride bug shows up.
+  it('handles a width that does not fill the last byte of a row', function() {
+    const out = png.load(indexedPng(1, [BLACK, RED], [[1, 0, 1], [0, 1, 1]]));
+    expect(out.width).toBe(3);
+    expect(Array.from(out.pixels)).toEqual([1, 0, 1, 0, 1, 1]);
+  });
+
+  it('keeps duplicate palette entries distinct, which an RGBA round trip cannot', function() {
+    const out = png.load(indexedPng(2, [BLACK, RED, RED, BLUE], [[0, 1, 2, 3]]));
+    expect(Array.from(out.pixels)).toEqual([0, 1, 2, 3]);
+    expect(out.palette).toEqual([BLACK, RED, RED, BLUE]);
+  });
+
+  it('needs no palette, since the file carries its own', function() {
+    expect(() => png.load(indexedPng(1, [BLACK, RED], [[0, 1]]))).not.toThrow();
+  });
+});
+
+describe('png.load on a truecolor source', function() {
+  it('maps each pixel through the supplied palette', function() {
+    const out = png.load(truecolorPng([[RED, GREEN], [BLUE, BLACK]]),
+                         {palette: [BLACK, RED, GREEN, BLUE]});
+    expect(Array.from(out.pixels)).toEqual([1, 2, 3, 0]);
+    expect(out.palette).toEqual([BLACK, RED, GREEN, BLUE]);
+  });
+
+  it('throws naming the color and its coordinate when it is not in the palette', function() {
+    expect(() => png.load(truecolorPng([[RED, GREEN]]), {palette: [BLACK, RED]}))
+        .toThrow(/color rgb\(0, 255, 0\) at \(1, 0\) is not in the palette/);
+  });
+
+  it('takes the nearest match when exact is off', function() {
+    const almost: Rgb = [0xfe, 0, 0];
+    const out = png.load(truecolorPng([[almost]]), {palette: [BLUE, RED], exact: false});
+    expect(Array.from(out.pixels)).toEqual([1]);
+  });
+
+  it('throws when there is no palette to map against', function() {
+    expect(() => png.load(truecolorPng([[RED]]))).toThrow(/\.load needs one/);
+  });
+});
+
+describe('png.loadRgba', function() {
+  it('hands back straight RGBA in row-major order', function() {
+    const out = png.loadRgba(truecolorPng([[RED, GREEN]]));
+    expect(out.width).toBe(2);
+    expect(Array.from(out.data)).toEqual([255, 0, 0, 255, 0, 255, 0, 255]);
+  });
+
+  it('expands an indexed source through its own palette', function() {
+    const out = png.loadRgba(indexedPng(1, [BLACK, RED], [[1, 0]]));
+    expect(Array.from(out.data)).toEqual([255, 0, 0, 255, 0, 0, 0, 255]);
+  });
+});
+
+describe('png.encode', function() {
+  it('round trips an indexed image back to the same indices', function() {
+    const palette: Rgb[] = [BLACK, RED, GREEN, BLUE];
+    const rows = [[0, 1, 2, 3], [3, 2, 1, 0]];
+    const encoded = png.encode(
+        {width: 4, height: 2, pixels: new Uint8Array(rows.flat()), palette});
+    const out = png.load(encoded);
+    expect(out.width).toBe(4);
+    expect(out.height).toBe(2);
+    expect(Array.from(out.pixels)).toEqual(rows.flat());
+    expect(out.palette).toEqual(palette);
+  });
+
+  // UPNG.encode quantizes from RGBA, which would reorder these and merge the duplicate.
+  it('writes the palette as given, duplicates and order intact', function() {
+    const palette: Rgb[] = [BLUE, RED, RED, BLACK];
+    const out = png.load(png.encode(
+        {width: 4, height: 1, pixels: new Uint8Array([3, 2, 1, 0]), palette}));
+    expect(out.palette).toEqual(palette);
+    expect(Array.from(out.pixels)).toEqual([3, 2, 1, 0]);
+  });
+
+  it('round trips an RGBA image losslessly', function() {
+    const source = png.loadRgba(truecolorPng([[RED, GREEN], [BLUE, BLACK]]));
+    const out = png.loadRgba(png.encode(source));
+    expect(Array.from(out.data)).toEqual(Array.from(source.data));
+  });
+
+  it('rejects an index the palette does not reach', function() {
+    expect(() => png.encode(
+        {width: 2, height: 1, pixels: new Uint8Array([0, 9]), palette: [RED, GREEN]}))
+        .toThrow(/index 9, outside a palette of 2/);
+  });
+
+  it('gives a clear error when the frontend registered no deflate', function() {
+    const noDeflate = loadPng(undefined);
+    const source = noDeflate.loadRgba(truecolorPng([[RED, GREEN], [BLUE, BLACK]]));
+    expect(() => noDeflate.encode(source))
+        .toThrow(/this frontend registered no deflate/);
+  });
+
+  it('still decodes when the frontend registered no deflate', function() {
+    // UPNG bundles its own inflate, so only the encode path needs the codec.
+    const noDeflate = loadPng(undefined);
+    expect(Array.from(noDeflate.load(indexedPng(1, [BLACK, RED], [[1, 0]])).pixels))
+        .toEqual([1, 0]);
   });
 });

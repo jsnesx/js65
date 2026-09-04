@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { AsmModule } from './builder.ts';
+import { gzipCodec } from './driver/codec/codec.ts';
 import { jsEngine } from './driver/js/engine.ts';
 import { isGlob, resolveGlob } from './driver/glob.ts';
 import { SourceError, type SourceInfo } from './error.ts';
@@ -195,6 +196,12 @@ function loadModules(file: string, decls: Declarations): string[] {
   return out;
 }
 
+// Expose the registered gzip codec as deflate to UPNG
+function deflate(): ((data: Uint8Array, level?: number) => Uint8Array) | undefined {
+  const codec = gzipCodec();
+  return codec?.deflate ? (data, level) => codec.deflate!(data, level) : undefined;
+}
+
 function loadInclude(file: string, path: string, opts: JsPreprocessOptions): string {
   const found = opts.callbacks?.resolveText?.(includeSearch(file, opts), path);
   if (!found) fail(file, 1, `Could not find .jsinclude file: ${path}`);
@@ -279,10 +286,11 @@ export function jsPreprocess(code: string, file: string,
   const defines = definesScope(opts.defines);
 
   const out = [...lines];
+  const jsDeflate = deflate();
   for (const b of blocks) {
     const a = new AsmModule(file, {file, line: b.start});
     try {
-      engine.run(`${prelude}\n${b.body}`, {a, defines, ...inputs});
+      engine.run(`${prelude}\n${b.body}`, {a, defines, __js65_deflate: jsDeflate, ...inputs});
     } catch (err) {
       fail(file, b.start, `JavaScript block failed: ${(err as Error).message}`);
     }
