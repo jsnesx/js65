@@ -212,7 +212,7 @@ describe('analyzer', () => {
     // Not opened as a document, so the analyzer must read it from disk.
     fs.remove('/proj/gone.s');
     analyzer.open(pathToUri('/proj/gone.s'), 'gone:\n  rts\n', 1);
-    await new Promise(r => setTimeout(r, 50));
+    await analyzer.settled();
     // The open doc wins over disk, so this assembles fine — the point is that
     // nothing threw and diagnostics were published.
     expect(results.length).toBeGreaterThan(0);
@@ -264,7 +264,7 @@ describe('analyzer', () => {
     // Two different files inside one debounce window: both projects must rebuild.
     analyzer.open(pathToUri('/proj/a.s'), 'a_sym = 1\n', 1);
     analyzer.open(pathToUri('/proj/b.s'), 'b_sym = 2\n', 1);
-    await new Promise(r => setTimeout(r, 120));
+    await analyzer.settled();
     expect(result).toBeDefined();
     expect(result!.projects.size).toBe(2);
   });
@@ -282,12 +282,12 @@ describe('analyzer', () => {
     analyzer.onDiagnostics = (r) => { published.push(r); };
     const uri = pathToUri('/proj/main.s');
     analyzer.open(uri, '  lda #$xx\n', 1); // has an error
-    await new Promise(r => setTimeout(r, 60));
+    await analyzer.settled();
     const before = published.length;
     expect(before).toBeGreaterThan(0);
 
     analyzer.close(uri);
-    await new Promise(r => setTimeout(r, 60));
+    await analyzer.settled();
     // A pass must have run after the close, so the server can clear the URI.
     expect(published.length).toBeGreaterThan(before);
   });
@@ -517,7 +517,7 @@ describe('analyzer', () => {
     analyzer.onDiagnostics = (r) => { result = r; };
     analyzer.open(pathToUri('/proj/one/main.s'), 'one_sym = 1\n', 1);
     analyzer.open(pathToUri('/proj/two/main.s'), 'two_sym = 2\n', 1);
-    await new Promise(r => setTimeout(r, 80));
+    await analyzer.settled();
     expect(result).toBeDefined();
     expect(result!.projects.size).toBe(2);
   });
@@ -629,7 +629,7 @@ describe('analyzer', () => {
       const p = analyzer.discoverProject('/proj/js65.json');
       if (p) analyzer.setProject(p);
       analyzer.open(pathToUri('/proj/main.s'), code, 1);
-      await new Promise(r => setTimeout(r, 120));
+      await analyzer.settled();
       return analyzer;
     }
 
@@ -677,7 +677,7 @@ describe('analyzer', () => {
       });
       analyzer.onDiagnostics = () => {};
       analyzer.open(pathToUri('/proj/m.s'), code, 1);
-      await new Promise(r => setTimeout(r, 120));
+      await analyzer.settled();
       return analyzer;
     }
 
@@ -845,7 +845,7 @@ describe('late pass', () => {
     const p = analyzer.discoverProject('/proj/js65.json');
     if (p) analyzer.setProject(p);
     analyzer.open(pathToUri('/proj/main.s'), main, 1);
-    await new Promise(r => setTimeout(r, 120));
+    await analyzer.settled();
     return analyzer;
   }
 

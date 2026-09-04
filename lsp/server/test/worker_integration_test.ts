@@ -216,7 +216,7 @@ describe('analyzer worker', () => {
 
   itIfBuilt('collapses a burst of rapid edits into one analysis pass', async () => {
     const {root, mainPath, cleanup} = makeProject();
-    const {client} = spawnAnalyzer(80);
+    const {client} = spawnAnalyzer(20);
     try {
       const config = loadProject(findProjectFile(mainPath)!);
       new FileSync(client).loadProject(config, root);
@@ -227,7 +227,7 @@ describe('analyzer worker', () => {
       for (let i = 0; i < 8; i++) {
         client.change(pathToUri(mainPath), `main:\n  lda #$0${i}\n  rts\n`, i + 2);
       }
-      await new Promise((r) => setTimeout(r, 1200));
+      await new Promise((r) => setTimeout(r, 300));
       // The open starts one pass; the burst behind it debounces into a single second one.
       expect(passes).toBeLessThanOrEqual(2);
       expect(passes).toBeGreaterThan(0);

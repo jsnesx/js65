@@ -26,9 +26,9 @@ async function analyzerWith(docs: Array<{path: string, text: string}>,
     if (p) analyzer.setProject(p);
   }
   for (const d of docs) analyzer.open(pathToUri(d.path), d.text, 1);
-  // Opening several docs coalesces into one debounced pass; wait for it to
-  // finish rather than for the first callback, so every project is present.
-  await new Promise(r => setTimeout(r, 100));
+  // Opening several docs coalesces into one debounced pass; settled() waits
+  // for that whole pass, so every project is present.
+  await analyzer.settled();
   return analyzer;
 }
 

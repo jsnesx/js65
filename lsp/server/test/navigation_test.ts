@@ -63,7 +63,7 @@ describe('navigation', () => {
       if (p) analyzer.setProject(p);
       analyzer.open(pathToUri('/proj/src/main.s'), main, 1);
       analyzer.open(pathToUri('/proj/inc/header.inc'), header, 1);
-      await new Promise(r => setTimeout(r, 100));
+      await analyzer.settled();
       return {analyzer, main};
     }
 

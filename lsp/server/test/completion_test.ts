@@ -15,7 +15,7 @@ async function analyzerWith(path: string, text: string): Promise<Analyzer> {
   });
   analyzer.onDiagnostics = () => {};
   analyzer.open(pathToUri(path), text, 1);
-  await new Promise(r => setTimeout(r, 100));
+  await analyzer.settled();
   return analyzer;
 }
 

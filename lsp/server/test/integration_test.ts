@@ -239,22 +239,27 @@ describe('integration: round trip against a real project', () => {
     return client;
   }
 
+  // Every case below only reads: same fixture, same buffers, no mutation. They
+  // share one server rather than paying a node spawn each.
+  let shared: LspClient | undefined;
+  const sharedClient = async () => shared ??= await openedClient();
+
+  afterAll(async () => { await shared?.close(); });
+
   itIfBuilt('assembles the project clean and reports no errors', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const published = client.notifications
           .filter(n => n.method === 'textDocument/publishDiagnostics')
           .map(n => n.params as {uri: string, diagnostics: any[]});
       const errors = published.flatMap(p => p.diagnostics).filter(d => d.severity === 1);
       expect(errors).toEqual([]);
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('go-to-definition jumps from a reference to its definition', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       // `sta counter` on line 7 (0-based) — column 7 is inside `counter`.
       const res = await client.request('textDocument/definition', {
         textDocument: {uri: uriOf(files.main())},
@@ -264,14 +269,12 @@ describe('integration: round trip against a real project', () => {
       expect(loc).toBeDefined();
       expect(loc.uri).toBe(uriOf(files.main()));
       expect(loc.range.start.line).toBe(2); // `counter = $10`
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('go-to-definition on an .include string resolves through includePaths', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/definition', {
         textDocument: {uri: uriOf(files.main())},
         position: {line: 0, character: 12}, // inside "macros.inc"
@@ -280,14 +283,12 @@ describe('integration: round trip against a real project', () => {
       expect(loc).toBeDefined();
       // The resolved target is the file the assemble actually opened.
       expect(loc.uri).toBe(uriOf(files.macros()));
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('references reports every use of a symbol', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/references', {
         textDocument: {uri: uriOf(files.main())},
         position: {line: 7, character: 8},
@@ -297,41 +298,35 @@ describe('integration: round trip against a real project', () => {
       // The declaration (line 2) plus the one use inside the .proc (line 7).
       expect(locs.map(l => l.range.start.line).sort()).toEqual([2, 7]);
       expect(locs.every(l => l.uri === uriOf(files.main()))).toBe(true);
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('hover on a mnemonic lists its addressing modes', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/hover', {
         textDocument: {uri: uriOf(files.main())},
         position: {line: 6, character: 3}, // `lda`
       });
       const hover = res.result as {contents: {value: string}};
       expect(hover?.contents?.value).toMatch(/lda/i);
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('documentSymbol returns the .proc as a symbol', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/documentSymbol', {
         textDocument: {uri: uriOf(files.main())},
       });
       const symbols = res.result as Array<{name: string, kind: number}>;
       expect(symbols.some(s => s.name === 'reset')).toBe(true);
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('foldingRange spans the .proc, counting comment and blank lines', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/foldingRange', {
         textDocument: {uri: uriOf(files.main())},
       });
@@ -339,14 +334,12 @@ describe('integration: round trip against a real project', () => {
       // `.proc` is on line 5 and `.endproc` on line 10 (0-based), after two
       // blank lines and a comment — the lines a naive index-based lexer drops.
       expect(ranges).toContainEqual(expect.objectContaining({startLine: 5, endLine: 10}));
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('semanticTokens/full returns a well-formed delta-encoded array', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/semanticTokens/full', {
         textDocument: {uri: uriOf(files.main())},
       });
@@ -361,14 +354,12 @@ describe('integration: round trip against a real project', () => {
         expect(data[i]).toBeLessThan(typeCount);
         expect(data[i + 1] & ~modMask).toBe(0);
       }
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('completion offers mnemonics and project symbols', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('textDocument/completion', {
         textDocument: {uri: uriOf(files.main())},
         position: {line: 6, character: 3},
@@ -380,14 +371,12 @@ describe('integration: round trip against a real project', () => {
       expect(labels).toContain('counter');
       // Macros are callable at instruction position.
       expect(labels).toContain('setpal');
-    } finally {
-      await client.close();
     }
   }, 20000);
 
   itIfBuilt('js65/expandMacro returns the expansion of the invocation', async () => {
-    const client = await openedClient();
-    try {
+    const client = await sharedClient();
+    {
       const res = await client.request('js65/expandMacro', {
         uri: uriOf(files.main()),
         position: {line: 8, character: 4}, // inside `setpal`
@@ -398,8 +387,6 @@ describe('integration: round trip against a real project', () => {
       expect(result.text).toMatch(/lda/);
       expect(result.text).toMatch(/2007/);
       expect(result.text).not.toMatch(/color/);
-    } finally {
-      await client.close();
     }
   }, 20000);
 
