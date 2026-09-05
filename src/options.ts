@@ -91,6 +91,8 @@ export interface AssemblerOptions {
    * to truncate the width of this value to the correct size.
    */
   forceRange?: boolean;
+  /** ca65 name: `ubiquitous_idents` a symbol or macro may be named after a mnemonic */
+  ubiquitousIdents?: boolean;
 
   /** Lint rule configuration. Lints run by default. */
   lint?: LintOptions;
@@ -130,6 +132,7 @@ export function applyFeature(name: string, asm: AssemblerOptions, tok: Tokenizer
     case 'labels_without_colons': asm.labelsWithoutColons = on; return;
     case 'pc_assignment': asm.pcAssignment = on; return;
     case 'force_range': asm.forceRange = on; return;
+    case 'ubiquitous_idents': asm.ubiquitousIdents = on; return;
     case 'c_comments': tok.cComments = on; return;
     // ca65 defaults this off; js65 defaults it on. Turning it off works.
     case 'line_continuations': tok.lineContinuations = on; return;
@@ -143,7 +146,6 @@ export function applyFeature(name: string, asm: AssemblerOptions, tok: Tokenizer
     case 'loose_string_term':
     case 'loose_char_term':
     case 'missing_char_term':
-    case 'ubiquitous_idents':
     case 'org_per_seg': {
       const reason = UNCONDITIONAL.get(key);
       throw new RecoverableError(`Cannot change feature ${key} (${reason})`)
@@ -190,7 +192,6 @@ const UNCONDITIONAL = new Map<string, string>([
   ['loose_string_term', 'both quote styles always accepted'],
   ['loose_char_term', 'single-quoted strings are character literals'],
   ['missing_char_term', 'an unterminated string recovers, not fatal'],
-  ['ubiquitous_idents', 'a macro may already shadow a mnemonic'],
   ['org_per_seg', '`.org` is already per-chunk; there is no global PC'],
 ]);
 

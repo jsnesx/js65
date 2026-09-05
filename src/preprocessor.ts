@@ -74,6 +74,8 @@ interface Env {
   allowsPcAssignment(): boolean;
   /** Whether a leading identifier is a label even without a trailing `:` */
   allowsLabelWithoutColon(): boolean;
+  /** Whether a symbol or macro may be named after a mnemonic */
+  allowsUbiquitousIdents(): boolean;
   evaluate(expr: Expr): number|undefined;
   /** Expression a defined symbol (or `*`) stands for, without interning it. */
   definedValue(sym: string): Expr|undefined;
@@ -200,7 +202,9 @@ export class Preprocessor implements Tokens.Source {
         case 'ident': {
           // Possibilities: (1) label, (2) instruction/assign, (3) macro
           // Labels get split out.  We don't distinguish assigns yet.
-          const callable = this.isCallable(front.str);
+          const callable = this.macros.get(front.str) instanceof Macro ||
+              (this.env.isMnemonic(front.str) &&
+               !this.env.allowsUbiquitousIdents());
           if (!callable && Tokens.eq(line[1], Tokens.COLON)) {
             const label = line.splice(0, 2);
             // Remember that data followed the label on its source line, since
@@ -338,6 +342,13 @@ export class Preprocessor implements Tokens.Source {
       pos = this.expandToken(line, pos, layers);
     }
     return line;
+  }
+
+  private checkNotMnemonic(name: string, at: Token): void {
+    if (this.env.isMnemonic(name) && !this.env.allowsUbiquitousIdents()) {
+      Tokens.fail(`Macro may not be named after the instruction ${name} ` +
+                  `(enable it with '.feature ubiquitous_idents')`, at);
+    }
   }
 
   /** Whether a name is an instruction or a `.macro`, and so can't be a scope. */
@@ -919,6 +930,7 @@ export class Preprocessor implements Tokens.Source {
 
   parseDefine(line: Token[]) {
     const name = Tokens.expectIdentifier(line[1], line[0]);
+    this.checkNotMnemonic(name, line[1]);
     const define = Define.from(line);
     const prev = this.macros.get(name);
     if (prev instanceof Define) {
@@ -971,6 +983,9 @@ export class Preprocessor implements Tokens.Source {
   private parseMacro(line: Token[]): void {
     const name = Tokens.expectIdentifier(line[1], line[0]);
     const macro = this.collectBody(source => Macro.from(line, source));
+    // Checked after the body is collected, so a rejected name doesn't also
+    // leave the `.endmacro` dangling.
+    this.checkNotMnemonic(name, line[1]);
     const prev = this.macros.get(name);
     if (prev) Tokens.fail(`Already defined: ${name}`, line[1]);
     this.macros.set(name, macro);

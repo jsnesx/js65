@@ -699,6 +699,11 @@ export class Assembler {
     return Boolean(this.opts.labelsWithoutColons) && !this.structContext.length;
   }
 
+  /** ca65 `ubiquitous_idents`: a symbol or macro may be named after a mnemonic. */
+  allowsUbiquitousIdents(): boolean {
+    return Boolean(this.opts.ubiquitousIdents);
+  }
+
   evaluate(expr: Expr): number|undefined {
     expr = this.resolve(expr);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num;
@@ -1380,7 +1385,8 @@ export class Assembler {
     this._source = tokens[0].source;
     const isLabel =
         tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON) &&
-        !(tokens[0].token === 'ident' && this.isMnemonic(tokens[0].str));
+        !(tokens[0].token === 'ident' && this.isMnemonic(tokens[0].str) &&
+          !this.allowsUbiquitousIdents());
 
     try {
       // Inside a .struct/.enum, a leading identifier is a member declaration and not
@@ -1817,6 +1823,11 @@ export class Assembler {
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token,
                isLabel = false, kind?: SymbolKind) {
     // NOTE: * _will_ get current chunk!
+
+    if (this.isMnemonic(ident) && !this.allowsUbiquitousIdents()) {
+      this.fail(`Symbol may not be named after the instruction ${ident} ` +
+                `(enable it with '.feature ubiquitous_idents')`, token);
+    }
 
     if (typeof expr === 'number') expr = {op: 'num', num: expr, meta: Exprs.size(expr)};
 

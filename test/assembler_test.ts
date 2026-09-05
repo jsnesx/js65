@@ -810,11 +810,40 @@ describe('Assembler', function() {
           .toEqual([0xea, 0x4c, 0x00, 0x80]);
     });
 
-    it('should still accept a mnemonic-named symbol from an assignment',
-       function() {
-      // Only the label paths change; `nop = $12` is a js65 extension over
-      // ca65 that loses nothing, so it keeps working.
-      expect(assemble('nop = $12\n  lda nop\n')).toEqual([0xa5, 0x12]);
+    it('should reject a mnemonic-named symbol from an assignment', function() {
+      // `ubiquitous_idents` is off by default, so `nop` cannot name a symbol.
+      expect(assembleErrors('nop = $12\n  lda nop\n'))
+          .toEqual([expect.stringMatching(/named after the instruction nop/)]);
+    });
+
+    it('should reject a mnemonic-named macro', function() {
+      expect(assembleErrors('.macro nop\n  inx\n.endmacro\n'))
+          .toEqual([expect.stringMatching(/named after the instruction nop/)]);
+      expect(assembleErrors('.define nop $12\n'))
+          .toEqual([expect.stringMatching(/named after the instruction nop/)]);
+    });
+  });
+
+  describe('.feature ubiquitous_idents', function() {
+    it('should allow a mnemonic-named symbol when on', function() {
+      expect(assemble('.feature ubiquitous_idents\nnop = $12\n  lda nop\n'))
+          .toEqual([0xa5, 0x12]);
+    });
+
+    it('should allow a mnemonic-named label when on', function() {
+      expect(assemble('.feature ubiquitous_idents\nnop:\n  jmp nop\n'))
+          .toEqual([0x4c, 0x00, 0x80]);
+    });
+
+    it('should allow a mnemonic-named macro when on', function() {
+      expect(assemble('.feature ubiquitous_idents\n.macro nop\n  inx\n' +
+                      '.endmacro\n  nop\n')).toEqual([0xe8]);
+    });
+
+    it('should go back to rejecting them when turned off again', function() {
+      expect(assembleErrors('.feature ubiquitous_idents\n' +
+                            '.feature ubiquitous_idents off\nnop = $12\n'))
+          .toEqual([expect.stringMatching(/named after the instruction nop/)]);
     });
   });
 
@@ -2925,8 +2954,7 @@ Ptr: .res 2
     // If one of these ever becomes a real toggle, it moves out of this list.
     const UNCONDITIONAL = ['at_in_identifiers', 'addrsize', 'string_escapes',
                            'loose_char_term', 'loose_string_term',
-                           'missing_char_term', 'org_per_seg',
-                           'ubiquitous_idents'];
+                           'missing_char_term', 'org_per_seg'];
 
     it('should leave the options alone for a feature already always on',
        function() {
