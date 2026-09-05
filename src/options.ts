@@ -93,6 +93,11 @@ export interface AssemblerOptions {
   forceRange?: boolean;
   /** ca65 name: `ubiquitous_idents` a symbol or macro may be named after a mnemonic */
   ubiquitousIdents?: boolean;
+  /**
+   * js65 name: `js65_multiops_per_line` a mnemonic or zero-parameter macro may
+   * begin a new statement on the same line with no separator token
+   */
+  multiOpsPerLine?: boolean;
 
   /** Lint rule configuration. Lints run by default. */
   lint?: LintOptions;
@@ -133,6 +138,7 @@ export function applyFeature(name: string, asm: AssemblerOptions, tok: Tokenizer
     case 'pc_assignment': asm.pcAssignment = on; return;
     case 'force_range': asm.forceRange = on; return;
     case 'ubiquitous_idents': asm.ubiquitousIdents = on; return;
+    case 'js65_multiops_per_line': asm.multiOpsPerLine = on; return;
     case 'c_comments': tok.cComments = on; return;
     // ca65 defaults this off; js65 defaults it on. Turning it off works.
     case 'line_continuations': tok.lineContinuations = on; return;
@@ -204,7 +210,8 @@ const UNSUPPORTED = new Map<string, string>([
 export const FEATURE_NAMES: readonly string[] = [
   'addrsize', 'at_in_identifiers', 'bracket_as_indirect', 'c_comments',
   'dollar_in_identifiers', 'dollar_is_pc', 'force_range',
-  'labels_without_colons', 'leading_dot_in_identifiers', 'line_continuations',
+  'js65_multiops_per_line', 'labels_without_colons',
+  'leading_dot_in_identifiers', 'line_continuations',
   'long_jsr_jmp_rts', 'loose_char_term', 'loose_string_term',
   'missing_char_term', 'org_per_seg', 'pc_assignment', 'string_escapes',
   'ubiquitous_idents', 'underline_in_numbers',

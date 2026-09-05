@@ -704,6 +704,18 @@ export class Assembler {
     return Boolean(this.opts.ubiquitousIdents);
   }
 
+  /**
+   * js65 `js65_multiops_per_line`: a mnemonic or zero-parameter macro starts
+   * a new statement without a separator token.
+   */
+  allowsMultiOpsPerLine(): boolean {
+    if (!this.opts.multiOpsPerLine) return false;
+    if (this.opts.ubiquitousIdents) {
+      this.fail(`js65_multiops_per_line cannot be combined with ubiquitous_idents`);
+    }
+    return true;
+  }
+
   evaluate(expr: Expr): number|undefined {
     expr = this.resolve(expr);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num;

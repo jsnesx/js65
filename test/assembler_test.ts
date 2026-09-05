@@ -847,6 +847,78 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.feature js65_multiops_per_line', function() {
+    const on = '.feature js65_multiops_per_line\n';
+
+    it('should split a run of instructions', function() {
+      expect(assemble(on + '  lda #1 sta $10 rts\n'))
+          .toEqual([0xa9, 0x01, 0x85, 0x10, 0x60]);
+      expect(assemble(on + '  nop inx iny\n')).toEqual([0xea, 0xe8, 0xc8]);
+    });
+
+    it('should not split inside an operand', function() {
+      expect(assemble(on + 'ptr = $20\n  lda (ptr),y sta $10\n'))
+          .toEqual([0xb1, 0x20, 0x85, 0x10]);
+      expect(assemble(on + 'foo = $1234\n  lda #<foo sta $10\n'))
+          .toEqual([0xa9, 0x34, 0x85, 0x10]);
+      expect(assemble(on + 'ptr = $20\n  jmp (ptr) rts\n'))
+          .toEqual([0x6c, 0x20, 0x00, 0x60]);
+    });
+
+    it('should split after a leading label', function() {
+      expect(assemble(on + 'foo: nop inx\n  jmp foo\n'))
+          .toEqual([0xea, 0xe8, 0x4c, 0x00, 0x80]);
+    });
+
+    it('should split after a macro that takes no parameters', function() {
+      expect(assemble(on + '.macro m0\n  inx\n  dex\n.endmacro\n  m0 iny\n'))
+          .toEqual([0xe8, 0xca, 0xc8]);
+    });
+
+    it('should still bind arguments to a macro that takes parameters',
+       function() {
+      expect(assemble(on + '.macro mm op\n  op\n.endmacro\n  mm iny\n'))
+          .toEqual([0xc8]);
+    });
+
+    it('should expand defines on both sides of a split', function() {
+      expect(assemble(on + '.define one #1\n.define ten $10\n' +
+                      '  lda one sta ten\n')).toEqual([0xa9, 0x01, 0x85, 0x10]);
+    });
+
+    it('should measure .sizeof over the label\'s own statement only',
+       function() {
+      // `labelsData` is per source line, but the span closes per output line,
+      // so a split line gives the label just the statement it leads.
+      expect(assemble(on + 'foo: nop inx\n  .byte .sizeof(foo)\n'))
+          .toEqual([0xea, 0xe8, 0x01]);
+    });
+
+    it('should not split a directive off its arguments', function() {
+      expect(assembleErrors(on + '  .byte 1 nop\n')).not.toEqual([]);
+    });
+
+    it('should reject a label that does not lead its line', function() {
+      expect(assembleErrors(on + '  nop foo: inx\n'))
+          .toEqual([expect.stringMatching(/label must start its own line/)]);
+    });
+
+    it('should reject being combined with ubiquitous_idents', function() {
+      expect(assembleErrors(on + '.feature ubiquitous_idents\n  nop inx\n'))
+          .toEqual([expect.stringMatching(
+              /js65_multiops_per_line cannot be combined with ubiquitous_idents/)]);
+    });
+
+    it('should leave every one of those forms an error when off', function() {
+      for (const body of ['  lda #1 sta $10 rts\n', '  nop inx iny\n',
+                          'foo: nop inx\n',
+                          '.macro m0\n  inx\n.endmacro\n  m0 iny\n',
+                          '  nop foo: inx\n']) {
+        expect(assembleErrors(body)).not.toEqual([]);
+      }
+    });
+  });
+
   describe('.byte', function() {
     it('should support numbers', function() {
       const a = new Assembler(Cpu.P02);

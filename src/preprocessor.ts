@@ -76,6 +76,8 @@ interface Env {
   allowsLabelWithoutColon(): boolean;
   /** Whether a symbol or macro may be named after a mnemonic */
   allowsUbiquitousIdents(): boolean;
+  /** Whether a mnemonic or 0-arg macro may start a statement with no separator */
+  allowsMultiOpsPerLine(): boolean;
   evaluate(expr: Expr): number|undefined;
   /** Expression a defined symbol (or `*`) stands for, without interning it. */
   definedValue(sym: string): Expr|undefined;
@@ -228,6 +230,22 @@ export class Preprocessor implements Tokens.Source {
             this.outQueue.push(label);
             break;
           }
+          if (this.env.allowsMultiOpsPerLine() &&
+              this.startsStatement(front.str)) {
+            const split = this.findNextStatement(line);
+            if (split > 0) {
+              const rest = line.splice(split);
+              const macro = this.macros.get(front.str);
+              if (macro instanceof Macro) {
+                this.stream.unshift(rest);
+                this.tryExpandMacro(line);
+                return true;
+              }
+              this.outQueue.push(line);
+              line = rest;
+              break;
+            }
+          }
           if (!this.tryExpandMacro(line)) this.outQueue.push(line);
           return true;
         }
@@ -354,6 +372,43 @@ export class Preprocessor implements Tokens.Source {
   /** Whether a name is an instruction or a `.macro`, and so can't be a scope. */
   private isCallable(name: string): boolean {
     return this.macros.get(name) instanceof Macro || this.env.isMnemonic(name);
+  }
+
+  /** 
+   * For feature space_separator, we allow you to stack multiple
+   * opcodes + no param macros on the same line.
+   */
+  private startsStatement(name: string): boolean {
+    const macro = this.macros.get(name);
+    if (macro instanceof Macro) return !macro.params.length;
+    return this.env.isMnemonic(name);
+  }
+
+  /**
+   * Search this line until we reach the end of this instruction to find the
+   * start of another Statement (zero param macro or opcode). Return -1 if not found
+   */
+  private findNextStatement(line: Token[]): number {
+    let depth = 0;
+    for (let i = 1; i < line.length; i++) {
+      const tok = line[i];
+      switch (tok.token) {
+        case 'lp': case 'lb': depth++; continue;
+        case 'rp': case 'rb': depth--; continue;
+        case 'ident': break;
+        default: continue;
+      }
+      if (depth) continue;
+      if (Tokens.eq(line[i + 1], Tokens.COLON)) {
+        Tokens.fail(`A label must start its own line: ${tok.str}`, tok);
+      }
+      if (!this.startsStatement(tok.str)) continue;
+      switch (line[i - 1].token) {
+        case 'num': case 'str': case 'ident': case 'rp': case 'rb': case 'grp':
+          return i;
+      }
+    }
+    return -1;
   }
 
   /**

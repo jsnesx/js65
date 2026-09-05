@@ -1045,6 +1045,7 @@ describe('Preprocessor', function() {
       allowsPcAssignment(): boolean { return false; }
       allowsLabelWithoutColon(): boolean { return false; }
       allowsUbiquitousIdents(): boolean { return false; }
+      allowsMultiOpsPerLine(): boolean { return false; }
       evaluate(expr: Expr): number|undefined {
         return expr.op === 'num' && !expr.meta?.rel ? expr.num : undefined;
       }
