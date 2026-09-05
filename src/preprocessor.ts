@@ -374,9 +374,9 @@ export class Preprocessor implements Tokens.Source {
     return this.macros.get(name) instanceof Macro || this.env.isMnemonic(name);
   }
 
-  /** 
-   * For feature space_separator, we allow you to stack multiple
-   * opcodes + no param macros on the same line.
+  /**
+   * For feature multiops_per_line, check if this is an allowed
+   * type for starting a new statement
    */
   private startsStatement(name: string): boolean {
     const macro = this.macros.get(name);
