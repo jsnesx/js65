@@ -4,7 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {type AssemblerMessage} from '../src/error.ts';
 import {compile, type AssemblyInput} from '../src/libassembler.ts';
-import {LINT_RULES, LintPragmas, LintRule} from '../src/lint.ts';
+import {LINT_RULE_CLASSES, LINT_RULES, LintPragmas, LintRule} from '../src/lint.ts';
 import {type LintOptions} from '../src/options.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 
@@ -699,9 +699,72 @@ describe('jmp-fallthrough', function() {
   });
 });
 
+describe('suspicious-line-continuation', function() {
+  const bs = '.feature js65_backslash_separator\n';
+
+  it('should report a separator left at the end of a line', async function() {
+    const [msg] = await lints(bs + '  .byte 1 \\ \n  nop\n');
+    expect(msg.code).toBe('suspicious-line-continuation');
+    expect(msg.level).toBe('warning');
+    expect(msg.source).toMatchObject({file: 'test.s', line: 4});
+    expect(msg.message).toMatch(/must be followed immediately by a line break/);
+  });
+
+  it('should report one followed only by a comment', async function() {
+    expect(await lintCodes(bs + '  .byte 1 \\ ; trailing\n  nop\n'))
+        .toEqual(['suspicious-line-continuation']);
+  });
+
+  it('should word it differently when line_continuations is off',
+     async function() {
+    const [msg] = await lints(
+        '.feature line_continuations off\n' + bs + '  nop \\\n  inx\n');
+    expect(msg.code).toBe('suspicious-line-continuation');
+    expect(msg.message).toMatch(/separates nothing and can be removed/);
+  });
+
+  it('should not report a continuation that actually continues',
+     async function() {
+    // `skipIgnored` takes `\<newline>` before the separator path is reached.
+    expect(await lintCodes(bs + '  .byte 1, \\\n2\n')).toEqual([]);
+  });
+
+  it('should not report a separator doing real work', async function() {
+    expect(await lintCodes(bs + '  nop \\ inx\n')).toEqual([]);
+  });
+
+  it('should not report a trailing backtick', async function() {
+    // Useless, but nothing about a backtick reads as a line continuation.
+    expect(await lintCodes('.feature js65_backtick_separator\n  .byte 1 ` \n'))
+        .toEqual([]);
+  });
+
+  it('should be silenced by a pragma on the backslash\'s line', async function() {
+    expect(await lintCodes(
+        bs + '  .byte 1 \\ ; js65-lint-disable-line suspicious-line-continuation\n'))
+        .toEqual([]);
+    expect(await lintCodes(
+        bs + '; js65-lint-disable-next-line suspicious-line-continuation\n' +
+        '  .byte 1 \\ \n')).toEqual([]);
+  });
+
+  it('should be silenced by configuration', async function() {
+    const body = bs + '  .byte 1 \\ \n';
+    expect(await lintCodes(body, {rules: {'suspicious-line-continuation': 'off'}}))
+        .toEqual([]);
+    expect(await lintCodes(body, {enabled: false})).toEqual([]);
+  });
+
+  it('should honor a configured level', async function() {
+    const [msg] = await lints(bs + '  .byte 1 \\ \n',
+                              {rules: {'suspicious-line-continuation': 'info'}});
+    expect(msg.level).toBe('info');
+  });
+});
+
 describe('LINT_RULES', function() {
   it('should describe every rule at a reportable level', function() {
-    expect(LINT_RULES.size).toBe(5);
+    expect(LINT_RULES.size).toBe(6);
     for (const [id, rule] of LINT_RULES) {
       expect(id, `${id} id`).toMatch(/^[a-z][a-z-]*[a-z]$/);
       // The registry is keyed off the class, so a copy/pasted id would
@@ -716,7 +779,8 @@ describe('LINT_RULES', function() {
      function() {
     // Every rule is a LintRule, so the Linter can dispatch to it without
     // knowing which one it has.
-    for (const [id, rule] of LINT_RULES) {
+    for (const rule of LINT_RULE_CLASSES) {
+      const id = rule.id;
       const reported: string[] = [];
       const instance = new rule(message => reported.push(message));
       expect(instance, `${id} instance`).toBeInstanceOf(LintRule);

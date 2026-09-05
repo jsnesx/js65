@@ -135,6 +135,11 @@
 							"type": "string",
 							"enum": ["off", "info", "warning"],
 							"description": "`jmp` to the label defined on the next line. Default: info."
+						},
+						"suspicious-line-continuation": {
+							"type": "string",
+							"enum": ["off", "info", "warning"],
+							"description": "A `\\` statement separator at the end of a line, which continues nothing. Default: warning."
 						}
 					},
 					"additionalProperties": false

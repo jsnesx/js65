@@ -6,6 +6,7 @@ import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
 import { ErrorCollector } from './error.ts';
+import { reportLint, SUSPICIOUS_LINE_CONTINUATION } from './lint.ts';
 import { type TokenizerOptions } from './options.ts';
 
 export type { TokenizerOptions as Options };
@@ -36,6 +37,8 @@ const RE_UNICODE_ESC = /\\u([0-9a-f]{4})/iy;
 const RE_HEX_ESC = /\\x([0-9a-f]{2})/iy;
 const RE_CHAR_ESC = /\\(.)/y;
 const RE_ANY = /./y;
+// Used to check if we have a \ with a space before a newline `\ \n` which is a lint warning
+const RE_SEP_AT_EOL = /[ \t]*(;[^\n\r]*)?(\r\n|\n|\r|$)/y;
 
 /** Anything a numeric literal can be written with, used to spot a bad digit. */
 function isNumberChar(c: number): boolean {
@@ -175,7 +178,10 @@ export class Tokenizer implements Tokens.Source {
           continue;
         case 0x3b /* ; */:
           buf.token(RE_COMMENT);
-          this.opts.lintPragmas?.record(this.file, buf.match()!);
+          if (this.opts.lintPragmas) {
+            const comment = buf.match()!;
+            this.opts.lintPragmas.record(this.file, comment.line, comment[0]);
+          }
           continue;
         case 0x5c /* \ */:
           if (this.opts.lineContinuations && buf.token(RE_LINE_CONT)) continue;
@@ -371,10 +377,14 @@ export class Tokenizer implements Tokens.Source {
       case 0x29 /* ) */: buf.punct(')'); return {token: 'rp'};
       case 0x5c /* \ */:
         // `skipIgnored` takes a backslash that continues a line, and only with the
-        // feature on, so whatever reaches here is a stray one.
+        // feature on, so whatever reaches here either ends a statement or is stray.
+        if (this.opts.backslashSeparator) return this.separator('\\');
         throw new Error(this.opts.lineContinuations ?
             `Expected a line break after '\\'` :
             `Unexpected '\\'; line_continuations is off`);
+      case 0x60 /* ` */:
+        if (this.opts.backtickSeparator) return this.separator('`');
+        return this.tokenOther(c);
       case 0x3a /* : */:
         // A local label (`:+`, `:-`, `:rts`) outranks the `:` operator.
         if (buf.token(RE_LOCAL_LABEL)) return this.strTok('ident');
@@ -396,6 +406,36 @@ export class Tokenizer implements Tokens.Source {
         return this.matchOperator() ?? this.tokenOther(c);
     }
     return this.tokenOther(c);
+  }
+
+  private separator(ch: string): Token {
+    const buf = this.buffer;
+    const source = {file: this.file, line: buf.line, column: buf.column};
+    buf.punct(ch);
+    // Check to see if we have a `\ \n` pattern which is too close to a line
+    // continuation, and it may be a mistake.
+    if (ch === '\\')
+      this.separatorAtEol(source);
+    return {token: 'eol'};
+  }
+
+  private separatorAtEol(source: Tokens.SourceInfo): void {
+    RE_SEP_AT_EOL.lastIndex = this.buffer.pos;
+    const rest = RE_SEP_AT_EOL.exec(this.buffer.content);
+    if (!rest) return;
+    // `skipIgnored` does not reach this line's comment until after the
+    // separator is returned, so a pragma there is not recorded yet.
+    if (rest[1])
+      this.opts.lintPragmas?.record(this.file, source.line, rest[1]);
+    reportLint(SUSPICIOUS_LINE_CONTINUATION,
+               this.opts.lineContinuations ?
+                   '`\\` must be followed immediately by a line break to ' +
+                   'continue a line. The whitespace after it makes this a ' +
+                   'statement separator, so the next line is a separate ' +
+                   'statement. Remove the whitespace to continue the line.' :
+                   'this `\\` is a statement separator at the end of a line, ' +
+                   'so it separates nothing and can be removed.',
+               source, this.errorCollector, this.opts.lint, this.opts.lintPragmas);
   }
 
   private tokenIdent(c: number): Token {

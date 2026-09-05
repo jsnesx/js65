@@ -57,9 +57,15 @@ export interface TokenizerOptions {
   cComments?: boolean;
   /** ca65 name: `leading_dot_in_identifiers` allows user defined `.whatever` labels and macros */
   leadingDotInIdentifiers?: boolean;
+  /** js65 name: `js65_backslash_separator` a `\` ends a statement, allowing multiple statements per line.  */
+  backslashSeparator?: boolean;
+  /** js65 name: `js65_backtick_separator` same as `backslashSeparator`, spelled `` ` ``. */
+  backtickSeparator?: boolean;
 
   /** Sink for `; js65-lint-disable...` comment pragmas, when linting. */
   lintPragmas?: LintPragmas;
+  /** Lint configuration, for the lints the tokenizer reports itself. */
+  lint?: LintOptions;
 }
 
 /** Severity a lint rule reports at, or `off` to not report it at all. */
@@ -139,6 +145,8 @@ export function applyFeature(name: string, asm: AssemblerOptions, tok: Tokenizer
     case 'force_range': asm.forceRange = on; return;
     case 'ubiquitous_idents': asm.ubiquitousIdents = on; return;
     case 'js65_multiops_per_line': asm.multiOpsPerLine = on; return;
+    case 'js65_backslash_separator': tok.backslashSeparator = on; return;
+    case 'js65_backtick_separator': tok.backtickSeparator = on; return;
     case 'c_comments': tok.cComments = on; return;
     // ca65 defaults this off; js65 defaults it on. Turning it off works.
     case 'line_continuations': tok.lineContinuations = on; return;
@@ -210,6 +218,7 @@ const UNSUPPORTED = new Map<string, string>([
 export const FEATURE_NAMES: readonly string[] = [
   'addrsize', 'at_in_identifiers', 'bracket_as_indirect', 'c_comments',
   'dollar_in_identifiers', 'dollar_is_pc', 'force_range',
+  'js65_backslash_separator', 'js65_backtick_separator',
   'js65_multiops_per_line', 'labels_without_colons',
   'leading_dot_in_identifiers', 'line_continuations',
   'long_jsr_jmp_rts', 'loose_char_term', 'loose_string_term',

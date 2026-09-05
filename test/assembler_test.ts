@@ -919,6 +919,86 @@ describe('Assembler', function() {
     });
   });
 
+  describe('.feature js65_backslash_separator / js65_backtick_separator', function() {
+    const bs = '.feature js65_backslash_separator\n';
+    const bt = '.feature js65_backtick_separator\n';
+
+    it('should separate statements of any kind', function() {
+      expect(assemble(bs + '  nop \\ inx \\ iny\n')).toEqual([0xea, 0xe8, 0xc8]);
+      expect(assemble(bt + '  nop ` inx ` iny\n')).toEqual([0xea, 0xe8, 0xc8]);
+    });
+
+    it('should allow both spellings at once', function() {
+      expect(assemble(bs + bt + '  nop \\ inx ` iny\n')).toEqual([0xea, 0xe8, 0xc8]);
+    });
+
+    it('should separate a conditional block', function() {
+      expect(assemble(bs + '  .if 1 \\ .byte 5 \\ .endif\n')).toEqual([0x05]);
+    });
+
+    it('should separate a macro definition', function() {
+      expect(assemble(bs + '.macro mm \\ inx \\ iny \\ .endmacro\n  mm\n'))
+          .toEqual([0xe8, 0xc8]);
+    });
+
+    it('should separate a .proc block', function() {
+      expect(assemble(bs + '.proc foo \\ nop \\ rts \\ .endproc\n  jsr foo\n'))
+          .toEqual([0xea, 0x60, 0x20, 0x00, 0x80]);
+    });
+
+    it('should not be confused by a segment attribute list', function() {
+      // `:size` and friends are the one place a `:` already leads an attribute,
+      // so the separator has to end the list rather than join it.
+      expect(assemble(bs + '  nop\n.segment "CODE" :bank $00 :size $8000 ' +
+                      ':mem $8000 :off $0000 \\ inx\n')).toEqual([0xea, 0xe8]);
+    });
+
+    it('should end a macro call\'s arguments', function() {
+      expect(assemble(bs + '.macro mm a\n  lda #a\n.endmacro\n  mm 5 \\ inx\n'))
+          .toEqual([0xa9, 0x05, 0xe8]);
+    });
+
+    it('should give a separated label only its own statement', function() {
+      // The separator is a real line break, so `foo:` leads an empty line and
+      // `labelsData` never gets set, where `foo: nop` sizes the label at 1.
+      expect(assemble(bs + 'foo: \\ nop\n  .byte .sizeof(foo)\n'))
+          .toEqual([0xea, 0x00]);
+      expect(assemble(bs + 'foo: nop\n  .byte .sizeof(foo)\n'))
+          .toEqual([0xea, 0x01]);
+    });
+
+    it('should still continue a line when the newline follows immediately',
+       function() {
+      expect(assemble(bs + '  .byte 1, \\\n2\n')).toEqual([0x01, 0x02]);
+    });
+
+    it('should assemble `\\<newline>` as an empty statement with continuations off',
+       function() {
+      // Accepted deliberately: today this is an error, and the
+      // suspicious-line-continuation lint keeps the change from being silent.
+      expect(assemble('.feature line_continuations off\n' + bs +
+                      '  nop \\\n  inx\n')).toEqual([0xea, 0xe8]);
+    });
+
+    it('should leave a backtick inside a string alone', function() {
+      expect(assemble(bt + '  .byte "a`b"\n')).toEqual([0x61, 0x60, 0x62]);
+    });
+
+    it('should recover from a lex error one statement at a time', function() {
+      // `skipLine` discards to the next `eol`, which is now the separator, so
+      // the sibling statement is still tokenized and its error still reported.
+      expect(assembleErrors(bs + '  .2 \\ .3\n')).toHaveLength(2);
+      expect(assembleErrors('  .2 .3\n')).toHaveLength(1);
+    });
+
+    it('should reject both separators when the features are off', function() {
+      expect(assembleErrors('  nop \\ inx\n'))
+          .toEqual([expect.stringMatching(/Expected a line break after/)]);
+      expect(assembleErrors('  nop ` inx\n'))
+          .toEqual([expect.stringMatching(/unexpected '`'/)]);
+    });
+  });
+
   describe('.byte', function() {
     it('should support numbers', function() {
       const a = new Assembler(Cpu.P02);

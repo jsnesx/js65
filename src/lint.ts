@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type {Arg} from './assembler.ts';
-import {type Match} from './buffer.ts';
 import type {AddressingMode} from './cpu.ts';
 import {type ErrorCollector, type MessageFix, type SourceInfo} from './error.ts';
 import {type Expr} from './expr.ts';
@@ -32,15 +31,15 @@ export class LintPragmas {
   /** `file:line` -> suppressed rule ids on that line. */
   private readonly suppressions = new Map<string, Set<string>>();
 
-  /** Records a pragma if `match` is one; ordinary comments are ignored. */
-  record(file: string, match: Match): void {
-    const pragma = RE_PRAGMA.exec(match[0]);
+  /** Records a pragma if `comment` is one. Ordinary comments are ignored. */
+  record(file: string, commentLine: number, comment: string): void {
+    const pragma = RE_PRAGMA.exec(comment);
     if (!pragma) return;
     const rules = pragma[2].trim().split(/[\s,]+/).filter(r => r);
     if (!rules.length) return;
     // `disable-line` applies to the comment's own line, `disable-next-line` to
     // the one after it.
-    const line = match.line + (pragma[1] ? 1 : 0);
+    const line = commentLine + (pragma[1] ? 1 : 0);
     const key = `${file}:${line}`;
     let set = this.suppressions.get(key);
     if (!set) this.suppressions.set(key, set = new Set());
@@ -126,16 +125,19 @@ export abstract class LintRule {
 }
 
 /**
- * The static side of a rule class, which is its entry in `LINT_RULES`. Keeping
- * the identity on the class puts it next to the code that implements it.
- */
-export interface LintRuleClass {
+ * What every rule has whether or not `Linter` is the one that reports it.
+ * Splitting it out from LintRulesClass lets other modules lint directly
+ * in the case of the Tokenizer needing to Lint for instance.
+*/
+export interface LintRuleInfo {
   /** Rule id, as it appears in a pragma, `-Wno-<id>`, or a diagnostic's code. */
   readonly id: string;
   /** Level reported when the project has not configured this rule. */
   readonly level: LintLevel;
   /** One-line summary, shown by `js65 --help`. */
   readonly description: string;
+}
+export interface LintRuleClass extends LintRuleInfo {
   new (report: Report): LintRule;
 }
 
@@ -401,8 +403,29 @@ function reporter(errorCollector: ErrorCollector, pragmas: LintPragmas|undefined
   };
 }
 
-/** Every rule js65 knows, in the order they are dispatched and reported. */
-const RULES: readonly LintRuleClass[] = [
+export const SUSPICIOUS_LINE_CONTINUATION: LintRuleInfo = {
+  id: 'suspicious-line-continuation',
+  level: 'warning',
+  description: 'a `\\` statement separator at the end of a line, which continues nothing',
+};
+
+/**
+ * Reports a lint found outside the assembler, where there is no `Linter` to
+ * dispatch through. Applies the same level configuration and pragma
+ * suppression `Linter` gives the rules it does dispatch.
+ */
+export function reportLint(rule: LintRuleInfo, message: string,
+                           source: SourceInfo,
+                           errorCollector: ErrorCollector|undefined,
+                           opts?: LintOptions, pragmas?: LintPragmas): void {
+  if (!errorCollector || opts?.enabled === false) return;
+  const level = opts?.rules?.[rule.id] ?? rule.level;
+  if (level === 'off' || pragmas?.suppressed(rule.id, source)) return;
+  errorCollector.add(level, message, source, {code: rule.id});
+}
+
+/** The rules `Linter` dispatches in the order they are run and reported. */
+export const LINT_RULE_CLASSES: readonly LintRuleClass[] = [
   BareNumberOperand,
   SuspiciousAddressExpr,
   EndprocNoTerminator,
@@ -410,8 +433,10 @@ const RULES: readonly LintRuleClass[] = [
   JmpFallthrough,
 ];
 
-export const LINT_RULES: ReadonlyMap<string, LintRuleClass> =
-    new Map(RULES.map(rule => [rule.id, rule] as const));
+/** What `--help` lists and configuration accepts. */
+export const LINT_RULES: ReadonlyMap<string, LintRuleInfo> =
+    new Map([...LINT_RULE_CLASSES, SUSPICIOUS_LINE_CONTINUATION]
+                .map(rule => [rule.id, rule] as const));
 
 /**
  * The assembler's way in to the lint rules. It resolves each rule's level from
@@ -426,10 +451,10 @@ export class Linter {
               pragmas?: LintPragmas) {
     const rules: LintRule[] = [];
     if (opts.enabled !== false) {
-      for (const [id, rule] of LINT_RULES) {
-        const level = opts.rules?.[id] ?? rule.level;
+      for (const rule of LINT_RULE_CLASSES) {
+        const level = opts.rules?.[rule.id] ?? rule.level;
         if (level === 'off') continue;
-        rules.push(new rule(reporter(errorCollector, pragmas, id, level)));
+        rules.push(new rule(reporter(errorCollector, pragmas, rule.id, level)));
       }
     }
     this.rules = rules;

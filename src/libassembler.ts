@@ -335,6 +335,7 @@ export function assemble(
     // One shared instance: pragmas are keyed by file, and every module's
     // tokenizer records into the same table the linter later consults.
     lintPragmas: options?.lint?.enabled === false ? undefined : new LintPragmas(),
+    lint: options?.lint,
     jsActions,
   };
   const baseAsmOpts: AsmOptions = {
