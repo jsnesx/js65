@@ -11,9 +11,14 @@ import type {Symbol} from '../../../../src/assembler.ts';
 import type {Chunk} from '../../../../src/module.ts';
 import type {Analyzer, ProjectAnalysis} from '../analyzer.ts';
 import {findSymbolAt, projectForDoc} from './navigation.ts';
+import {inJsBlock} from './jsblocks.ts';
 
 /** Compute the hover for a position, or null if there's nothing to show. */
 export function computeHover(analyzer: Analyzer, p: HoverParams): Hover | null {
+  // Dont run the hover when in a jsblock
+  const doc = analyzer.peekDoc(p.textDocument.uri);
+  if (doc !== undefined && inJsBlock(doc, p.position.line)) return null;
+
   // Pick the project that actually owns this document.
   // the first project in the map answers wrongly in any multi-project workspace.
   const analysis = projectForDoc(analyzer, p.textDocument.uri);

@@ -15,6 +15,7 @@ import {
 
 import { registerMacroExpansion } from './expandMacro';
 import { registerInactiveRegions, type RebindInactiveRegions } from './inactiveRegions';
+import { registerJsBlockCompletion } from './jsBlocks';
 import { registerJsGlobals } from './jsGlobals';
 import { registerJsModuleSource } from './jsModuleSource';
 import { resolveServerModule, serverOptionsFor } from './server';
@@ -41,7 +42,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Js65Ap
 	registerMacroExpansion(context, () => client);
 	registerJsModuleSource(context, () => client);
 	rebindInactiveRegions = registerInactiveRegions(context);
-	registerJsGlobals(context);
+	const jsGlobals = registerJsGlobals(context, outputChannel);
+	if (jsGlobals) registerJsBlockCompletion(context, jsGlobals);
 
 	// A change to how the server is launched only takes effect on restart, so do
 	// it for the user rather than making them find the command.

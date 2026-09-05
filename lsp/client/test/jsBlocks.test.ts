@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import * as assert from 'assert';
-import { blockAt, renderInputDeclarations, scanJsBlocks } from '../src/jsBlocks';
+import * as vscode from 'vscode';
+import { blockAt, renderInputDeclarations, renderJsMirror, scanJsBlocks } from '../src/jsBlocks';
+import { activate, getDocUri, sleep } from './helper';
 
 suite('Scanning .jsbegin blocks', () => {
 	test('finds a block body without its delimiters', () => {
@@ -76,3 +78,123 @@ suite('Scanning .jsinput declarations', () => {
 		assert.strictEqual(renderInputDeclarations([]), '');
 	});
 });
+
+suite('Mirroring .jsbegin blocks for the JS language service', () => {
+	test('keeps block bodies in place and blanks everything else', () => {
+		const text = '.segment "CODE"\n.jsbegin\na.byte(1);\n.jsend\n  rts\n';
+		const {blocks} = scanJsBlocks(text);
+		assert.deepStrictEqual(renderJsMirror(text, blocks).split('\n'), [
+			'',
+			'',
+			'a.byte(1);',
+			'',
+			'',
+			'',
+			// Makes the mirror a module so two documents cannot collide.
+			'export {};',
+			'',
+		]);
+	});
+
+	test('positions are identical in both documents', () => {
+		const text = '.jsbegin\n  a.byte(1);\n.jsend\n';
+		const mirror = renderJsMirror(text, scanJsBlocks(text).blocks);
+		assert.strictEqual(mirror.split('\n')[1], text.split('\n')[1]);
+	});
+
+	test('leaves the assembly out even when a block is unterminated', () => {
+		const text = 'lda #$01\n.jsbegin\na.byte(1);\n';
+		const mirror = renderJsMirror(text, scanJsBlocks(text).blocks);
+		assert.ok(!mirror.includes('lda'));
+		assert.ok(mirror.includes('a.byte(1);'));
+	});
+});
+
+/**
+ * The JavaScript in a `.jsbegin` block is answered by the editor's JavaScript
+ * language service, not the assembler. These go through the same
+ * `vscode.execute*Provider` commands the editor itself uses, which is the only
+ * way to catch the request being routed to the wrong server.
+ */
+suite('JavaScript inside .jsbegin blocks', () => {
+	const docUri = getDocUri('jsblock.s');
+
+	// Inside `pattern` on line 3.
+	const inPattern = new vscode.Position(3, 8);
+	// Just inside the parentheses of `a.byte(` on line 4.
+	const inCall = new vscode.Position(4, 7);
+	// After the dot of the bare `a.` on line 5.
+	const afterDot = new vscode.Position(5, 2);
+
+	test('completes the builder bound as `a`', async () => {
+		await activate(docUri);
+		const labels = await completionLabelsEventually(docUri, afterDot, '.', ['byte', 'word']);
+		assert.ok(labels.includes('byte') && labels.includes('word'),
+			`expected the AsmModule members, saw ${labels.join(',')}`);
+	});
+
+	test('completes `defines` and the block locals, not assembly', async () => {
+		await activate(docUri);
+		const labels = await completionLabelsEventually(
+			docUri, new vscode.Position(5, 1), undefined, ['defines', 'pattern']);
+		assert.ok(labels.includes('defines'), `expected \`defines\`, saw ${labels.join(',')}`);
+		assert.ok(labels.includes('pattern'), 'expected the block local');
+		assert.ok(!labels.includes('lda'), 'mnemonics do not belong inside a block');
+	});
+
+	test('hovers a JavaScript name with its JavaScript type', async () => {
+		await activate(docUri);
+		const text = await hoverText(docUri, inPattern);
+		assert.ok(text.includes('number[]'), `expected an inferred type, got: ${text}`);
+		assert.ok(!text.includes('loading...'),
+			`hover came from the syntax server, not the semantic one: ${text}`);
+	});
+
+	test('offers signature help for a builder call', async () => {
+		await activate(docUri);
+		const help = await vscode.commands.executeCommand<vscode.SignatureHelp>(
+			'vscode.executeSignatureHelpProvider', docUri, inCall, '(');
+		const labels = (help?.signatures ?? []).map(sig => sig.label);
+		assert.ok(labels.some(l => l.includes('bytes')),
+			`expected the byte() parameters, saw ${JSON.stringify(labels)}`);
+	});
+});
+
+async function completionLabels(
+	uri: vscode.Uri,
+	position: vscode.Position,
+	triggerCharacter?: string,
+): Promise<string[]> {
+	const list = await vscode.commands.executeCommand<vscode.CompletionList>(
+		'vscode.executeCompletionItemProvider', uri, position, triggerCharacter);
+	return (list?.items ?? []).map(i => typeof i.label === 'string' ? i.label : i.label.label);
+}
+
+/**
+ * The JavaScript project backing a block is built on demand, and until it has
+ * loaded VS Code answers from a syntax-only server. Poll rather than assert on
+ * the first response, which would make this a race.
+ */
+async function completionLabelsEventually(
+	uri: vscode.Uri,
+	position: vscode.Position,
+	triggerCharacter: string | undefined,
+	wanted: readonly string[],
+	timeoutMs = 30000,
+): Promise<string[]> {
+	const deadline = Date.now() + timeoutMs;
+	let labels: string[] = [];
+	while (Date.now() < deadline) {
+		labels = await completionLabels(uri, position, triggerCharacter);
+		if (wanted.every(w => labels.includes(w))) return labels;
+		await sleep(250);
+	}
+	return labels;
+}
+
+async function hoverText(uri: vscode.Uri, position: vscode.Position): Promise<string> {
+	const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+		'vscode.executeHoverProvider', uri, position);
+	return (hovers ?? []).flatMap(h => h.contents)
+		.map(c => typeof c === 'string' ? c : c.value).join('\n');
+}

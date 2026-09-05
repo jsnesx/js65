@@ -19,6 +19,7 @@ import type {IndexedScope} from '../../../../src/lspindex.ts';
 import type {Analyzer, ProjectAnalysis} from '../analyzer.ts';
 import {uriToPath} from '../../convert.ts';
 import {toPosix} from '../../project.ts';
+import {inJsBlock} from './jsblocks.ts';
 
 /** Mnemonics from the CPU table, captured once. */
 const MNEMONICS = Object.keys(Cpu.P02.table);
@@ -28,6 +29,8 @@ type Position = 'directive' | 'label' | 'operand' | 'mnemonic';
 
 export function computeCompletion(analyzer: Analyzer, p: CompletionParams): CompletionItem[] {
   const text = analyzer.peekDoc(p.textDocument.uri);
+  // Don't send the regular js65 completions in a jsblock
+  if (text !== undefined && inJsBlock(text, p.position.line)) return [];
   const line = text?.split(/\r?\n/)[p.position.line];
   const where = classifyPosition(line, p.position.character,
                                  p.context?.triggerCharacter);

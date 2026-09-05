@@ -5,6 +5,7 @@ import {Tokenizer} from '../../../../src/tokenizer.ts';
 
 import type {Token} from '../../../../src/token.ts';
 import {Cpu} from '../../../../src/cpu.ts';
+import {blankJsBlocks} from './jsblocks.ts';
 
 /** Open/close pairs for folding. `open`/`close` are the `.cs` strings. */
 const FOLD_PAIRS: ReadonlyArray<{open: string, close: string}> = [
@@ -237,27 +238,6 @@ function collectLine(
       mod,
     });
   }
-}
-
-const RE_JSBEGIN = /^\s*\.jsbegin\b/i;
-const RE_JSEND = /^\s*\.jsend\b/i;
-
-/**
- * Wipe the contents of the javascript block so we don't build any sorta
- * asm related semantic analysis for the block.
- */
-function blankJsBlocks(text: string): string {
-  const lines = text.split(/\r?\n/);
-  let inBlock = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (!inBlock) {
-      if (RE_JSBEGIN.test(lines[i])) inBlock = true;
-      continue;
-    }
-    if (RE_JSEND.test(lines[i])) inBlock = false;
-    else lines[i] = '';
-  }
-  return lines.join('\n');
 }
 
 /** Find `;`-comments, which the tokenizer discards before they become tokens. */
