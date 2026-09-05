@@ -158,12 +158,14 @@ export function computeSemanticTokens(
     text: string, syms?: SymbolResolver): SemanticTokens {
   const raw: Array<{line: number, char: number, length: number, type: number, mod: number}> = [];
 
+  const src = blankJsBlocks(text);
+
   // Comments never reach the token stream as `skipIgnored` consumes them, so
   // scan them straight off the text. Doing it here also means a line the
   // tokenizer chokes on still gets its comment coloured.
-  collectComments(text, raw);
+  collectComments(src, raw);
 
-  const lines = text.split(/\r?\n/);
+  const lines = src.split(/\r?\n/);
   let lineStart = 0; // next source line (0-based) the lexer should resume from
   while (lineStart < lines.length) {
     const chunk = lines.slice(lineStart).join('\n');
@@ -235,6 +237,27 @@ function collectLine(
       mod,
     });
   }
+}
+
+const RE_JSBEGIN = /^\s*\.jsbegin\b/i;
+const RE_JSEND = /^\s*\.jsend\b/i;
+
+/**
+ * Wipe the contents of the javascript block so we don't build any sorta
+ * asm related semantic analysis for the block.
+ */
+function blankJsBlocks(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (!inBlock) {
+      if (RE_JSBEGIN.test(lines[i])) inBlock = true;
+      continue;
+    }
+    if (RE_JSEND.test(lines[i])) inBlock = false;
+    else lines[i] = '';
+  }
+  return lines.join('\n');
 }
 
 /** Find `;`-comments, which the tokenizer discards before they become tokens. */

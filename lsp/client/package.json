@@ -50,7 +50,10 @@
 			{
 				"language": "js65",
 				"scopeName": "source.js65",
-				"path": "./syntaxes/js65.tmLanguage.json"
+				"path": "./syntaxes/js65.tmLanguage.json",
+				"embeddedLanguages": {
+					"meta.embedded.block.javascript": "javascript"
+				}
 			}
 		],
 		"semanticTokenScopes": [

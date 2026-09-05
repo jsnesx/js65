@@ -155,6 +155,18 @@ describe('structure', () => {
       expect(onGroupLine.length).toBeGreaterThan(2);
     });
 
+    it('leaves .jsbegin bodies to the JavaScript grammar', () => {
+      const keywordIdx = SEMANTIC_TOKEN_LEGEND.tokenTypes.indexOf('keyword');
+      const text = '.jsbegin\nlet x = 1; // not an assembly comment\na.byte(x);\n.jsend\n  rts\n';
+      const tokens = decode(computeSemanticTokens(text).data);
+      // Nothing between the directives, so the grammar's source.js wins there.
+      expect(tokens.some(t => t.line === 1 || t.line === 2)).toBe(false);
+      // The directives themselves and the code after still colour.
+      expect(tokens.find(t => t.line === 0)!.type).toBe(keywordIdx);
+      expect(tokens.find(t => t.line === 3)!.type).toBe(keywordIdx);
+      expect(tokens.some(t => t.line === 4)).toBe(true);
+    });
+
     it('emits tokens in document order', () => {
       const text = '; c1\nmain:\n  lda #$01 ; c2\n  rts\n';
       const tokens = decode(computeSemanticTokens(text).data);

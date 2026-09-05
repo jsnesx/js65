@@ -15,7 +15,7 @@
 	],
 	"repository": {
 		"jsblock": {
-			"comment": "jsbegin/jsend bodies are JavaScript so hand them to source.js",
+			"comment": "jsbegin/jsend bodies are JavaScript. contentName tells it to use the embeddedLanguages listed in the package.json",
 			"begin": "(?i)^\\s*(\\.jsbegin)\\b(.*)$",
 			"beginCaptures": {
 				"1": { "name": "keyword.control.js65" },
@@ -25,8 +25,7 @@
 			"endCaptures": {
 				"1": { "name": "keyword.control.js65" }
 			},
-			"name": "meta.embedded.block.javascript.js65",
-			"contentName": "source.js",
+			"contentName": "meta.embedded.block.javascript",
 			"patterns": [
 				{ "include": "source.js" }
 			]
