@@ -53,6 +53,20 @@ describe('Preprocessor', function() {
       await test(['foo:'], await label('foo:'));
     });
 
+    it('should not split a mnemonic off as a label', async function() {
+      // `inx :` is the instruction `inx` plus garbage, not a label named
+      // `inx`; splitting it out here is what silently dropped the `inx`.
+      await test(['inx : iny'], await instruction('inx : iny'));
+      await test(['inx:'], await instruction('inx :'));
+    });
+
+    it('should not split a macro name off as a label', async function() {
+      // The colon becomes a macro argument instead, which is the error ca65
+      // reports for the same source.
+      await testError(['.macro mm', '  nop', '.endmacro', 'mm : iny'],
+                      /Too many macro parameters/);
+    });
+
     it('should pass through an immutable assignment', async function() {
       await test(['foo = 1'], await assign('foo = 1'));
     });

@@ -197,10 +197,11 @@ export class Preprocessor implements Tokens.Source {
     while (line.length) {
       const front = line[0];
       switch (front.token) {
-        case 'ident':
+        case 'ident': {
           // Possibilities: (1) label, (2) instruction/assign, (3) macro
           // Labels get split out.  We don't distinguish assigns yet.
-          if (Tokens.eq(line[1], Tokens.COLON)) {
+          const callable = this.isCallable(front.str);
+          if (!callable && Tokens.eq(line[1], Tokens.COLON)) {
             const label = line.splice(0, 2);
             // Remember that data followed the label on its source line, since
             // that's what `.sizeof(label)` measures and the split loses it.
@@ -213,7 +214,7 @@ export class Preprocessor implements Tokens.Source {
             this.env.assignSym(line);
           } else if (Tokens.eq(line[1], Tokens.SET)) {
             this.env.setSym(line);
-          } else if (this.isLabelWithoutColon(line)) {
+          } else if (!callable && this.env.allowsLabelWithoutColon()) {
             // Same split as the `foo:` case above, but there isn't a colon,
             // so we just add one here to use the regular label code path.
             line.splice(0, 1);
@@ -225,6 +226,7 @@ export class Preprocessor implements Tokens.Source {
           }
           if (!this.tryExpandMacro(line)) this.outQueue.push(line);
           return true;
+        }
 
         case 'cs': {
           const ran = this.tryRunDirective(line);
@@ -341,13 +343,6 @@ export class Preprocessor implements Tokens.Source {
   /** Whether a name is an instruction or a `.macro`, and so can't be a scope. */
   private isCallable(name: string): boolean {
     return this.macros.get(name) instanceof Macro || this.env.isMnemonic(name);
-  }
-
-  private isLabelWithoutColon(line: Token[]): boolean {
-    const front = line[0];
-    if (front.token !== 'ident') return false;
-    if (!this.env.allowsLabelWithoutColon()) return false;
-    return !this.isCallable(front.str);
   }
 
   /**

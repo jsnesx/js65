@@ -1379,7 +1379,8 @@ export class Assembler {
     }
     this._source = tokens[0].source;
     const isLabel =
-        tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON);
+        tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON) &&
+        !(tokens[0].token === 'ident' && this.isMnemonic(tokens[0].str));
 
     try {
       // Inside a .struct/.enum, a leading identifier is a member declaration and not

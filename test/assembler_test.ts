@@ -785,6 +785,39 @@ describe('Assembler', function() {
     });
   });
 
+  describe('mnemonic-named labels', function() {
+    // A name that is an instruction or a macro is never a label, colon or not,
+    // which is what ca65 does.  Reading `inx:` as a label named `inx` used to
+    // drop the instruction and report nothing at all.
+    it('should reject a mnemonic followed by a colon', function() {
+      expect(assembleErrors('inx:\n')).not.toEqual([]);
+    });
+
+    it('should reject a mnemonic used as a label before more code', function() {
+      expect(assembleErrors('inx : iny\n')).not.toEqual([]);
+      expect(assembleErrors('nop : inx : iny\n')).not.toEqual([]);
+      expect(assembleErrors('foo: nop : bar: dex\n')).not.toEqual([]);
+    });
+
+    it('should reject a macro name followed by a colon', function() {
+      expect(assembleErrors('.macro mm\n  inx\n.endmacro\nmm:\n'))
+          .not.toEqual([]);
+    });
+
+    it('should still accept an ordinary label before an instruction',
+       function() {
+      expect(assemble('foo: nop\n  jmp foo\n'))
+          .toEqual([0xea, 0x4c, 0x00, 0x80]);
+    });
+
+    it('should still accept a mnemonic-named symbol from an assignment',
+       function() {
+      // Only the label paths change; `nop = $12` is a js65 extension over
+      // ca65 that loses nothing, so it keeps working.
+      expect(assemble('nop = $12\n  lda nop\n')).toEqual([0xa5, 0x12]);
+    });
+  });
+
   describe('.byte', function() {
     it('should support numbers', function() {
       const a = new Assembler(Cpu.P02);
