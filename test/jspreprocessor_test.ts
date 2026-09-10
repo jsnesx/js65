@@ -7,8 +7,8 @@ import {bunCodec} from '../src/driver/codec/bun.ts';
 import {JS_MODULES, jsModuleMap} from '../src/jsmodule/index.ts';
 import {mapPosition, parseSourceMap, sourceContent} from '../src/jsmodule/sourcemap.ts';
 import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
-import type {FileCallbacks} from '../src/libassembler.ts';
-import {JsActionTable} from '../src/options.ts';
+import {assemble, type FileCallbacks} from '../src/libassembler.ts';
+import {JsActionTable, type JsBlockContext} from '../src/options.ts';
 import type {SourceInfo} from '../src/error.ts';
 
 // Every test here needs an engine; nothing else in the suite registers one.
@@ -52,14 +52,25 @@ function callbacks(files: Record<string, string> = {}, canList = true): FileCall
   };
 }
 
+/** Stand-in for a live assembler with nothing defined yet. */
+const NO_SYMBOLS: JsBlockContext = {symbol: () => undefined};
+
+/**
+ * Preprocesses, then runs every block the way `.jsaction` does, since a block
+ * no longer runs during the preprocess pass. `actions[n]` is what block `n`
+ * emitted.
+ */
 function run(code: string, files: Record<string, string> = {},
-             extra: Partial<JsPreprocessOptions> = {}) {
+             extra: Partial<JsPreprocessOptions> = {},
+             ctx: JsBlockContext = NO_SYMBOLS) {
   const jsActions = new JsActionTable();
   const result = jsPreprocess(code, 'main.s', {
     jsActions, allowJavascript: true, callbacks: callbacks(files),
     includePaths: ['.'], ...extra,
   });
-  return {...result, jsActions};
+  const actions = [];
+  for (let i = 0; i < result.blocks; i++) actions.push(jsActions.run(i, ctx)!);
+  return {...result, jsActions, actions};
 }
 
 describe('jsPreprocess with no JavaScript in the file', function() {
@@ -93,7 +104,7 @@ describe('jsPreprocess block replacement', function() {
       '  lda #3',          // 6
     ].join('\n'));
     const lines = result.code.split('\n');
-    expect(lines[1]).toBe('.jsactions 0');
+    expect(lines[1]).toBe('.jsaction 0');
     expect(lines.slice(2, 5)).toEqual(['', '', '']);
     expect(lines[5]).toBe('  lda #3');
     expect(lines.length).toBe(6);
@@ -101,7 +112,7 @@ describe('jsPreprocess block replacement', function() {
 
   it('collects the actions the block emitted', function() {
     const result = run('.jsbegin\na.byte([1, 2]).label("gen");\n.jsend\n');
-    expect(result.jsActions.get(0)).toEqual([
+    expect(result.actions[0]).toEqual([
       {action: 'byte', bytes: [1, 2], source: {file: 'main.s', line: 1}},
       {action: 'label', label: 'gen', source: {file: 'main.s', line: 1}},
     ]);
@@ -113,9 +124,9 @@ describe('jsPreprocess block replacement', function() {
       '.jsbegin', 'a.byte(2);', '.jsend',
     ].join('\n'));
     const lines = result.code.split('\n');
-    expect(lines[0]).toBe('.jsactions 0');
-    expect(lines[3]).toBe('.jsactions 1');
-    expect(result.jsActions.get(1)![0]).toMatchObject({action: 'byte', bytes: [2]});
+    expect(lines[0]).toBe('.jsaction 0');
+    expect(lines[3]).toBe('.jsaction 1');
+    expect(result.actions[1][0]).toMatchObject({action: 'byte', bytes: [2]});
   });
 
   it('shares no state between two blocks in one file', function() {
@@ -127,14 +138,14 @@ describe('jsPreprocess block replacement', function() {
 describe('jsPreprocess debug attribution', function() {
   it('attributes every action to the .jsbegin line by default', function() {
     const result = run('\n\n.jsbegin\na.byte(1);\na.byte(2);\n.jsend\n');
-    for (const action of result.jsActions.get(0)!) {
+    for (const action of result.actions[0]) {
       expect(action.source).toEqual({file: 'main.s', line: 3});
     }
   });
 
   it('lets a.at(n) move attribution to an offset within the block', function() {
     const result = run('.jsbegin\na.at(2).byte(1);\na.byte(2);\n.jsend\n');
-    const actions = result.jsActions.get(0)!;
+    const actions = result.actions[0];
     expect(actions[0].source).toEqual({file: 'main.s', line: 3});
     // `at` is sticky, so the following byte stays on the same line.
     expect(actions[1].source).toEqual({file: 'main.s', line: 3});
@@ -145,7 +156,7 @@ describe('.jsinclude', function() {
   it('makes a helper from the included file callable in the block', function() {
     const files = {'lib/nes.js': 'function two() { return [2, 2]; }'};
     const result = run('.jsinclude "lib/nes.js"\n.jsbegin\na.byte(two());\n.jsend\n', files);
-    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [2, 2]});
+    expect(result.actions[0][0]).toMatchObject({action: 'byte', bytes: [2, 2]});
   });
 
   it('blanks the declaration so the tokenizer never sees it', function() {
@@ -158,7 +169,7 @@ describe('.jsinclude', function() {
     const files = {'a.js': 'const v = 1;', 'b.js': 'const w = v + 1;'};
     const result = run(
         '.jsinclude "a.js"\n.jsinclude "b.js"\n.jsbegin\na.byte(w);\n.jsend\n', files);
-    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [2]});
+    expect(result.actions[0][0]).toMatchObject({bytes: [2]});
   });
 
   it('reports a missing include file', function() {
@@ -170,7 +181,7 @@ describe('.jsinclude', function() {
 describe('.jsmodule', function() {
   it('binds the module name for the block to call', function() {
     const result = run('.jsmodule bmp\n.jsbegin\na.byte(bmp.load ? 1 : 0);\n.jsend\n');
-    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [1]});
+    expect(result.actions[0][0]).toMatchObject({action: 'byte', bytes: [1]});
   });
 
   it('blanks the declaration so the tokenizer never sees it', function() {
@@ -187,7 +198,7 @@ describe('.jsmodule', function() {
   it('deduplicates a repeated module instead of emitting a second const', function() {
     const result = run(
         '.jsmodule bmp\n.jsmodule bmp\n.jsbegin\na.byte(bmp.load ? 4 : 0);\n.jsend\n');
-    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
+    expect(result.actions[0][0]).toMatchObject({bytes: [4]});
     expect(result.code.split('\n').slice(0, 2)).toEqual(['', '']);
   });
 
@@ -196,7 +207,7 @@ describe('.jsmodule', function() {
     const result = run(
         '.jsinclude "lib/on-top.js"\n.jsmodule bmp\n.jsbegin\na.byte(four);\n.jsend\n',
         files);
-    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
+    expect(result.actions[0][0]).toMatchObject({bytes: [4]});
   });
 
   it('gives a png block the frontend deflate, so encode works end to end', function() {
@@ -206,7 +217,7 @@ describe('.jsmodule', function() {
         'const p = [[0, 0, 0], [255, 0, 0]];\n' +
         'const b = png.encode({width: 2, height: 1, pixels: new Uint8Array([1, 0]), palette: p});\n' +
         'a.byte([...png.load(b).pixels]);\n.jsend\n');
-    expect(result.jsActions.get(0)![0]).toMatchObject({action: 'byte', bytes: [1, 0]});
+    expect(result.actions[0][0]).toMatchObject({action: 'byte', bytes: [1, 0]});
   });
 
   it('reports an unknown module and lists the known ones', function() {
@@ -230,7 +241,7 @@ describe('.jsinput', function() {
     const one = {'assets/only.bin': 'Z'};
     const result = run(
         '.jsinput tiles, "assets/*.bin"\n.jsbegin\na.byte(tiles.length);\n.jsend\n', one);
-    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [1]});
+    expect(result.actions[0][0]).toMatchObject({bytes: [1]});
   });
 
   it('binds each match with its path, bytes, and text', function() {
@@ -238,7 +249,7 @@ describe('.jsinput', function() {
         '.jsinput tiles, "assets/*.bin"\n' +
         '.jsbegin\na.byte(tiles.map(t => t.bytes[0]));\n' +
         'a.label(tiles.map(t => t.path).join("|"));\n.jsend\n', assets);
-    const actions = result.jsActions.get(0)!;
+    const actions = result.actions[0];
     expect(actions[0]).toMatchObject({bytes: [0x41, 0x42]});
     expect(actions[1]).toMatchObject({label: 'assets/a.bin|assets/b.bin'});
   });
@@ -246,7 +257,7 @@ describe('.jsinput', function() {
   it('binds a literal path to a single object, not an array', function() {
     const result = run(
         '.jsinput font, "assets/a.bin"\n.jsbegin\na.label(font.text);\n.jsend\n', assets);
-    expect(result.jsActions.get(0)![0]).toMatchObject({label: 'AA'});
+    expect(result.actions[0][0]).toMatchObject({label: 'AA'});
   });
 
   it('reports a literal path that does not exist', function() {
@@ -257,7 +268,7 @@ describe('.jsinput', function() {
   it('binds an empty array when a glob matches nothing', function() {
     const result = run(
         '.jsinput tiles, "assets/*.chr"\n.jsbegin\na.byte(tiles.length);\n.jsend\n', assets);
-    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [0]});
+    expect(result.actions[0][0]).toMatchObject({bytes: [0]});
   });
 
   it('errors on a glob when the frontend cannot list directories', function() {
@@ -272,20 +283,6 @@ describe('.jsinput', function() {
   it('rejects a declaration that is missing its name', function() {
     expect(() => run('.jsinput "assets/a.bin"\n.jsbegin\n.jsend\n', assets))
         .toThrow(/Expected .jsinput <name>, "<path>"/);
-  });
-});
-
-describe('the defines binding', function() {
-  it('exposes -D values, numeric where they parse', function() {
-    const result = run('.jsbegin\na.byte(defines.LEVEL);\n.jsend\n', {},
-                       {defines: [{name: 'LEVEL', value: '4'}]});
-    expect(result.jsActions.get(0)![0]).toMatchObject({bytes: [4]});
-  });
-
-  it('keeps a non-numeric value as a string', function() {
-    const result = run('.jsbegin\na.label(defines.NAME);\n.jsend\n', {},
-                       {defines: [{name: 'NAME', value: 'game'}]});
-    expect(result.jsActions.get(0)![0]).toMatchObject({label: 'game'});
   });
 });
 
@@ -418,6 +415,95 @@ describe('jsPreprocess rejections', function() {
   });
 });
 
+describe('a block running inside the assembler', function() {
+  /** Assembles one source file with JS enabled and returns its single chunk. */
+  function chunkOf(code: string) {
+    const result = assemble([{type: 'source', code, name: 'test.s'}],
+                            {allowJavascript: true});
+    expect(result.messages.filter(m => m.level === 'error').map(m => m.message))
+        .toEqual([]);
+    return result.modules[0].chunks?.[0];
+  }
+
+  it('sees a constant assigned earlier in the file', function() {
+    const chunk = chunkOf([
+      '.segment "CODE"', '.org $8000',
+      'BASE = 7',
+      '.jsbegin', 'a.byte(defines.BASE + 1);', '.jsend',
+    ].join('\n'));
+    expect([...chunk!.data]).toEqual([8]);
+  });
+
+  it('does not see a constant that is only assigned after the block', function() {
+    const chunk = chunkOf([
+      '.segment "CODE"', '.org $8000',
+      '.jsbegin', 'a.byte(defines.LATER === undefined ? 1 : 0);', '.jsend',
+      'LATER = 9',
+    ].join('\n'));
+    expect([...chunk!.data]).toEqual([1]);
+  });
+
+  it('reflects a .set value as of the line the block sits on', function() {
+    const chunk = chunkOf([
+      '.segment "CODE"', '.org $8000',
+      'V .set 1',
+      '.jsbegin', 'a.byte(defines.V);', '.jsend',
+      'V .set 2',
+      '.jsbegin', 'a.byte(defines.V);', '.jsend',
+    ].join('\n'));
+    expect([...chunk!.data]).toEqual([1, 2]);
+  });
+
+  // A numeric `-D` is assigned as an ordinary symbol before assembly starts, so
+  // the block reads it through the same symbol lookup as everything else.
+  it('sees a numeric -D value', function() {
+    const result = assemble([{type: 'source', name: 'test.s', code: [
+      '.segment "CODE"', '.org $8000',
+      '.jsbegin', 'a.byte(defines.LEVEL + 1);', '.jsend',
+    ].join('\n')}], {allowJavascript: true, defines: [{name: 'LEVEL', value: '5'}]});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    expect([...result.modules[0].chunks![0].data]).toEqual([6]);
+  });
+
+  // A non-numeric `-D` is a textual replacement rather than a symbol, so it is
+  // deliberately not something a block can read.
+  it('reads undefined for a non-numeric -D value', function() {
+    const result = assemble([{type: 'source', name: 'test.s', code: [
+      '.segment "CODE"', '.org $8000',
+      '.jsbegin', 'a.byte(defines.NAME === undefined ? 1 : 0);', '.jsend',
+    ].join('\n')}], {allowJavascript: true, defines: [{name: 'NAME', value: 'game'}]});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    expect([...result.modules[0].chunks![0].data]).toEqual([1]);
+  });
+
+  it('never runs a block the assembler skipped', function() {
+    const chunk = chunkOf([
+      '.segment "CODE"', '.org $8000',
+      '.if 0', '.jsbegin', 'throw new Error("ran anyway");', '.jsend', '.endif',
+      '.byte 3',
+    ].join('\n'));
+    expect([...chunk!.data]).toEqual([3]);
+  });
+
+  it('runs the block again each time its marker is reached', function() {
+    const chunk = chunkOf([
+      '.segment "CODE"', '.org $8000',
+      '.macro emit', '.jsbegin', 'a.byte(1);', '.jsend', '.endmacro',
+      'emit', 'emit',
+    ].join('\n'));
+    expect([...chunk!.data]).toEqual([1, 1]);
+  });
+
+  it('reports a failing block as an error against the block, not a crash', function() {
+    const result = assemble([{type: 'source', name: 'test.s', code:
+        '.segment "CODE"\n.jsbegin\nthrow new Error("boom");\n.jsend\n'}],
+        {allowJavascript: true});
+    expect(result.success).toBe(false);
+    expect(result.messages.map(m => m.message).join('\n'))
+        .toMatch(/JavaScript block failed: boom/);
+  });
+});
+
 describe('jsPreprocess scanning', function() {
   it('ignores a marker that is not the first thing on its line', function() {
     const code = '  lda #3 ; .jsbegin\n';
@@ -426,12 +512,12 @@ describe('jsPreprocess scanning', function() {
 
   it('accepts an indented block marker', function() {
     const result = run('  .jsbegin\n  a.byte(1);\n  .jsend\n');
-    expect(result.code.split('\n')[0]).toBe('.jsactions 0');
+    expect(result.code.split('\n')[0]).toBe('.jsaction 0');
   });
 
   it('is case insensitive on the directive', function() {
     const result = run('.JSBEGIN\na.byte(1);\n.JSEND\n');
-    expect(result.code.split('\n')[0]).toBe('.jsactions 0');
+    expect(result.code.split('\n')[0]).toBe('.jsaction 0');
   });
 });
 
@@ -518,7 +604,7 @@ describe('a block inside a conditional', function() {
                                ['.proc p', '.endproc'], ['.repeat 2', '.endrepeat']]) {
     it(`is allowed inside ${open.split(' ')[0]}`, function() {
       const result = run(`${open}\n.jsbegin\na.byte(1);\n.jsend\n${close}\n`);
-      expect(result.code.split('\n')[1]).toBe('.jsactions 0');
+      expect(result.code.split('\n')[1]).toBe('.jsaction 0');
       expect(result.blocks).toBe(1);
     });
   }
@@ -527,7 +613,7 @@ describe('a block inside a conditional', function() {
     const result = run('.if 0\n.jsbegin\na.byte(1);\n.jsend\n.endif\n');
     const lines = result.code.split('\n');
     expect(lines[0]).toBe('.if 0');
-    expect(lines[1]).toBe('.jsactions 0');
+    expect(lines[1]).toBe('.jsaction 0');
     expect(lines[4]).toBe('.endif');
   });
 });

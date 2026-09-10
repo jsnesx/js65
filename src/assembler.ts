@@ -1486,7 +1486,7 @@ export class Assembler {
         case '.faraddr': return this.faraddr(...this.parseDataList(tokens));
         case '.dword': return this.dword(...this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
-        case '.jsactions': return this.jsActions(tokens);
+        case '.jsaction': return this.jsAction(tokens);
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
         case '.import': return this.import(...this.parseIdentifierList(tokens));
         case '.export': return this.export(...this.parseIdentifierList(tokens));
@@ -2618,10 +2618,14 @@ export class Assembler {
     this._org += size;
   }
 
-  /** Replays the action list stage 0 parked at this index. */
-  private jsActions(tokens: Token[]) {
+  private jsAction(tokens: Token[]) {
     const index = this.parseConst(tokens, 1);
-    const actions = this.opts.jsActions?.get(index);
+    const actions = this.opts.jsActions?.run(index, {
+      symbol: (name: string) => {
+        const sym = this.lookupSymbol(name);
+        return sym?.expr ? this.evaluate(sym.expr) : undefined;
+      },
+    });
     if (!actions) this.fail(`No JS action list at index ${index}`, tokens[0]);
     // runActions rewrites the source location per action, so put it back for
     // whatever follows the marker in the enclosing file.

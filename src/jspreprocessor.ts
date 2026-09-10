@@ -8,7 +8,7 @@ import { SourceError, type SourceInfo } from './error.ts';
 import { JS_MODULES, jsModuleMap, jsModuleNames } from './jsmodule/index.ts';
 import { mapPosition } from './jsmodule/sourcemap.ts';
 import type { FileCallbacks } from './libassembler.ts';
-import type { JsActionTable, SymbolDefine } from './options.ts';
+import type { JsActionTable, JsBlockContext } from './options.ts';
 import { dirOf, joinDir } from './util.ts';
 
 export interface JsPreprocessOptions {
@@ -17,16 +17,14 @@ export interface JsPreprocessOptions {
   callbacks?: FileCallbacks;
   includePaths?: string[];
   binIncludePaths?: string[];
-  /** `-D` values, exposed to a block as the `defines` binding. */
-  defines?: SymbolDefine[];
 }
 
 export interface JsPreprocessResult {
-  /** Source with blocks replaced by `.jsactions n` and declarations blanked. */
+  /** Source with blocks replaced by `.jsaction n` and declarations blanked. */
   code: string;
   /** Whether the file had any block or declaration at all. */
   usedJavascript: boolean;
-  /** How many blocks ran, so the frontend can report where JS executed. */
+  /** How many blocks were compiled, so the frontend can report where JS lives. */
   blocks: number;
 }
 
@@ -93,14 +91,11 @@ function inputSearch(file: string, opts: JsPreprocessOptions): string[] {
   return searchPaths(file, [...paths, './']);
 }
 
-/** Maps `-D` values into the plain object a block sees, numbers where they parse. */
-function definesScope(defines: readonly SymbolDefine[] | undefined): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const {name, value} of defines ?? []) {
-    const num = Number(value);
-    out[name] = value !== '' && Number.isFinite(num) ? num : value;
-  }
-  return out;
+function definesView(ctx: JsBlockContext): Record<string, number | undefined> {
+  return new Proxy({}, {
+    get: (_target, prop) => typeof prop === 'string' ? ctx.symbol(prop) : undefined,
+    has: (_target, prop) => typeof prop === 'string' && ctx.symbol(prop) !== undefined,
+  });
 }
 
 interface Declarations {
@@ -376,21 +371,24 @@ export function jsPreprocess(code: string, file: string,
   const prelude = [...loadModules(file, decls),
                    ...decls.includes.map(d => loadInclude(file, d.path, opts))];
   const inputs = resolveInputs(file, decls, opts);
-  const defines = definesScope(opts.defines);
 
   const out = [...lines];
   const jsDeflate = deflate();
   for (const b of blocks) {
-    const a = new AsmModule(file, {file, line: b.start});
     // The body starts on the line after `.jsbegin`.
     const {code: src, spans} =
         combine(prelude, {text: b.body, file, firstLine: b.start + 1});
-    try {
-      engine.run(src, {a, defines, __js65_deflate: jsDeflate, ...inputs});
-    } catch (err) {
-      throw blockError(err, file, b, spans);
-    }
-    blank(out, b.start, b.end, `.jsactions ${opts.jsActions.add(a.actions)}`);
+    const index = opts.jsActions.add(ctx => {
+      const a = new AsmModule(file, {file, line: b.start});
+      try {
+        engine.run(src, {a, defines: definesView(ctx),
+                         __js65_deflate: jsDeflate, ...inputs});
+      } catch (err) {
+        throw blockError(err, file, b, spans);
+      }
+      return a.actions;
+    });
+    blank(out, b.start, b.end, `.jsaction ${index}`);
   }
   for (const {line} of decls.inputs) blank(out, line, line);
   for (const {line} of decls.modules) blank(out, line, line);

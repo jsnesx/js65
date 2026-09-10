@@ -116,7 +116,7 @@ export interface AssemblerOptions {
   generateDebugInfo?: boolean;
   defines?: SymbolDefine[];
   features?: string[];
-  /** Results from the JS Preprocessor that can be inserted with .jsactions */
+  /** Results from the JS Preprocessor that can be inserted with .jsaction */
   jsActions?: JsActionTable;
   /** Enables the Javascript Preprocessor. Without this .js* will error out. */
   allowJavascript?: boolean;
@@ -439,7 +439,6 @@ export function assemble(
         callbacks,
         includePaths: options?.includePaths,
         binIncludePaths: options?.binIncludePaths,
-        defines: options?.defines,
       });
 
       // Tokenize and assemble source code

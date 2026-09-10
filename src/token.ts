@@ -145,7 +145,7 @@ export const CS_KEYWORDS: ReadonlySet<string> = new Set([
   '.ifnconst', '.ifndef', '.ifnref', '.ifnsym', '.ifp02', '.ifp4510',
   '.ifp816', '.ifpc02', '.ifpdtv', '.ifpsc02', '.ifref', '.ifsym',
   '.import', '.importzp', '.incbin', '.include', '.interruptor', '.isize',
-  '.ismnem', '.ismnemonic', '.jsactions', '.left', '.linecont', '.list',
+  '.ismnem', '.ismnemonic', '.jsaction', '.left', '.linecont', '.list',
   '.listbytes', '.literal', '.lobyte', '.lobytes', '.local', '.localchar',
   '.loword', '.mac', '.macpack', '.macro', '.match', '.max', '.mid', '.min',
   '.mod', '.move', '.noexpand', '.not', '.null', '.or', '.org', '.out',

@@ -23,15 +23,28 @@ export interface SymbolDefine {
   value: string;
 }
 
-export class JsActionTable {
-  private readonly lists: AssemblyAction[][] = [];
+/** Reference to the current assembler state so a jsblock can read defined symbols */
+export interface JsBlockContext {
+  /**
+   * Value of a constant symbol visible from the current scope, or undefined
+   * when it is unknown, a forward reference, or only resolvable at link time.
+   */
+  symbol(name: string): number | undefined;
+}
 
-  add(actions: AssemblyAction[]): number {
-    return this.lists.push(actions) - 1;
+/** A `.jsbegin` block prepped as a `.jsaction` to be run by the assembler */
+export type JsBlockRunner = (ctx: JsBlockContext) => AssemblyAction[];
+
+export class JsActionTable {
+  private readonly entries: JsBlockRunner[] = [];
+
+  add(run: JsBlockRunner): number {
+    return this.entries.push(run) - 1;
   }
 
-  get(index: number): AssemblyAction[] | undefined {
-    return this.lists[index];
+  /** Runs the block stored at `index` or undefined when there is none. */
+  run(index: number, ctx: JsBlockContext): AssemblyAction[] | undefined {
+    return this.entries[index]?.(ctx);
   }
 }
 

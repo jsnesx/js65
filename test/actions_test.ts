@@ -3,6 +3,7 @@
 import {describe, it, expect} from 'bun:test';
 import {assemble, JsActionTable,
         type AssemblyAction, type AssemblyInput} from '../src/libassembler.ts';
+import type {JsBlockContext} from '../src/options.ts';
 
 function assembleWith(code: string, table?: JsActionTable) {
   const input: AssemblyInput = {type: 'source', code, name: 'test.s'};
@@ -18,10 +19,10 @@ function chunkOf(code: string, table: JsActionTable) {
   return result.modules[0].chunks![0];
 }
 
-describe('runActions via .jsactions', () => {
+describe('runActions via .jsaction', () => {
   it('replays an action list mid-file, interleaved with surrounding assembly', () => {
     const table = new JsActionTable();
-    const index = table.add([
+    const index = table.add(() => [
       {action: 'byte', bytes: [0x11, 0x22]},
       {action: 'word', words: [0x3344]},
     ]);
@@ -29,7 +30,7 @@ describe('runActions via .jsactions', () => {
 .segment "CODE"
 .org $8000
   .byte $01
-  .jsactions ${index}
+  .jsaction ${index}
   .byte $02
 `, table);
     expect(chunk.org).toBe(0x8000);
@@ -38,12 +39,12 @@ describe('runActions via .jsactions', () => {
 
   it('lands in the segment live at the marker', () => {
     const table = new JsActionTable();
-    const index = table.add([{action: 'byte', bytes: [0xaa]}]);
+    const index = table.add(() => [{action: 'byte', bytes: [0xaa]}]);
     const result = assembleWith(`
 .segment "ONE"
   .byte $01
 .segment "TWO"
-  .jsactions ${index}
+  .jsaction ${index}
 `, table);
     expect(result.success).toBe(true);
     const chunks = result.modules[0].chunks!;
@@ -54,14 +55,14 @@ describe('runActions via .jsactions', () => {
 
   it('defines a label the surrounding assembly can reference', () => {
     const table = new JsActionTable();
-    const index = table.add([
+    const index = table.add(() => [
       {action: 'label', label: 'generated'},
       {action: 'byte', bytes: [0x99]},
     ]);
     const chunk = chunkOf(`
 .segment "CODE"
 .org $8000
-  .jsactions ${index}
+  .jsaction ${index}
   .word generated
 `, table);
     expect(Array.from(chunk.data)).toEqual([0x99, 0x00, 0x80]);
@@ -69,12 +70,12 @@ describe('runActions via .jsactions', () => {
 
   it('emits into the scope live at the marker', () => {
     const table = new JsActionTable();
-    const index = table.add([{action: 'label', label: 'inner'}]);
+    const index = table.add(() => [{action: 'label', label: 'inner'}]);
     const result = assembleWith(`
 .segment "CODE"
 .org $8000
 .scope Outer
-  .jsactions ${index}
+  .jsaction ${index}
 .endscope
   .word Outer::inner
 `, table);
@@ -94,24 +95,24 @@ describe('runActions via .jsactions', () => {
     expect(Array.from(result.modules[0].chunks![0].data)).toEqual([0xde, 0xad, 0xbe]);
   });
 
-  it('rejects a code action replayed from a .jsactions marker', () => {
+  it('rejects a code action replayed from a .jsaction marker', () => {
     const table = new JsActionTable();
-    const index = table.add([{action: 'code', code: '.byte $00'}]);
-    const result = assembleWith(`.jsactions ${index}\n`, table);
+    const index = table.add(() => [{action: 'code', code: '.byte $00'}]);
+    const result = assembleWith(`.jsaction ${index}\n`, table);
     expect(result.success).toBe(false);
     expect(result.messages.map(m => m.message).join('\n'))
         .toContain('code actions are not supported here');
   });
 
   it('errors on an index with no parked action list', () => {
-    const result = assembleWith('.jsactions 7\n', new JsActionTable());
+    const result = assembleWith('.jsaction 7\n', new JsActionTable());
     expect(result.success).toBe(false);
     expect(result.messages.map(m => m.message).join('\n'))
         .toContain('No JS action list at index 7');
   });
 
   it('errors when no table was provided at all', () => {
-    const result = assembleWith('.jsactions 0\n');
+    const result = assembleWith('.jsaction 0\n');
     expect(result.success).toBe(false);
     expect(result.messages.map(m => m.message).join('\n'))
         .toContain('No JS action list at index 0');
@@ -119,13 +120,13 @@ describe('runActions via .jsactions', () => {
 
   it('restores the file position after the marker', () => {
     const table = new JsActionTable();
-    const index = table.add([
+    const index = table.add(() => [
       {action: 'label', label: 'fromblock', source: {file: 'gen.js', line: 12}},
     ]);
     const result = assembleWith(`
 .segment "CODE"
 .org $8000
-  .jsactions ${index}
+  .jsaction ${index}
   .endscope
 `, table);
     expect(result.success).toBe(false);
@@ -137,14 +138,24 @@ describe('runActions via .jsactions', () => {
 });
 
 describe('JsActionTable', () => {
-  it('hands out sequential indices and reads them back', () => {
+  /** Stand-in for a live assembler with nothing defined yet. */
+  const NO_SYMBOLS: JsBlockContext = {symbol: () => undefined};
+
+  it('hands out sequential indices and runs the block behind each', () => {
     const table = new JsActionTable();
     const a: AssemblyAction[] = [{action: 'byte', bytes: [1]}];
     const b: AssemblyAction[] = [{action: 'byte', bytes: [2]}];
-    expect(table.add(a)).toBe(0);
-    expect(table.add(b)).toBe(1);
-    expect(table.get(0)).toBe(a);
-    expect(table.get(1)).toBe(b);
-    expect(table.get(2)).toBeUndefined();
+    expect(table.add(() => a)).toBe(0);
+    expect(table.add(() => b)).toBe(1);
+    expect(table.run(0, NO_SYMBOLS)).toBe(a);
+    expect(table.run(1, NO_SYMBOLS)).toBe(b);
+    expect(table.run(2, NO_SYMBOLS)).toBeUndefined();
+  });
+
+  it('runs the block again on every lookup, so it sees the state each time', () => {
+    const table = new JsActionTable();
+    const index = table.add(ctx => [{action: 'byte', bytes: [ctx.symbol('N') ?? 0]}]);
+    expect(table.run(index, {symbol: () => 1})).toEqual([{action: 'byte', bytes: [1]}]);
+    expect(table.run(index, {symbol: () => 2})).toEqual([{action: 'byte', bytes: [2]}]);
   });
 });
