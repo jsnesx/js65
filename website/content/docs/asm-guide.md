@@ -7,7 +7,11 @@ weight: 4
 
 Refer to the excellent [ca65 documentation](https://cc65.github.io/doc/ca65.html) for anything not mentioned here.
 
-## `.segment` pool and mirror
+## `.segment`
+
+`.segment` has several new uses in `js65` in addition to the original ca65 use case. The following are three new overloads to `.segment`
+
+### Pool and Mirror
 
 With the extended segment features, `js65` can place data into a list of segments provided, allowing you to pack data with custom placement rules.
 The first placement rule is called segment `pool`ing, allowing data to fill the pool in order of declaration.
@@ -42,7 +46,7 @@ Reset: ;etc
 .segment "MyCoolMirror" :mirror { "PRG0", "PRG1", "PRG2", "PRG3" }
 ```
 
-## `.segment` Memory Definition
+### Memory Definition
 
 Instead of splitting the definition of segments into physical `MEMORY` space and a logical `SEGMENT` space, `js65` combines the two concepts into a single `SEGMENT` type.
 A `SEGMENT` has the same parameters that both `MEMORY` and `SEGMENT`s have in ld65, and should you need to replicate the same "multiple `SEGMENT`s mapping to a single `MEMORY`" style, then you can accomplish this using the `:load` attribute.
@@ -56,43 +60,28 @@ A `SEGMENT` has the same parameters that both `MEMORY` and `SEGMENT`s have in ld
 
 The full list of `.segment` parameters are as follows:
 
-> `:align <num>` - (number must be a power of two) - Places the segment so that the start of the data aligns with the boundary provided by `<num>`.
->
-> `:alignload <num>` - (number must be a power of two) - Same as align, but for `:load` segments, sets the alignment only for LOADING and not for RUNNING (which for runtime alignment, you would use `:align`)  
->
-> `:bank <num>` - Value set on the segment that can be retrieved with either `.bank(Label)` or `^` which was changed to reference the `.bank` for a Label instead of the upper 16-23 bits (which isn't a thing on NES)
->
-> `:bss` - Sets the type to `bss`
->
-> `:dedupe` - Custom flag to allow the linker to write blocks on top of already placed blocks. If the linker finds a matching block when placing one, it will overlap the two blocks so that the data can be shared.
->
-> `:define` - Create the `__NAME_START__`, etc symbols (see ld65 define = "yes")
->
-> `:default` - Marks this segment as the one used when no segments have been set in a file.
->
-> `:fill <num>` - If set, fills all data with a specified value. `<num>` is optional, if its not provided, it will fill with 0.
->
-> `:load <str>` - Segment name to use as a base for this segment. Any code/data for this segment will be added to the other segment's memory space.
->
-> `:mem <num>` - Sets the `org` space for what address this memory starts with.
->
-> `:off <num>` - File offset where this segment's data will be written.
->
-> `:optional` - Unused. We don't currently throw warnings about unused segments. Kept for ca65 compat until we decide if we want it.
->
-> `out <str>` - (`<str>` is optional) File name to write to. Defaults to `"%O"` for the named output file.
->
-> `:ro` `:rw` - Unused. Kept for compatbility
->
-> `:run <str>` - Sets the `org` for the data that will be used at *runtime* based on the value of the segment that is named in `<str>`.
->
-> `:size <num>` - Marks the size of the output data. If `:size` and `:fill` are set, then the entire segment is marked as `free` by default. Otherwise, you will need to `.free` intervals in the code yourself.
->
-> `:zp` - Marks this as a zeropage segment (both `bss` and `addrsize = 1`)
+* `:align <num>` - (number must be a power of two) - Places the segment so that the start of the data aligns with the boundary provided by `<num>`.
+* `:alignload <num>` - (number must be a power of two) - Same as align, but for `:load` segments, sets the alignment only for LOADING and not for RUNNING (which for runtime alignment, you would use `:align`)  
+* `:bank <num>` - Value set on the segment that can be retrieved with either `.bank(Label)` or `^` which was changed to reference the `.bank` for a Label instead of the upper 16-23 bits (which isn't a thing on NES)
+* `:bss` - Sets the type to `bss`
+* `:dedupe` - Custom flag to allow the linker to write blocks on top of already placed blocks. If the linker finds a matching block when placing one, it will overlap the two blocks so that the data can be shared.
+* `:define` - Create the `__NAME_START__`, etc symbols (see ld65 define = "yes")
+* `:default` - Marks this segment as the one used when no segments have been set in a file.
+* `:fill <num>` - If set, fills all data with a specified value. `<num>` is optional, if its not provided, it will fill with 0.
+* `:load <str>` - Segment name to use as a base for this segment. Any code/data for this segment will be added to the other segment's memory space.
+* `:mem <num>` - Sets the `org` space for what address this memory starts with.
+* `:off <num>` - File offset where this segment's data will be written. Can be used to have multiple segments that overwrite the same location.
+* `:optional` - Unused. We don't currently throw warnings about unused segments. Kept for ca65 compat until we decide if we want it.
+* `:out <str>` - (`<str>` is optional) File name to write to. Defaults to `"%O"` for the named output file.
+* `:ro` `:rw` - Unused. Kept for compatbility
+* `:run <str>` - Sets the `org` for the data that will be used at *runtime* based on the value of the segment that is named in `<str>`.
+* `:size <num>` - Marks the size of the output data. If `:size` and `:fill` are set, then the entire segment is marked as `free` by default. Otherwise, you will need to `.free` intervals in the code yourself.
+* `:zp` - Marks this as a zeropage segment (both `bss` and `addrsize = 1`)
 
-## `.segment` Anonymous
+### Anonymous
 
 One more way to use `.segment` which is similar to the `Memory Definition` mode is to use it without declaring any name.
+This is intended as a quick and easy way to get a project started, as its just a limited shorthand for the full memory definitions described above.
 
 ```asm6502
 ; Make a 16kb bank without a name starting from `.org $8000`
@@ -104,7 +93,6 @@ One more way to use `.segment` which is similar to the `Memory Definition` mode 
 ```
 
 To add code/data to a bank, you need to place the data after the anon segment.
-This is intended to just make it quick and easy to get started if you come from a single file assembler.
 
 Reserve RAM with `:bss` or `:zp`
 
@@ -133,12 +121,10 @@ When in `.org` mode, you can mark a size of data as free, and allow the linker t
 If you define a segment with a `:fill` and `:size`, then the linker will also automatically free the entire segment for convenience.
 But if you are patching a game, it makes more sense to selectively free chunks of data yourself.
 
-`.free <sizeInBytes>` takes a single parameter with how many bytes from the *current* org to make free.
+* `.free <sizeInBytes>` takes a single parameter with how many bytes from the *current* org to make free.
 For your convenience, in `.macpack common` there are two macros which provide different ways to free data.
-
-`FREE_UNTIL addr` will mark data as free until the current org `* == addr`, and assert that `* <= addr` for you, that way you can verify that you aren't overriding something important at `addr`.
-
-`FREE "segmentName" [startAddrInclusive, endAddrExclusive)` The `[` and `)` are included in the `FREE` call. This sets a block of code in the segment `segmentName` as free from start addr up to but not including end addr.
+* `FREE_UNTIL addr` will mark data as free until the current org `* == addr`, and assert that `* <= addr` for you, that way you can verify that you aren't overriding something important at `addr`.
+* `FREE "segmentName" [startAddrInclusive, endAddrExclusive)` The `[` and `)` are included in the `FREE` call. This sets a block of code in the segment `segmentName` as free from start addr up to but not including end addr.
 
 ```asm6502
 .free $4 ; marks the next 4 bytes as unused
@@ -161,12 +147,44 @@ It allows you to map any `N` consecutive bytes to `M` output bytes.
 All the same rules and restrictions that apply to `.charmap` apply to `.strmap`, so you can `.pushcharmap` and it will also push the current `.strmap`
 
 ```asm6502
-.strmap "the", [1, 2, 3]
-  .byte "the" ; outputs 1, 2, 3
+; Map 10 input bytes to 2 output bytes
+.strmap "<newline>", [$00, $fd]
+  .byte "Hello!<newline>" ; outputs "Hello!", $00, $fd
 
-.strmap "é", $ef
-  .byte "café" ; outputs 'c', 'a', 'f', $ef
+; é is the encoded UTF-8 bytes [$C3, $A9] and we can map it to whatever we want 
+.strmap "é", $e9
+  .byte "café" ; outputs 'c', 'a', 'f', $e9
 ```
+
+## `.feature`
+
+For the most part, the `feature` list matches what `ca65` supports, but there are some features that are unimplemented in js65 right now, and also some features that are new or different in `js65`.
+
+### New features
+
+* `js65_multiops_per_line` - Allows multiple opcodes per line separated by spaces. For example, this is allowed on one line `lda #4 clc adc $1 sta ObjXCoord+10,x` but `lda foo label: sta $00` because `label:` is not an opcode.
+* `js65_backslash_separator` - Enable to make `\` function as a new line character, allowing multiple directives on the same line. EX: `lda foo \ .byte $2c \ skip: lda #1` is allowed since `\` is a line terminator.
+* `js65_backtick_separator` - Same as `js65_backslash_separator` but uses `\`` as the new line character instead.
+
+### Different Defaults
+
+* `line_continuations` - On by default (off in ca65)
+* `underline_in_numbers` - On by default (off in ca65)
+* `leading_dot_in_identifiers` - On by default (off in ca65)
+
+### Always ON features (cannot be disabled)
+
+* `at_in_identifiers`
+* `addrsize`
+* `string_escapes`
+* `loose_string_term`
+* `loose_char_term`
+* `missing_char_term`
+* `org_per_seg`
+
+### Unsupported features
+
+* `long_jsr_jmp_rts` - 65816-only and `js65` doesn't support other CPUs yet.
 
 ## `.eol`
 
@@ -204,7 +222,7 @@ Macro expansion still happens, this is only preventing `.define` based text repl
     .org start .eol \
     .free end - start .eol \
     .popseg
-; ... but also provide a "inclusive start INclusive end" version too.
+; ... but also provide a "inclusive start inclusive end" version too.
 ; To prevent the base case define from expanding right now, we can
 ; use .noexpand so that it will only get expanded when the below macro
 ; gets expanded.
@@ -215,14 +233,7 @@ Macro expansion still happens, this is only preventing `.define` based text repl
 
 Since js65 is focused on just the NES for now, `.bankbyte` is currently just an alias for `.bank` instead of the upper 16-23 bits.
 
-
-## More directives coming soon
-
-```
-TODO
-```
-
 ## Unimplemented Directives
 
-- Any of the directives that change CPU mode are unimplemented.
-- Some features are currently not able to be changed during compilation (and options for setting them are not presented to the CLI yet.)
+* Any of the directives that change CPU mode are unimplemented.
+* Some features are currently not able to be changed during compilation (and options for setting them are not presented to the CLI yet.)

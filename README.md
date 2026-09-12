@@ -10,6 +10,12 @@ CLI and library for assembling, linking, patching, and smudging 6502 assembly co
 npm install -g js65
 ```
 
+Update to the latest version using
+
+```bash
+npm update -g js65
+```
+
 ## Basic usage
 
 js65 has a similar command line structure to `ca65` so check `--help` for more information.
@@ -47,7 +53,7 @@ For a short list of cool features we have that ca65 doesn't support, see below:
 ## Why not js65
 
 * No C support and its not the radar right now either.
-* Ca65 is faster and will very likely always be faster.
+* ca65 is faster and will very likely always be faster.
 * Not compatible with `od65` object files. Similarly theres no static lib support (`.a` files)
 * Native binary sizes for the compiler will always be larger since we use Typescript.
 * Currently no support for other cpus besides the 6502.

@@ -16,7 +16,8 @@ This enables a few different things ca65 *can't* do with its current design like
 
 `js65` includes a new `-r` option for setting a `baseROM` image, which treats the rest of your code as overwriting the data in that file.
 When you configure `segments` (either with a `ld65` linker script or using the new [.segment](#segments-expanded) expanded syntax), you are configuring where the data for the code gets assembled to, but unlike in a standard assembler, the data will be laid out on top of the `base`.
-For more information on the specifics of patching see the [`Patching`](/docs/usage-example#standalone-romhack) guide.
+
+For more information on the specifics of patching see the [Patching guide](/docs/usage-example#standalone-romhack).
 
 ## Run Javascript code to preprocess data
 
@@ -67,9 +68,10 @@ Here's an example using the a new banked style segment definition.
 .segment "PRG2", "PRG7"
 
 ; Mark some space as free that we know the original game doesn't use.
-; The opening [ denotes an inclusive address, and the closing ) denotes an exclusive address 
+; The opening [ denotes an inclusive address, and the closing ) denotes an exclusive address
 FREE "PRG2" [$8123, $8843)
-FREE "PRG7" [$dd14, $de00)
+; You can also choose an inclusive end address by using [start, end]
+FREE "PRG7" [$dd14, $ddff] ; is the same as [$dd14, $de00)
 
 ; Now for the example. Lets patch this function in PRG7 to call our new code.
 .org $c99a
@@ -96,16 +98,18 @@ DifferentPatchPlacedIndependently:
 ## `.align`
 
 Works similarly to `ca65` overall, but is tweaked a bit to work with placing data with `.reloc`.
+
 If `.align` is used in a code block (see [.reloc](/docs/asm-guide#reloc) for more details on code blocks) then the entire code block is forced to start with that alignment.
 This alignment can *only* be used with `.reloc` code blocks, as it requires the linker to place the code freely.
 If `.align` is used at the end of a code block, it still applies to the entire code block.
 Any of the padding surrounding the alignment is considered free space and patches may still be placed inside that space.
 
-## Byte sharing `:dedupe` (js65-only feature)
+## Byte sharing `:dedupe` attribute
 
 When placing segments, `js65` allows a segment to opt in to deduplication.
 If a segment has `:dedupe` enabled, then each code block (smaller than 256 bytes) is compared against all other placed code blocks and if a match is found, it will be assigned to overlap matching one.
 Any pointers to data within the code block are properly reassigned to this location, allowing the chunks to share data.
+
 As this has the potential to create unintended consequences, `:dedupe` is opt-in on segments.
 
 ## `+++` Anonymous label syntax

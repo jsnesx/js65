@@ -8,7 +8,7 @@ weight: 1
 ## Why `js65`?
 
 `ca65` has a very long history and is a popular assembler in the NES community, but it doesn't work as well when you are using it to patch files.
-It *can* patch files, but it's hard to do it well, and wouldn't it be nice if you could just have your familiar `ca65` cake but also get to enjoy a [patching-friendly syntax](/docs/usage-examples#standalone-romhack)?
+It *can* patch files, but it's hard to do it well, and wouldn't it be nice if you could just have your familiar `ca65` cake but also get to enjoy a [patching-friendly syntax](/docs/usage-example#standalone-romhack)?
 `js65` fills the gap by [simplifying segment definitions](/docs/asm-guide#segment), [placing code blocks into free space automatically](/docs/asm-guide#reloc), and many more nice-to-have features, all while having an almost perfect recreation of everything else `ca65` already does well.
 
 Additionally, `js65` was designed from the start to allow it to be used as a library in other applications, perfect for randomizers or other projects that want to customize a game with various builds.
