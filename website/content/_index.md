@@ -7,15 +7,16 @@ toc: false
 
 <br>
 
-ca65 compatible assembler designed with patching in mind.
+Advanced 6502 assembler with patching support based on `ca65` syntax
 
 {{< cards >}}
   {{< card link="docs" title="Get Started" icon="arrow-circle-right" >}}
+  {{< card link="download" title="Download Now" icon="download" >}}
 {{< /cards >}}
 
 </div>
 
-## What js65 is
+## What is `js65`
 
 Written in TypeScript, `js65` intends to be an almost fully compatible `ca65`-style assembler, but with many new features to make patching roms a breeze.
 Whether you are making a homebrew NES game, a romhack, or a randomizer, `js65`'s power additions on top of the baseline `ca65` features makes your life easier.

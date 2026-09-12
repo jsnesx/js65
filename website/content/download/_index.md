@@ -7,23 +7,29 @@ toc: false
 
 <div class="hx-text-center">
 
-## Get it for Desktop...
+## Install With NPM
 
-`js65` is available as a standalone for desktop platforms.
+`js65` is available as an `npm` package, and this is the preferred method of using it.
 
-{{< download-button >}}
+```sh
+npm install -g js65
+```
+
+Updating `js65` is as easy as running the following command
+
+```sh
+npm update -g js65
+```
 
 </div>
 
 <div>
 
-## ...Or install with NPM
+## Or Download for Desktop
 
-`js65` is also available as an npm package, if you'd rather install it alongside your existing NodeJS toolchain.
+`js65` is available as a standalone for desktop platforms.
 
-```sh
-npm install -g js65
-```
+{{< download-button >}}
 
 See the [quickstart guide](/docs/quickstart/) for more installation options and how to get started.
 

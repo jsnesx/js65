@@ -16,7 +16,12 @@ This enables a few different things ca65 *can't* do with its current design like
 
 `js65` includes a new `-r` option for setting a `baseROM` image, which treats the rest of your code as overwriting the data in that file.
 When you configure `segments` (either with a `ld65` linker script or using the new [.segment](#segments-expanded) expanded syntax), you are configuring where the data for the code gets assembled to, but unlike in a standard assembler, the data will be laid out on top of the `base`.
-For more information on the specifics of patching see the [`Patching`](/docs/patching) guide.
+For more information on the specifics of patching see the [`Patching`](/docs/usage-example#standalone-romhack) guide.
+
+## Run Javascript code to preprocess data
+
+Instead of relying on hacking together scripts into your build process, make the script itself inside your source files using the [`JS Preprocessor`](/docs/jspreprocessor).
+Use the `.jsinput`/`jsinclude`/`jsmodule` to load files into the JS context, and output data directly into the current assembly stream using the global `a` variable which is a builder to generate output.
 
 ## Segments expanded
 

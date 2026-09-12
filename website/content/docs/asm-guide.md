@@ -123,7 +123,7 @@ Just like how ROM anon segments work, you cannot re-enter a RAM segment.
 
 > WARNING - `.include` for defining variables is probably not what you want.
 
-Be careful that you don't use `.include` and put the ram anon segment declarations into a file that gets `.include`d multiple times.
+Be careful that you don't use `.include` and put the RAM anon segment declarations into a file that gets `.include`d multiple times.
 Each time it is included, it will create duplicates of each of the RAM segment declarations which effectively functions as creating another RAM bank.
 This isn't likely what you intended to do, either just include it only once in your main file, or just rely on the multipass assembly feature to handle the symbol resolution across modules for you.
 
@@ -132,10 +132,27 @@ This isn't likely what you intended to do, either just include it only once in y
 When in `.org` mode, you can mark a size of data as free, and allow the linker to place `.reloc` blocks into these free locations.
 If you define a segment with a `:fill` and `:size`, then the linker will also automatically free the entire segment for convenience.
 But if you are patching a game, it makes more sense to selectively free chunks of data yourself.
+
 `.free <sizeInBytes>` takes a single parameter with how many bytes from the *current* org to make free.
 For your convenience, in `.macpack common` there are two macros which provide different ways to free data.
+
 `FREE_UNTIL addr` will mark data as free until the current org `* == addr`, and assert that `* <= addr` for you, that way you can verify that you aren't overriding something important at `addr`.
+
 `FREE "segmentName" [startAddrInclusive, endAddrExclusive)` The `[` and `)` are included in the `FREE` call. This sets a block of code in the segment `segmentName` as free from start addr up to but not including end addr.
+
+```asm6502
+.free $4 ; marks the next 4 bytes as unused
+
+.macpack common
+; Not needed if the segment is marked as `:fill` with `:size` since that
+; indicates that the whole thing is freed.
+FREE "CODE" [$8000, $9000)
+
+.org $9000
+; Marks the next $100 bytes as free, but also asserts that the current org
+; is not past $9100
+FREE_UNTIL $9100
+```
 
 ## `.strmap`
 
@@ -143,17 +160,67 @@ ca65 includes a basic `.charmap` operation for mapping a single byte to a differ
 It allows you to map any `N` consecutive bytes to `M` output bytes.
 All the same rules and restrictions that apply to `.charmap` apply to `.strmap`, so you can `.pushcharmap` and it will also push the current `.strmap`
 
-## `.eol` and `.noexpand`
+```asm6502
+.strmap "the", [1, 2, 3]
+  .byte "the" ; outputs 1, 2, 3
+
+.strmap "é", $ef
+  .byte "café" ; outputs 'c', 'a', 'f', $ef
+```
+
+## `.eol`
 
 Custom directives for improving the ergonomics of `.define` based macros.
-`.eol` acts as an "end of line" token, letting your define generate multiple lines of output.
-`.noexpand` skips macro/define expansion for the rest of the line which you can use to prevent infinite recursion in macros
+`.eol` acts as an "end of line" token, letting your define generate multiple lines of output or it can be used in pattern match define definitions.
+
+```asm6502
+; Make a recursive macro that pattern matches for { target @ ... }
+; until the end of line token is reached
+
+; Inside the macro we see `.eol` as well, here it is used to let
+; .define output a multi line statement.
+
+; It ends by calling itself recursively until there are no more refs
+; at which point it calls the base case for the macro
+.define UPDATE_REFS {target @ ref refs .eol} \
+.org ref .eol \
+  .word (target) .eol \
+UPDATE_REFS target @ refs
+
+; This is the "base case" for the macro which just matches the .eol token
+.define UPDATE_REFS {target @ .eol}
+```
+
+## `.noexpand`
+
+`.noexpand` skips define expansion for the next token which you can use to prevent infinite recursion in define based macros.
+Macro expansion still happens, this is only preventing `.define` based text replacement for the next token.
+
+```asm6502
+; We want to define the base "inclusive start exclusive end" version
+; of the FREE macro...
+.define FREE {seg [start, end)} \
+    .pushseg seg .eol \
+    .org start .eol \
+    .free end - start .eol \
+    .popseg
+; ... but also provide a "inclusive start INclusive end" version too.
+; To prevent the base case define from expanding right now, we can
+; use .noexpand so that it will only get expanded when the below macro
+; gets expanded.
+.define FREE {seg [start, end]} .noexpand FREE seg [start, end + 1)
+```
 
 ## `.bankbyte` is just `.bank`
 
 Since js65 is focused on just the NES for now, `.bankbyte` is currently just an alias for `.bank` instead of the upper 16-23 bits.
 
+
 ## More directives coming soon
+
+```
+TODO
+```
 
 ## Unimplemented Directives
 
