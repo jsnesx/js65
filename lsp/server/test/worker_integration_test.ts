@@ -17,10 +17,10 @@ import * as path from 'node:path';
 import {nodeHostPort, type HostPort, type WorkerPort} from '../../../src/worker/port.ts';
 import {LspWorkerClient, type AnalyzerDiagnostics,
         type InactiveRegionsForUri} from '../workerclient.ts';
-import {FileSync, type FileSink} from '../filesync.ts';
-import {buildSnapshot, deltaForPath, watchedFilesGlob,
-        isCachablePath} from '../filecachebuilder.ts';
-import {FileCache, type FileDelta, type FileSnapshot} from '../worker/filecache.ts';
+import {FileSync, buildSnapshot, deltaForPath, watchedFilesGlob,
+        type FileSink} from '../filesync.ts';
+import {isCachablePath} from '../../../src/worker/preload.ts';
+import {FileCache, type FileDelta, type PreloadedFiles} from '../../../src/worker/filecache.ts';
 import {serveLspWorker} from '../worker/handler.ts';
 import {LSP_PROTOCOL_VERSION} from '../worker/protocol.ts';
 import {loadProject, findProjectFile, toPosix} from '../project.ts';
@@ -438,7 +438,7 @@ describe('lsp file cache', () => {
   /** Records what the host pushed, standing in for the worker. */
   function recordingSink() {
     const cache = new FileCache();
-    const snapshots: FileSnapshot[] = [];
+    const snapshots: PreloadedFiles[] = [];
     const deltas: FileDelta[] = [];
     const sink: FileSink = {
       setFiles: (s) => { snapshots.push(s); cache.reset(s); },
@@ -477,6 +477,44 @@ describe('lsp file cache', () => {
       sync.push(edited);
       expect(deltas.length).toBe(1);
       expect([...deltas[0].upserts.keys()]).toEqual([toPosix(edited)]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('pulls in a standalone file\'s own directory, keyed the way the assembler looks it up', () => {
+    const {root, cleanup} = makeProject();
+    try {
+      const {sink, cache, deltas} = recordingSink();
+      const sync = new FileSync(sink);
+      // No project loaded: this is a file opened outside any `js65.json`, which resolves
+      // includes against its own directory and the workspace root.
+      const standalone = path.join(root, 'inc', 'lone.s');
+      writeFileSync(standalone, '.include "defs.inc"\n');
+      sync.ensureStandalone(standalone, root);
+
+      expect(deltas.length).toBe(1);
+      const sibling = toPosix(path.join(root, 'inc', 'defs.inc'));
+      expect([...deltas[0].upserts.keys()]).toContain(sibling);
+      // The key has to be the normalized POSIX path, or the assembler's own lookup misses it.
+      expect(cache.getText(sibling)).toBe('DEFINED_VALUE = $42\n');
+      expect(sync.trackedPaths.has(sibling)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not re-push a directory it already walked', () => {
+    const {root, cleanup} = makeProject();
+    try {
+      const {sink, deltas} = recordingSink();
+      const sync = new FileSync(sink);
+      const standalone = path.join(root, 'inc', 'lone.s');
+      writeFileSync(standalone, 'nop\n');
+      sync.ensureStandalone(standalone, root);
+      const after = deltas.length;
+      sync.ensureStandalone(standalone, root);
+      expect(deltas.length).toBe(after);
     } finally {
       cleanup();
     }

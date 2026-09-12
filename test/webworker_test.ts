@@ -7,8 +7,9 @@ import {compile, deserializeObjectFile, searchFiles, type AssemblyInput,
 import {SourceError} from '../src/error.ts';
 import {joinDir} from '../src/util.ts';
 import {toPosix} from '../src/driver/project.ts';
-import {fileCallbacksFor, type PreloadedFiles} from '../src/worker/filemap.ts';
+import {FileCache, fileCallbacksFor, type FileDelta, type PreloadedFiles} from '../src/worker/filecache.ts';
 import {Js65Worker} from '../src/worker/client.ts';
+import {AsmModule, sym} from '../src/builder.ts';
 import {serveWorker} from '../src/worker/handler.ts';
 import {nodeHostPort, type HostPort, type WorkerPort} from '../src/worker/port.ts';
 import {CANCEL_BYTE_LENGTH, PROTOCOL_VERSION, cancelSignal, collectTransfers, fromWireError,
@@ -44,7 +45,9 @@ function searchFilesOver(files: PreloadedFiles): FileCallbacks {
   return {
     resolveText: searchFiles((base, rel) => {
       const found = read(base, rel);
-      return typeof found === 'string' ? found : undefined;
+      // A disk frontend reads text with `readFileSync(path, 'utf8')`, so bytes on disk come
+      // back decoded. The map frontend has to agree.
+      return typeof found === 'string' ? found : new TextDecoder().decode(found);
     }),
     resolveBinary: searchFiles(read),
   };
@@ -187,9 +190,15 @@ describe('worker file map', function() {
     expect(Array.from(found!.content as Uint8Array)).toEqual([1, 2, 3, 4]);
   });
 
-  it('does not hand a binary entry back as text', function() {
-    const cb = fileCallbacksFor(fixtureFiles());
-    expect(cb.resolveText(['/proj/data'], 'blob.bin')).toBeUndefined();
+  it('decodes a byte entry read as text', function() {
+    // A preloader that walks a directory cannot know which files are source, so it stores
+    // bytes for everything. A byte entry `.include` asks for is source by having been asked
+    // for, which is also what a disk frontend does with `readFileSync(path, 'utf8')`.
+    const files = fixtureFiles();
+    files.set('/proj/inc/bytes.inc', new TextEncoder().encode('FROM_BYTES = $99\n'));
+    const cb = fileCallbacksFor(files);
+    expect(cb.resolveText(['/proj/inc'], 'bytes.inc'))
+        .toEqual({baseIndex: 0, content: 'FROM_BYTES = $99\n'});
   });
 
   it('encodes a text entry read as binary rather than letting it be base64-decoded', function() {
@@ -561,6 +570,38 @@ function spawnWorker(): {client: Js65Worker, worker: NodeWorker} {
   return {client: new Js65Worker(nodeHostPort(worker)), worker};
 }
 
+describe('file cache', function() {
+  it('shadows the disk layer with an open buffer until it closes', function() {
+    const cache = new FileCache();
+    cache.reset(new Map([['/proj/inc/hdr.inc', 'ON_DISK = $01\n']]));
+    cache.openBuffer('/proj/inc/hdr.inc', 'IN_BUFFER = $02\n');
+    expect(cache.getText('/proj/inc/hdr.inc')).toBe('IN_BUFFER = $02\n');
+    cache.closeBuffer('/proj/inc/hdr.inc');
+    expect(cache.getText('/proj/inc/hdr.inc')).toBe('ON_DISK = $01\n');
+  });
+
+  it('applies a delta and drops the decoded text it had cached', function() {
+    const cache = new FileCache();
+    cache.reset(new Map([['/proj/inc/a.inc', new TextEncoder().encode('A = $01\n')]]));
+    expect(cache.getText('/proj/inc/a.inc')).toBe('A = $01\n'); // Populates the decode cache.
+    const delta: FileDelta = {
+      upserts: new Map([['/proj/inc/a.inc', new TextEncoder().encode('A = $02\n')]]),
+      deletes: [],
+    };
+    cache.apply(delta);
+    expect(cache.getText('/proj/inc/a.inc')).toBe('A = $02\n');
+    cache.apply({upserts: new Map(), deletes: ['/proj/inc/a.inc']});
+    expect(cache.has('/proj/inc/a.inc')).toBe(false);
+  });
+
+  it('upsert merges rather than replacing, which is what a compile-carried map does', function() {
+    const cache = new FileCache();
+    cache.reset(new Map([['/proj/inc/a.inc', 'A = $01\n']]));
+    cache.upsert(new Map([['/proj/inc/b.inc', 'B = $02\n']]));
+    expect(cache.size).toBe(2);
+  });
+});
+
 describe('spawned worker', function() {
   it('compiles a multi-directory include chain to the same bytes as in-process', async function() {
     const {client} = spawnWorker();
@@ -652,6 +693,106 @@ describe('spawned worker', function() {
       const result = await pending;
       expect(result.success).toBe(false);
       expect(result.messages.some(m => /cancel/i.test(m.message))).toBe(true);
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('keeps a pushed file cache resident across compiles', async function() {
+    const {client} = spawnWorker();
+    try {
+      const code = `${HEADER}.segment "PRG"\n.org $8000\n.include "resident.inc"\nlda #RESIDENT\n`;
+      const request = JSON.stringify({
+        inputs: [source(code)],
+        options: {lineContinuations: true, includePaths: ['/proj/inc']},
+      });
+      await client.setFiles(new Map([['/proj/inc/resident.inc', 'RESIDENT = $42\n']]));
+      // No `files` on either compile: the second one proves the cache outlived the first.
+      const first = await client.compile({request});
+      const second = await client.compile({request});
+      expect(first.success).toBe(true);
+      expect(Array.from(second.outputs[0].data)).toEqual(Array.from(first.outputs[0].data));
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('picks up an edited file from a delta, and a deleted one goes missing again',
+     async function() {
+    const {client} = spawnWorker();
+    try {
+      const code = `${HEADER}.segment "PRG"\n.org $8000\n.include "edit.inc"\nlda #EDITED\n`;
+      const request = JSON.stringify({
+        inputs: [source(code)],
+        options: {lineContinuations: true, includePaths: ['/proj/inc']},
+      });
+      await client.setFiles(new Map([['/proj/inc/edit.inc', 'EDITED = $01\n']]));
+      const before = await client.compile({request});
+
+      await client.applyFileDelta({
+        upserts: new Map([['/proj/inc/edit.inc', 'EDITED = $02\n']]),
+        deletes: [],
+      });
+      const after = await client.compile({request});
+      expect(before.success).toBe(true);
+      expect(after.success).toBe(true);
+      expect(Array.from(after.outputs[0].data))
+          .not.toEqual(Array.from(before.outputs[0].data));
+
+      await client.applyFileDelta({upserts: new Map(), deletes: ['/proj/inc/edit.inc']});
+      const gone = await client.compile({request});
+      expect(gone.success).toBe(false);
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('merges a compile-carried file map into the resident cache instead of replacing it',
+     async function() {
+    const {client} = spawnWorker();
+    try {
+      const code = `${HEADER}.segment "PRG"\n.org $8000\n` +
+          `.include "resident.inc"\n.include "oneoff.inc"\nlda #RESIDENT\nldx #ONEOFF\n`;
+      const request = JSON.stringify({
+        inputs: [source(code)],
+        options: {lineContinuations: true, includePaths: ['/proj/inc']},
+      });
+      await client.setFiles(new Map([['/proj/inc/resident.inc', 'RESIDENT = $42\n']]));
+      const result = await client.compile({
+        request,
+        files: new Map([['/proj/inc/oneoff.inc', 'ONEOFF = $17\n']]),
+      });
+      expect(result.success).toBe(true);
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it('compiles an AsmModule built input against the resident cache', async function() {
+    // The shape the library docs recommend: the page builds actions, the worker holds the
+    // files, and neither one needs the other's half of the request.
+    const {client} = spawnWorker();
+    try {
+      await client.setFiles(new Map([['/proj/inc/defs.inc', 'DEFINED = $42\n']]));
+      const mod = new AsmModule('main');
+      mod.code(HEADER);
+      mod.segment('PRG');
+      mod.org(0x8000);
+      mod.code('.include "defs.inc"\nlda #DEFINED\n');
+      mod.label('itemTable');
+      mod.byte([1, 2, 3]);
+      mod.word(sym('itemTable'));
+      const result = await client.compile({
+        request: {
+          inputs: [{type: 'actions', actions: mod.actions, name: mod.name}],
+          options: {lineContinuations: true, includePaths: ['/proj/inc']},
+        },
+      });
+      expect(result.messages.map(m => m.message)).toEqual([]);
+      expect(result.success).toBe(true);
+      // `lda #DEFINED` from the cached include, the table bytes, then the label's address.
+      expect(Array.from(result.outputs[0].data.slice(0x10, 0x17)))
+          .toEqual([0xa9, 0x42, 0x01, 0x02, 0x03, 0x02, 0x80]);
     } finally {
       await client.terminate();
     }

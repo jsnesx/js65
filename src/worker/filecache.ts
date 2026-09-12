@@ -1,24 +1,38 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import {searchFiles, type FileCallbacks} from '../../../src/libassembler.ts';
-import {joinDir} from '../../../src/util.ts';
-import {toPosix} from '../project.ts';
+import {searchFiles, type FileCallbacks} from '../libassembler.ts';
+import {joinDir} from '../util.ts';
+import {toPosix} from '../driver/project.ts';
 
-export type FileSnapshot = Map<string, string | Uint8Array>;
+/**
+ * Absolute POSIX path -> contents.
+ * Text entries are source and byte entries are raw files.
+ */
+export type PreloadedFiles = Map<string, string | Uint8Array>;
 
-/** One incremental update to the resident map. Both halves clone natively. */
+/** One incremental update to a resident cache. Both halves clone natively. */
 export interface FileDelta {
-  upserts: FileSnapshot;
+  upserts: PreloadedFiles;
   deletes: string[];
 }
 
+/** What `callbacks()` hands back: the assembler's hooks plus the raw text reader. */
+export type CacheCallbacks = FileCallbacks & {
+  readText: (base: string, rel: string) => string,
+};
+
+/**
+ * A map of files standing in for a filesystem, with an optional layer of open editor buffers
+ * on top of it. This is what both the compile worker and the LSP analyzer resolve
+ * `.include`/`.incbin` against, so that a path resolves the same way in both.
+ */
 export class FileCache {
-  private disk: FileSnapshot = new Map();
+  private disk: PreloadedFiles = new Map();
   private readonly buffers = new Map<string, string>();
   private readonly decoded = new Map<string, string>();
 
   /** Replaces the whole disk layer, as on project load or reload. */
-  reset(snapshot: FileSnapshot): void {
+  reset(snapshot: PreloadedFiles): void {
     this.disk = new Map(snapshot);
     this.decoded.clear();
   }
@@ -37,6 +51,11 @@ export class FileCache {
     }
   }
 
+  /** Merges files into the disk layer without disturbing anything already there. */
+  upsert(files: PreloadedFiles): void {
+    if (files.size) this.apply({upserts: files, deletes: []});
+  }
+
   /** Mirrors an open editor buffer, which shadows whatever is on disk. */
   openBuffer(path: string, text: string): void {
     this.buffers.set(toPosix(path), text);
@@ -53,6 +72,11 @@ export class FileCache {
     return this.buffers.get(key) ?? this.disk.get(key);
   }
 
+  /**
+   * Contents as text, decoding a byte entry and remembering the result. A preloader reading
+   * a directory cannot know which files are source, so it stores bytes for everything; a
+   * byte entry that `.include` asks for is source by virtue of having been asked for.
+   */
   getText(path: string): string | undefined {
     const key = toPosix(path);
     const buffer = this.buffers.get(key);
@@ -75,16 +99,18 @@ export class FileCache {
     return this.disk.size;
   }
 
-  callbacks(touched: Set<string>): FileCallbacks & {
-    readText: (base: string, rel: string) => string,
-  } {
+  /**
+   * The assembler's file hooks over this cache. `touched`, when given, collects every path
+   * actually read, which is how the LSP knows which files a project's diagnostics depend on.
+   */
+  callbacks(touched?: Set<string>): CacheCallbacks {
     const readText = (base: string, rel: string): string => {
       const posix = joinDir(toPosix(base), toPosix(rel));
       const content = this.getText(posix);
       // Throwing on a miss is what `searchFiles` expects: it swallows the throw and moves
       // on to the next base, and a miss in every base becomes the "could not find" report.
       if (content === undefined) throw new Error(`ENOENT ${posix}`);
-      touched.add(posix);
+      touched?.add(posix);
       return content;
     };
     return {
@@ -94,10 +120,18 @@ export class FileCache {
         const posix = joinDir(toPosix(base), toPosix(rel));
         const content = this.get(posix);
         if (content === undefined) throw new Error(`ENOENT ${posix}`);
-        touched.add(posix);
-        // A source file read through `.incbin` is legitimate; hand back its bytes.
+        touched?.add(posix);
+        // `compile` reads a string here as base64, which would silently corrupt a text file
+        // pulled in with `.incbin`. Entries in this map are never base64, so encode instead.
         return typeof content === 'string' ? new TextEncoder().encode(content) : content;
       }),
     };
   }
+}
+
+/** One-shot callbacks over a map, for a caller with no resident cache to keep. */
+export function fileCallbacksFor(files: PreloadedFiles): FileCallbacks {
+  const cache = new FileCache();
+  cache.reset(files);
+  return cache.callbacks();
 }

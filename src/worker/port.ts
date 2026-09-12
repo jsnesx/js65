@@ -15,7 +15,7 @@ export interface HostPort extends WorkerPort {
 
 /** The browser `Worker` surface these adapters use. Declared rather than pulling in a lib. */
 interface BrowserWorkerLike {
-  postMessage(message: unknown, transfer?: ArrayBuffer[]): void;
+  postMessage(message: unknown, transfer: ArrayBuffer[]): void;
   addEventListener(type: 'message', handler: (event: {data: unknown}) => void): void;
   terminate(): void;
 }

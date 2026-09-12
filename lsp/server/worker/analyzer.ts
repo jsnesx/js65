@@ -23,7 +23,7 @@ import {
   projectsOwningFile,
 } from '../project.ts';
 import {messageToDiagnostic, uriToPath, pathToUri} from '../convert.ts';
-import {FileCache, type FileDelta, type FileSnapshot} from './filecache.ts';
+import {FileCache, type FileDelta, type PreloadedFiles} from '../../../src/worker/filecache.ts';
 
 /** One cached assemble run for a single project. */
 export interface ProjectAnalysis {
@@ -113,7 +113,7 @@ export class Analyzer {
   setWorkspaceRoot(root: string): void { this.opts.workspaceRoot = root; }
 
   /** Replace the whole resident file map, as on project load or reload. */
-  setFiles(snapshot: FileSnapshot): void {
+  setFiles(snapshot: PreloadedFiles): void {
     this.cache.reset(snapshot);
   }
 

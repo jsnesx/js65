@@ -3,9 +3,9 @@
 
 import type {AssemblerMessage, SourceInfo} from '../error.ts';
 import type {CancelSignal, CompileResult, Js65Request, OutputFile} from '../libassembler.ts';
-import type {PreloadedFiles} from './filemap.ts';
+import type {FileDelta, PreloadedFiles} from './filecache.ts';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // -----
 // Cancellation
@@ -66,14 +66,38 @@ export interface PingRequest {
   kind: 'ping';
 }
 
-/** A full compile, carrying every file it could need. */
+/**
+ * Replaces the worker's resident file cache wholesale, as on project load or reload.
+ * A host that sends its files this way can leave `files` off each compile.
+ */
+export interface FilesRequestMessage {
+  v: typeof PROTOCOL_VERSION;
+  id: number;
+  kind: 'files';
+  snapshot: PreloadedFiles;
+}
+
+/** One incremental update to the resident cache. What keeps a keystroke cheap. */
+export interface FileDeltaRequestMessage {
+  v: typeof PROTOCOL_VERSION;
+  id: number;
+  kind: 'fileDelta';
+  delta: FileDelta;
+}
+
+/** A full compile, optionally carrying files to merge into the resident cache first. */
 export interface CompileRequestMessage {
   v: typeof PROTOCOL_VERSION;
   id: number;
   kind: 'compile';
   /** JSON of a `Js65Request`. */
   request: string;
-  /** Everything `.include`/`.incbin` may reach for, resolved entirely worker-side. */
+  /**
+   * Files merged into the resident cache before this compile runs, so a host with nothing
+   * resident can hand over everything `.include`/`.incbin` may reach for in one message.
+   * Merged rather than swapped in: a host driving the cache with `files`/`fileDelta` uses
+   * this for the odd one-off entry without losing what it already pushed.
+   */
   files: PreloadedFiles;
   baseRom?: Uint8Array;
   /**
@@ -91,7 +115,8 @@ export interface CancelRequestMessage {
   target: number;
 }
 
-export type Req = PingRequest | CompileRequestMessage | CancelRequestMessage;
+export type Req = PingRequest | CompileRequestMessage | CancelRequestMessage |
+                  FilesRequestMessage | FileDeltaRequestMessage;
 
 /** Serialized form of a thrown value. Structured clone drops prototypes and custom fields. */
 export interface WireError {
@@ -133,6 +158,7 @@ export type CompileResponseValue = CompileResult;
 
 // Re-exported so the client can type a compile request without importing the assembler.
 export type {CompileResult, Js65Request, OutputFile};
+export type {FileDelta, PreloadedFiles};
 
 // -----
 // Error serialization

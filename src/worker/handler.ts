@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { compileRequest, type CompileResult } from '../libassembler.ts';
-import { fileCallbacksFor } from './filemap.ts';
+import { FileCache } from './filecache.ts';
 import type { WorkerPort } from './port.ts';
 import { PROTOCOL_VERSION, cancelSignal, collectTransfers, resetCancel, toWireError,
          type CompileRequestMessage, type ErrResponse, type OkResponse, type PingResponseValue,
@@ -26,6 +26,7 @@ function isRequest(message: unknown): message is Req {
 
 export function serveWorker(port: WorkerPort): void {
   let cancelFlag: Int32Array | undefined;
+  const cache = new FileCache();
   const queue: Req[] = [];
   const cancelled = new Set<number>();
   let running = false;
@@ -83,6 +84,16 @@ export function serveWorker(port: WorkerPort): void {
           respondOk(req.id, value);
           return;
         }
+        case 'files': {
+          cache.reset(req.snapshot);
+          respondOk(req.id, undefined);
+          return;
+        }
+        case 'fileDelta': {
+          cache.apply(req.delta);
+          respondOk(req.id, undefined);
+          return;
+        }
         case 'compile': {
           const result = runCompile(req);
           // Outputs are the bulk of the payload - a ROM plus a multi-MB .mlb - so hand
@@ -106,7 +117,8 @@ export function serveWorker(port: WorkerPort): void {
     // Clear whatever a previous run left behind so this one does not start out cancelled.
     if (cancelFlag) resetCancel(cancelFlag);
     const signal = cancelFlag ? cancelSignal(cancelFlag) : undefined;
-    return compileRequest(req.request, fileCallbacksFor(req.files), req.baseRom, signal);
+    cache.upsert(req.files);
+    return compileRequest(req.request, cache.callbacks(), req.baseRom, signal);
   }
 
   function respondOk(id: number, value: unknown, transfer?: ArrayBuffer[]): void {

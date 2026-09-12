@@ -2,22 +2,29 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { HostPort } from './port.ts';
-import type { PreloadedFiles } from './filemap.ts';
+import type { FileDelta, PreloadedFiles } from './filecache.ts';
 
 // The adapters live in `port.ts` so the worker half can use `WorkerPort` without pulling in
 // the client, but a host only ever needs this module.
 export { browserHostPort, nodeHostPort, type HostPort, type WorkerPort } from './port.ts';
-export type { PreloadedFiles } from './filemap.ts';
+export type { FileDelta, PreloadedFiles } from './filecache.ts';
+export { FileCache, fileCallbacksFor } from './filecache.ts';
+// The builder only produces plain action objects, so a host can assemble a request without
+// pulling in the assembler itself.
+export { AsmEngine, AsmModule, sym } from '../builder.ts';
+export { DEFAULT_SKIPPED_DIRECTORIES, isCachablePath, preloadDirectories, preloadPaths,
+         scanDirectory, type PreloadIo, type PreloadOptions } from './preload.ts';
 import { PROTOCOL_VERSION, allocateCancelBuffer, fromWireError, isCorrelated, requestCancel,
          type CancelRequestMessage, type CompileRequestMessage, type CompileResult,
-         type Js65Request, type PingRequest, type PingResponseValue, type Res,
+         type FileDeltaRequestMessage, type FilesRequestMessage, type Js65Request,
+         type PingRequest, type PingResponseValue, type Res,
          type WireError } from './protocol.ts';
 
 /** Everything one compile needs, with the files it may read handed over up front. */
 export interface CompileOptions {
   /** JSON of a `Js65Request`, or the request itself. */
   request: string | Js65Request;
-  /** Absolute POSIX path -> contents, covering every `.include`/`.incbin` reachable. */
+  /** Preloaded map of absolute POSIX path -> contents of the files */
   files?: PreloadedFiles;
   baseRom?: Uint8Array;
   /**
@@ -92,6 +99,29 @@ export class Js65Worker {
       const at = this.running.indexOf(id);
       if (at >= 0) this.running.splice(at, 1);
     }
+  }
+
+  /**
+   * Writes all files to the worker. Once the files are loaded, you can save time
+   * updating a single file using `applyFileDelta` instead of reloading all files.
+   */
+  async setFiles(snapshot: PreloadedFiles): Promise<void> {
+    const id = this.nextId++;
+    await this.handshake;
+    const message: FilesRequestMessage = {v: PROTOCOL_VERSION, id, kind: 'files', snapshot};
+    await this.send(id, message);
+  }
+
+  /**
+   * Applies one incremental update to the worker. The worker processes all messages
+   * in the order they arrive, so if you call compile after this, then it will use the
+   * newest version of the file.
+   */
+  async applyFileDelta(delta: FileDelta): Promise<void> {
+    const id = this.nextId++;
+    await this.handshake;
+    const message: FileDeltaRequestMessage = {v: PROTOCOL_VERSION, id, kind: 'fileDelta', delta};
+    await this.send(id, message);
   }
 
   cancel(id: number): void {

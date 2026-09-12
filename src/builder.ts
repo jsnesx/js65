@@ -4,9 +4,8 @@
 // Fluent builder API for constructing modules programmatically instead of writing source
 // text or hand-assembling an actions[] array.
 
-import { compile, type ActionSource, type AssemblyAction, type AssemblyInput,
-         type CancelSignal, type CompileResult, type FileCallbacks,
-         type Js65Options } from './libassembler.ts';
+import type { ActionSource, AssemblyAction, AssemblyInput,
+              Js65Options } from './libassembler.ts';
 
 type ByteWordValue = number | { op: 'sym', sym: string };
 type ByteValue = ByteWordValue | string;
@@ -179,13 +178,14 @@ export class AsmModule {
 }
 
 /**
- * Fluent entry point for building modules and compiling them programmatically. Wraps
- * compile() from libassembler.ts.
+ * Entry point for building up a set of modules programmatically. `build()` turns
+ * them into the `inputs` of a compile. Feed that to `compile()` from libassembler.ts, or
+ * to a `Js65Request` sent to a worker.
  */
 export class AsmEngine {
   readonly modules: AsmModule[] = [];
 
-  constructor(public options: Js65Options = {}, public callbacks?: FileCallbacks) {}
+  constructor(public options: Js65Options = {}) {}
 
   add(mod: AsmModule): AsmModule {
     this.modules.push(mod);
@@ -196,8 +196,8 @@ export class AsmEngine {
     return this.add(new AsmModule(name));
   }
 
-  compile(baseRom?: Uint8Array, signal?: CancelSignal): CompileResult {
-    const inputs: AssemblyInput[] = this.modules.map(m => ({ type: 'actions', actions: m.actions, name: m.name }));
-    return compile(inputs, this.options, this.callbacks, baseRom, signal);
+  /** The modules as compile inputs, in the order they were added. */
+  build(): AssemblyInput[] {
+    return this.modules.map(m => ({ type: 'actions', actions: m.actions, name: m.name }));
   }
 }

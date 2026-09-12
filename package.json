@@ -28,6 +28,10 @@
     "./worker-client": {
       "types": "./dist/src/worker/client.d.ts",
       "default": "./dist/src/worker/client.js"
+    },
+    "./preload-node": {
+      "types": "./dist/src/driver/preload-node.d.ts",
+      "default": "./dist/src/driver/preload-node.js"
     }
   },
   "bin": {

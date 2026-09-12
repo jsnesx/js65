@@ -2,7 +2,7 @@
 
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 import type {Js65Config} from '../project.ts';
-import type {FileDelta, FileSnapshot} from './filecache.ts';
+import type {FileDelta, PreloadedFiles} from '../../../src/worker/filecache.ts';
 
 export const LSP_PROTOCOL_VERSION = 1;
 
@@ -44,7 +44,7 @@ export interface DocRequest extends Envelope {
 /** Whole-cache replacement, sent on project load and reload. */
 export interface FilesRequest extends Envelope {
   kind: 'files';
-  snapshot: FileSnapshot;
+  snapshot: PreloadedFiles;
 }
 
 /** Incremental cache update. What keeps a keystroke from re-posting the project. */

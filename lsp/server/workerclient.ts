@@ -3,7 +3,7 @@
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
 import type {HostPort} from '../../src/worker/port.ts';
-import type {FileDelta, FileSnapshot} from './worker/filecache.ts';
+import type {FileDelta, PreloadedFiles} from '../../src/worker/filecache.ts';
 import type {Js65Config} from './project.ts';
 import {LSP_PROTOCOL_VERSION, fromLspError, isLspResponse, type FeatureMethod,
         type LspRes} from './worker/protocol.ts';
@@ -49,7 +49,7 @@ export class LspWorkerClient {
     return this.handshake;
   }
 
-  setFiles(snapshot: FileSnapshot): void {
+  setFiles(snapshot: PreloadedFiles): void {
     this.post({kind: 'files', snapshot});
   }
 

@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import { AsmEngine, sym } from '../src/builder.ts';
-import { deserializeObjectFile } from '../src/libassembler.ts';
+import { compile, deserializeObjectFile } from '../src/libassembler.ts';
 
 describe('AsmEngine/AsmModule builder', () => {
   it('charmap scoping, string bytes, literal bypass, align, and res', async () => {
@@ -21,7 +21,7 @@ describe('AsmEngine/AsmModule builder', () => {
     mod.align(4);
     mod.res(3, 0xff);
 
-    const result = await engine.compile();
+    const result = await compile(engine.build(), engine.options);
     expect(result.success).toBe(true);
 
     const chunk = (await deserializeObjectFile(result.outputs[0].data)).chunks![0];
@@ -47,7 +47,7 @@ describe('AsmEngine/AsmModule builder', () => {
     mod.import('external_sym');
     mod.global('shared_sym');
 
-    const result = await engine.compile();
+    const result = await compile(engine.build(), engine.options);
     expect(result.success).toBe(true);
 
     const module = await deserializeObjectFile(result.outputs[0].data);
@@ -78,7 +78,7 @@ describe('AsmEngine/AsmModule builder', () => {
     mod.byte('ABA'); // 'AB' matches greedily, then trailing 'A' falls back to the charmap
     mod.strmap('C', 5); // single-value convenience overload
 
-    const result = await engine.compile();
+    const result = await compile(engine.build(), engine.options);
     expect(result.success).toBe(true);
 
     const chunk = (await deserializeObjectFile(result.outputs[0].data)).chunks![0];

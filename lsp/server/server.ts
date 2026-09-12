@@ -20,7 +20,7 @@ import {LspWorkerClient, type AnalyzerDiagnostics,
         type InactiveRegionsForUri} from './workerclient.ts';
 import {spawnAnalyzerWorker} from './spawnworker.ts';
 import {FileSync} from './filesync.ts';
-import {watchedFilesGlob} from './filecachebuilder.ts';
+import {watchedFilesGlob} from './filesync.ts';
 import {jsModuleSourceOf, uriToPath} from './convert.ts';
 import {jsModuleMap} from '../../src/jsmodule/index.ts';
 import {sourceContent} from '../../src/jsmodule/sourcemap.ts';
