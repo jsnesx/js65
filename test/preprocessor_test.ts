@@ -207,6 +207,83 @@ describe('Preprocessor', function() {
     });
   });
 
+  // `.noexpand` suppresses expansion of the single token that follows it for
+  // the scan that is reading the line right now. It is not sticky: the rest of
+  // the line still expands, and the token it protected expands normally on any
+  // later scan. The main use is inside a `.define` production, where the
+  // definition line is itself scanned before the production is stored.
+  describe('.noexpand', function() {
+    it('should protect only the token that follows it', async function() {
+      await test(['.define bar baz',
+            'a .noexpand bar bar'],
+           await instruction('a bar baz'));
+    });
+
+    it('should unwrap a group and protect everything inside it', async function() {
+      await test(['.define bar baz',
+            'a .noexpand { bar bar } bar'],
+           await instruction('a bar bar baz'));
+    });
+
+    it('should keep a define out of a production at definition time',
+       async function() {
+      // Without the `.noexpand`, `bar` is substituted while the `.define foo`
+      // line is scanned and the production is stored as `a`.
+      await test(['.define bar a',
+            '.define foo .noexpand bar',
+            '.undefine bar',
+            'x foo'],
+           await instruction('x bar'));
+      await test(['.define bar a',
+            '.define foo bar',
+            '.undefine bar',
+            'x foo'],
+           await instruction('x a'));
+    });
+
+    it('should let an overload delegate to an earlier one', async function() {
+      // The `[start, end]` form of macpack common's FREE forwards to the
+      // half-open form. `.noexpand` is what stops the forwarded `FREE` from
+      // being expanded into the production while the `.define` is read.
+      await test(['.define FREE {seg [start, end)} .pushseg seg .eol .org start',
+            '.define FREE {seg [start, end]} .noexpand FREE seg [start, end + 1)',
+            'FREE "CODE" [1, 2]'],
+           await directive('.pushseg "CODE"'),
+           await directive('.org 1'));
+    });
+
+    it('should be consumed by the scan that reads it', async function() {
+      // The first `.noexpand` protects the second, so the second is the one
+      // that survives into the production and runs at expansion time.
+      await test(['.define bar baz',
+            '.define foo .noexpand .noexpand bar',
+            'x foo'],
+           await instruction('x baz'));
+    });
+
+    it('should protect a define inside a macro body', async function() {
+      // Macro bodies are collected with defines expanded but token functions
+      // held back, and `.noexpand` runs in that same layer.
+      await test(['.define bar a',
+            '.macro q',
+            'x .noexpand bar',
+            '.endmacro',
+            '.undefine bar',
+            'q'],
+           await instruction('x bar'));
+    });
+
+    it('should not stop a .macro from being invoked', async function() {
+      // `.noexpand` only guards the define/token-function walk over the line;
+      // macro invocation happens afterwards and ignores it.
+      await test(['.macro q',
+            'nop',
+            '.endmacro',
+            '.noexpand q'],
+           await instruction('nop'));
+    });
+  });
+
   describe('.macro', function() {
     it('should expand', async function() {
       await test(['.macro q a, b, c',
