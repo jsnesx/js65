@@ -15,7 +15,7 @@ a specific runtime, then only the native runtimes for your target platform will 
 <PackageReference Include="js65.clearscript" />
 ```
 
-The native libraries are large (~25–50 MB each), so publish with an explicit runtime identifier to ship only
+The native libraries are large (~25-50 MB each), so publish with an explicit runtime identifier to ship only
 the binary for your target platform:
 
 ```sh

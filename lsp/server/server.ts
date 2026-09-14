@@ -8,6 +8,8 @@ import type {
   ServerCapabilities,
   WorkspaceFolder,
   ClientCapabilities,
+  MessageReader,
+  MessageWriter,
 } from 'vscode-languageserver-protocol';
 import {
   CodeActionKind,
@@ -22,6 +24,7 @@ import {spawnAnalyzerWorker} from './spawnworker.ts';
 import {FileSync} from './filesync.ts';
 import {watchedFilesGlob} from './filesync.ts';
 import {jsModuleSourceOf, uriToPath} from './convert.ts';
+import {VERSION} from '../../src/version.ts';
 import {jsModuleMap} from '../../src/jsmodule/index.ts';
 import {sourceContent} from '../../src/jsmodule/sourcemap.ts';
 import {registerNavigationFeatures} from './features/navigation.ts';
@@ -34,10 +37,12 @@ export interface ServerOptions {
   /** Debounce window passed to the analyzer. */
   debounceMs?: number;
   client?: LspWorkerClient;
+  transport?: [MessageReader, MessageWriter];
 }
 
 export async function main(opts: ServerOptions = {}): Promise<void> {
-  const connection = createConnection();
+  const connection = opts.transport ?
+      createConnection(opts.transport[0], opts.transport[1]) : createConnection();
   const documents = new TextDocuments(TextDocument);
   documents.listen(connection);
 
@@ -150,7 +155,7 @@ export async function main(opts: ServerOptions = {}): Promise<void> {
 
     const result: InitializeResult = {
       capabilities,
-      serverInfo: {name: 'js65-lsp', version: '0.1.0'},
+      serverInfo: {name: 'js65-lsp', version: VERSION},
     };
     return result;
   });
