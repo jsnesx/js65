@@ -62,10 +62,8 @@
     "node:only": "bun build --target=node --format=esm --outfile build/js65-node.mjs integrations/node.ts",
     "lib": "bun run jsmodules:nomaps && bun build --entrypoints ./src/driver/entry-pako.ts --outfile ./build/libassembler.js",
     "worker": "bun run jsmodules:nomaps && bun build --entrypoints ./src/driver/entry-worker-browser.ts --outfile ./build/js65-worker.js --format=esm",
-    "lsp-worker": "bun run jsmodules && bun build lsp/server/worker/bin.ts --target=node --format=cjs --outfile build/js65-lsp-worker.cjs",
-    "lsp": "bun run lsp-worker && bun build lsp/server/bin.ts --target=node --format=cjs --outfile build/js65-lsp.cjs",
     "test": "bun run jsmodules && bun test --only-failures ./test && bun run test:lsp",
-    "test:lsp": "bun run lsp && bun test --only-failures ./lsp/server/test",
+    "test:lsp": "bun run node:only && bun test --only-failures ./lsp/server/test",
     "hermes-exe": "bun run jsmodules && bun run hermes-exe:only",
     "hermes-exe:only": "bun run integrations/hermes/hermes-build.ts",
     "build": "bun run jsmodules && bun run --no-exit-on-error --parallel exe:only hermes-exe:only node:only",
@@ -96,7 +94,11 @@
   },
   "dependencies": {
     "pako": "^3.0.1",
-    "sha1-uint8array": "^0.10.7"
+    "sha1-uint8array": "^0.10.7",
+    "vscode-languageserver": "^10.1.0",
+    "vscode-languageserver-protocol": "^3.18.2",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vscode-uri": "^3.1.0"
   },
   "workspaces": [
     "./lsp/server",

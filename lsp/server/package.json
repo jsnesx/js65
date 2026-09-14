@@ -12,7 +12,6 @@
     "directory": "lsp/server"
   },
   "scripts": {
-    "build": "bun build bin.ts --target=node --format=cjs --outfile ../../build/js65-lsp.cjs",
     "test": "bun test ./test/",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
