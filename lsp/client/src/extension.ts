@@ -76,7 +76,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 		outputChannel?.appendLine(configured
 			? `Could not find a server at js65.server.path: ${configured}`
 			: 'No bundled server found. Run `bun run build:server` in the extension, ' +
-			  'or point js65.server.path at a js65-lsp.cjs built with `bun run lsp`.');
+			  'or point js65.server.path at a js65-node.mjs built with `bun run node`.');
 		void vscode.window.showErrorMessage(
 			'js65: language server not found.',
 			'Show Output',

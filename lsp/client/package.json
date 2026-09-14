@@ -131,7 +131,7 @@
 						"null"
 					],
 					"default": null,
-					"markdownDescription": "Absolute path to a `js65-lsp.cjs` bundle (built with `bun run lsp` in the js65 repo). Leave unset to use the copy bundled with this extension."
+					"markdownDescription": "Absolute path to a `js65-node.mjs` bundle (built with `bun run node` in the js65 repo). Leave unset to use the copy bundled with this extension."
 				},
 				"js65.server.enable": {
 					"scope": "window",

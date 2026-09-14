@@ -63,7 +63,7 @@
     "lib": "bun run jsmodules:nomaps && bun build --entrypoints ./src/driver/entry-pako.ts --outfile ./build/libassembler.js",
     "worker": "bun run jsmodules:nomaps && bun build --entrypoints ./src/driver/entry-worker-browser.ts --outfile ./build/js65-worker.js --format=esm",
     "test": "bun run jsmodules && bun test --only-failures ./test && bun run test:lsp",
-    "test:lsp": "bun run node:only && bun test --only-failures ./lsp/server/test",
+    "test:lsp": "bun run build:npm && bun test --only-failures ./lsp/server/test",
     "hermes-exe": "bun run jsmodules && bun run hermes-exe:only",
     "hermes-exe:only": "bun run integrations/hermes/hermes-build.ts",
     "build": "bun run jsmodules && bun run --no-exit-on-error --parallel exe:only hermes-exe:only node:only",

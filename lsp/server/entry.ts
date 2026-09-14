@@ -38,6 +38,8 @@ export function parseTransport(argv: string[]): Transport {
       if (!pipe) throw new Error(`js65 lsp: ${arg} needs a pipe name`);
       return createServerPipeTransport(pipe);
     }
+    if (name === '--clientProcessId') continue;
+    if (arg === '--worker') continue;
     throw new Error(`js65 lsp: unknown option ${arg}`);
   }
   throw new Error(
