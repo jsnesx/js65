@@ -59,7 +59,7 @@ If you have a different language extension that takes the `.s`, then you can ass
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `js65.server.enable` | `true` | Turn the language server off, leaving syntax highlighting only. |
-| `js65.server.path` | `null` | Absolute path to a `js65-lsp.cjs` you built yourself. Unset uses the bundled copy. |
+| `js65.server.path` | `null` | Absolute path to a `js65.mjs` CLI entry you built yourself. Unset uses the bundled copy. |
 | `js65.trace.server` | `off` | Log JSON-RPC traffic to the js65 Language Server output channel. |
 
 ## Commands

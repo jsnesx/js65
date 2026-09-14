@@ -8,9 +8,11 @@ import { setGzipCodec } from '../src/driver/codec/codec.ts';
 import { bunCodec } from '../src/driver/codec/bun.ts';
 import { setJsEngine } from '../src/driver/js/engine.ts';
 import { functionEngine } from '../src/driver/js/function.ts';
+import { bufferWorkerMessages } from '../lsp/server/earlyworker.ts';
 
 setGzipCodec(bunCodec);
 setJsEngine(functionEngine);
+bufferWorkerMessages();
 
 const { dirname, resolve } = require('path');
 const { mkdir } = require('fs').promises;

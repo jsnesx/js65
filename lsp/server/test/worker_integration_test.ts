@@ -26,13 +26,16 @@ import {LSP_PROTOCOL_VERSION} from '../worker/protocol.ts';
 import {loadProject, findProjectFile, toPosix} from '../project.ts';
 import {pathToUri} from '../convert.ts';
 
-const WORKER_BUNDLE = path.resolve('build/js65-lsp-worker.cjs');
-const haveWorker = existsSync(WORKER_BUNDLE);
+const CLI_ENTRY = path.resolve('integrations/npm/js65.mjs');
+const haveWorker = existsSync(path.resolve('dist/integrations/node.js'));
 const itIfBuilt = haveWorker ? it : it.skip;
 
 /** A real spawned analyzer worker plus a client driving it. */
 function spawnAnalyzer(debounceMs = 0) {
-  const worker = new Worker(WORKER_BUNDLE, {workerData: {debounceMs}});
+  const worker = new Worker(CLI_ENTRY, {
+    argv: ['lsp', '--worker'],
+    workerData: {debounceMs},
+  });
   const client = new LspWorkerClient(nodeHostPort(worker));
   return {client, worker};
 }

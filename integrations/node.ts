@@ -11,9 +11,11 @@ import { setGzipCodec } from '../src/driver/codec/codec.ts';
 import { nodeZlibCodec } from '../src/driver/codec/node.ts';
 import { setJsEngine } from '../src/driver/js/engine.ts';
 import { functionEngine } from '../src/driver/js/function.ts';
+import { bufferWorkerMessages } from '../lsp/server/earlyworker.ts';
 
 setGzipCodec(nodeZlibCodec);
 setJsEngine(functionEngine);
+bufferWorkerMessages();
 
 async function writeAt(path: string, filename: string, data: Uint8Array): Promise<void> {
   const full = resolve(path, filename);

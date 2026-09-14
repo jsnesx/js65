@@ -2,7 +2,7 @@
 
 /**
  * Integration smoke test per the plan's Verification section: spawn
- * `node build/js65-lsp.cjs` over stdio, send `initialize` →
+ * `node js65.mjs lsp` over stdio, send `initialize` →
  * `textDocument/didOpen` with a file containing a known error, assert the
  * resulting `publishDiagnostics` has the right range and the right
  * `relatedInformation` chain for a macro-expanded error.
@@ -18,6 +18,8 @@ import {afterAll, beforeAll, describe, it, expect} from 'bun:test';
 import {fork, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import {createServer, type Socket} from 'node:net';
+import type {AddressInfo} from 'node:net';
 import * as path from 'node:path';
 import {URI} from 'vscode-uri';
 import {SEMANTIC_TOKEN_LEGEND} from '../worker/features/structure.ts';
@@ -36,7 +38,7 @@ class LspClient {
   readonly notifications: JsonRpcResponse[] = [];
 
   constructor(serverPath: string) {
-    this.proc = spawn('node', [serverPath, '--stdio'], {stdio: ['pipe', 'pipe', 'inherit']});
+    this.proc = spawn('node', [serverPath, 'lsp', '--stdio'], {stdio: ['pipe', 'pipe', 'inherit']});
     this.proc.stdout!.on('data', d => this.onData(d));
   }
 
@@ -110,12 +112,13 @@ class LspClient {
 }
 
 /**
- * The integration tests drive the bundled server, which only exists after
- * `bun run lsp`. Skip rather than fail on a clean checkout — `bun run test:lsp`
- * builds it first.
+ * The integration tests drive the CLI, which only exists after `bun run
+ * build:npm`. Skip rather than fail on a clean checkout — `bun run test:lsp`
+ * builds it first. The npm shim is the entry, not `dist/integrations/node.js`,
+ * which only exports `main` without calling it.
  */
-const SERVER_PATH = path.resolve('build/js65-lsp.cjs');
-const haveServer = existsSync(SERVER_PATH);
+const SERVER_PATH = path.resolve('integrations/npm/js65.mjs');
+const haveServer = existsSync(path.resolve('dist/integrations/node.js'));
 const itIfBuilt = haveServer ? it : it.skip;
 
 describe('integration: LSP over stdio', () => {
@@ -448,13 +451,13 @@ describe('integration: round trip against a real project', () => {
 
 /**
  * The VSCode client launches the server with `TransportKind.ipc`, not stdio —
- * `createConnection()` picks its transport off the command line, so `--stdio`
+ * `parseTransport` builds a different reader/writer pair for it, so `--stdio`
  * working proves nothing about `--node-ipc`. This is the one place that
  * combination is exercised.
  */
 describe('integration: node-ipc transport', () => {
   itIfBuilt('answers initialize and a request over the IPC channel', async () => {
-    const proc = fork(SERVER_PATH, ['--node-ipc'], {
+    const proc = fork(SERVER_PATH, ['lsp', '--node-ipc'], {
       // `fork` defaults to the current runtime; the editor runs the server
       // under Node, and so must this.
       execPath: 'node',
@@ -500,6 +503,55 @@ describe('integration: node-ipc transport', () => {
       expect(hover.result.contents.value).toMatch(/lda/);
     } finally {
       proc.kill();
+    }
+  }, 20000);
+});
+
+describe('integration: socket transport', () => {
+  itIfBuilt('answers initialize over a TCP socket', async () => {
+    const server = createServer();
+    const connected = new Promise<Socket>(resolve => server.on('connection', resolve));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const proc = spawn('node', [SERVER_PATH, 'lsp', `--socket=${port}`],
+                       {stdio: ['ignore', 'ignore', 'inherit']});
+
+    try {
+      const socket = await connected;
+      let buffer = Buffer.alloc(0);
+      const pending = new Map<number, (msg: any) => void>();
+      socket.on('data', (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        while (true) {
+          const headerEnd = buffer.indexOf('\r\n\r\n');
+          if (headerEnd < 0) return;
+          const match = /Content-Length: (\d+)/.exec(buffer.subarray(0, headerEnd).toString('ascii'));
+          if (!match) return;
+          const len = parseInt(match[1], 10);
+          const bodyStart = headerEnd + 4;
+          if (buffer.length < bodyStart + len) return;
+          const msg = JSON.parse(buffer.subarray(bodyStart, bodyStart + len).toString('utf8'));
+          buffer = buffer.subarray(bodyStart + len);
+          if (msg?.id != null && pending.has(msg.id)) pending.get(msg.id)!(msg);
+        }
+      });
+      const request = (id: number, method: string, params: unknown) =>
+          new Promise<any>((resolve, reject) => {
+            pending.set(id, resolve);
+            const body = Buffer.from(JSON.stringify({jsonrpc: '2.0', id, method, params}), 'utf8');
+            socket.write(`Content-Length: ${body.length}\r\n\r\n`);
+            socket.write(body);
+            setTimeout(() => reject(new Error(`${method} timed out`)), 8000);
+          });
+
+      const init = await request(0, 'initialize', {
+        processId: process.pid, rootUri: null, capabilities: {},
+      });
+      expect(init.result.serverInfo.name).toBe('js65-lsp');
+      expect(init.result.capabilities.hoverProvider).toBe(true);
+    } finally {
+      proc.kill();
+      server.close();
     }
   }, 20000);
 });

@@ -9,10 +9,10 @@ import {
   StreamMessageWriter,
 } from 'vscode-languageserver/node';
 import type {MessageReader, MessageWriter} from 'vscode-languageserver-protocol';
-import {parentPort, workerData} from 'node:worker_threads';
+import {workerData} from 'node:worker_threads';
 
 import {main} from './server.ts';
-import type {WorkerPort} from '../../src/worker/port.ts';
+import {replayBufferedMessages} from './earlyworker.ts';
 import {serveLspWorker, type ServeOptions} from './worker/handler.ts';
 
 type Transport = [MessageReader, MessageWriter];
@@ -72,14 +72,6 @@ export async function runLspServer(argv: string[]): Promise<void> {
 }
 
 export function runLspWorker(): Promise<void> {
-  const parent = parentPort;
-  if (!parent) {
-    throw new Error('js65 lsp --worker must be loaded as a worker_threads worker');
-  }
-  const port: WorkerPort = {
-    post: (message, transfer) => parent.postMessage(message, transfer ?? []),
-    onMessage: (handler) => parent.on('message', handler),
-  };
-  serveLspWorker(port, (workerData ?? {}) as ServeOptions);
+  serveLspWorker(replayBufferedMessages(), (workerData ?? {}) as ServeOptions);
   return new Promise(() => {});
 }
