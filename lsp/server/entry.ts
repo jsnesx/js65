@@ -69,7 +69,7 @@ export async function runLspServer(argv: string[]): Promise<void> {
   return new Promise(() => {});
 }
 
-export function runLspWorker(): void {
+export function runLspWorker(): Promise<void> {
   const parent = parentPort;
   if (!parent) {
     throw new Error('js65 lsp --worker must be loaded as a worker_threads worker');
@@ -79,4 +79,5 @@ export function runLspWorker(): void {
     onMessage: (handler) => parent.on('message', handler),
   };
   serveLspWorker(port, (workerData ?? {}) as ServeOptions);
+  return new Promise(() => {});
 }
