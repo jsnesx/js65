@@ -59,6 +59,11 @@ const cli = new Cli({
     return entries.map(e => e.isDirectory() ? `${e.name}/` : e.name);
   },
   exit: (code: number) => { process.exitCode = code; },
+  runLsp: async (argv: string[]) => {
+    const {runLspServer, runLspWorker} = await import('../lsp/server/entry.ts');
+    if (argv.includes('--worker')) return runLspWorker();
+    return runLspServer(argv);
+  },
 });
 
 export async function main(args: string[]) {

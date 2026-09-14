@@ -12,7 +12,6 @@ import type {MessageReader, MessageWriter} from 'vscode-languageserver-protocol'
 import {parentPort, workerData} from 'node:worker_threads';
 
 import {main} from './server.ts';
-import {installNodeHost} from './nodehost.ts';
 import type {WorkerPort} from '../../src/worker/port.ts';
 import {serveLspWorker, type ServeOptions} from './worker/handler.ts';
 
@@ -66,8 +65,8 @@ function patchConsole(): void {
 export async function runLspServer(argv: string[]): Promise<void> {
   const transport = parseTransport(argv);
   patchConsole();
-  installNodeHost();
   await main({transport});
+  return new Promise(() => {});
 }
 
 export function runLspWorker(): void {
@@ -75,7 +74,6 @@ export function runLspWorker(): void {
   if (!parent) {
     throw new Error('js65 lsp --worker must be loaded as a worker_threads worker');
   }
-  installNodeHost();
   const port: WorkerPort = {
     post: (message, transfer) => parent.postMessage(message, transfer ?? []),
     onMessage: (handler) => parent.on('message', handler),

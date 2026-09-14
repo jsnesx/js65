@@ -264,6 +264,7 @@ export class Cli {
     // positionals after.
     if (argv[0] === 'build') return this.build(argv.slice(1));
     if (argv[0] === 'init') return this.init(argv.slice(1));
+    if (argv[0] === 'lsp') return this.lsp(argv.slice(1));
 
     const args = this.parseArgs(argv);
     if (args.projectFile) {
@@ -473,6 +474,24 @@ export class Cli {
                              : 'Build it with: js65 build');
     } catch (e) {
       // A directory that already holds a project, or a target that does not exist.
+      this.printerrors(e as Error);
+      return this.callbacks.exit(1);
+    }
+  }
+
+  private async lsp(argv: string[]) {
+    if (argv.includes('-h') || argv.includes('--help')) return this.lspUsage(0);
+    if (argv.includes('-V') || argv.includes('--version')) {
+      console.log(`js65 ${VERSION}`);
+      return this.callbacks.exit(0);
+    }
+    if (!this.callbacks.runLsp) {
+      return this.lspUsage(8, [new Error(
+          'js65 lsp is not available in this build')]);
+    }
+    try {
+      await this.callbacks.runLsp(argv);
+    } catch (e) {
       this.printerrors(e as Error);
       return this.callbacks.exit(1);
     }
@@ -688,6 +707,26 @@ optional arguments:
     this.callbacks.exit(code);
   }
 
+  public lspUsage(code = 1, err: Error[]|undefined = undefined) {
+    if (err) this.printerrors(...err);
+    console.log(`\
+Usage: js65 lsp <transport>
+  Starts js65 as a Language Server using the provided transport. This is intended
+  for use with editors that have a LSP client, so you don't need to run this normally.
+
+<transport> must be provided as one of the following:
+  --stdio                 Send over stdin/stdout.
+  --node-ipc              Send over the node IPC channel for a client that
+                          forked this process.
+  --socket=PORT           Connect to PORT on localhost and speak there.
+  --pipe=NAME             Send on the named pipe NAME.
+
+optional arguments:
+  -h/--help               Print this help text and exit.
+`);
+    this.callbacks.exit(code);
+  }
+
   public usage(code = 1, err: Error[]|undefined = undefined) {
     if (err) this.printerrors(...err);
     console.log(`\
@@ -697,6 +736,8 @@ Usage: js65 init [NAME]
   Creates a project that builds as it stands. See \`js65 init --help\`.
 Usage: js65 build [options] [PROJECT...]
   Builds the projects described by a js65.json. See \`js65 build --help\`.
+Usage: js65 lsp <transport>
+  Runs the language server for an editor. See \`js65 lsp --help\`.
 Usage: js65 rehydrate|dehydrate -r|--rom=<rom> FILE
   Remove/Re-add data in an assembly file from the original ROM.
 

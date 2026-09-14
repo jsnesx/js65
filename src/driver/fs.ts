@@ -17,6 +17,8 @@ export interface Callbacks {
   /** List all paths in a directory, not recursive. Throws when the directory is missing. */
   fsListDir: (dir: string) => string[],
   exit: (code: number) => void,
+  /** Callbacks for bun and node frontends to start js65 in lsp mode */
+  runLsp?: (argv: string[]) => Promise<void>,
 }
 
 /** Just the listing capability, for helpers that don't need the rest. */
