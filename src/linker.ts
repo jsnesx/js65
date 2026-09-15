@@ -2311,11 +2311,13 @@ class Link {
     // Hueristic, don't search for duplicates for large chunk sizes.
     if (align === 1 && size < 256 && !chunk.subs.size && !chunk.selfSubs.size && !chunk.overlaps) {
       // chunk is resolved: search for an existing copy of it first
-      const pattern = this.data.pattern(chunk.data);
+      // but only build the pattern if a segmnent is marked as dedupe
+      let pattern: SparseByteArray.Pattern|undefined;
       for (const name of segments) {
         const segment = this.segment(name);
         if (!segment.dedupe) continue;
         if (segment.isRam) continue;  // Skip pattern matching for RAM segments
+        pattern ??= this.data.pattern(chunk.data);
         const start = segment.offset;
         const end = start + segment.size;
         const index = pattern.search(start, end);
