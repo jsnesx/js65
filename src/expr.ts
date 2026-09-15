@@ -122,6 +122,47 @@ export interface LinkTimeEvalEnv {
   chunkBank(chunkIndex: number): number|undefined;
 }
 
+const OP_NEG = (x: number) => -x;
+const OP_NOT = (x: number) => ~x;
+const OP_LNOT = (x: number) => +!x;
+const OP_LOBYTE = (x: number) => x & 0xff;
+const OP_HIBYTE = (x: number) => (x >> 8) & 0xff;
+const OP_BANKBYTE = (x: number) => (x >>> 16) & 0xff;
+const OP_LOWORD = (x: number) => x & 0xffff;
+const OP_HIWORD = (x: number) => (x >>> 16) & 0xffff;
+
+const OP_MUL = (a: number, b: number) => a * b;
+const OP_AND = (a: number, b: number) => a & b;
+const OP_OR = (a: number, b: number) => a | b;
+const OP_XOR = (a: number, b: number) => a ^ b;
+const OP_LT = (a: number, b: number) => +(a < b);
+const OP_LE = (a: number, b: number) => +(a <= b);
+const OP_GT = (a: number, b: number) => +(a > b);
+const OP_GE = (a: number, b: number) => +(a >= b);
+const OP_EQ = (a: number, b: number) => +(a == b);
+const OP_NE = (a: number, b: number) => +(a != b);
+const OP_LAND = (a: number, b: number) => +(!!a && !!b);
+const OP_LOR = (a: number, b: number) => +(!!a || !!b);
+const OP_LXOR = (a: number, b: number) => +(!!a !== !!b);
+const OP_SHL = shift((a, b) => a << b);
+const OP_SHR = shift((a, b) => a >>> b);
+
+const OP_DIV = (a: number, b: number, expr: Expr) => {
+  if (b === 0) Tokens.fail('Division by zero', expr);
+  return Math.trunc(a / b); // ca65 truncates toward zero
+};
+const OP_MOD = (a: number, b: number, expr: Expr) => {
+  if (b === 0) Tokens.fail('Modulo operation with zero', expr);
+  return a % b;
+};
+
+const OP_MATCH = (a: Expr, b: Expr) =>
+    a.num && b.num || a.str && b.str || a.sym && b.sym ? 1 : 0;
+const OP_XMATCH = (a: Expr, b: Expr) =>
+    (a.num !== undefined && b.num !== undefined && a.num === b.num) ||
+    (a.str !== undefined && b.str !== undefined && a.str === b.str) ||
+    (a.sym !== undefined && b.sym !== undefined && a.sym === b.sym) ? 1 : 0;
+
 export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
   const mapped = NAME_MAP.get(expr.op) ?? expr.op;
   switch (mapped) { // var-arg functions
@@ -149,11 +190,11 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
   if (expr.args?.length === 1) {
     switch (mapped) {
       case '+': return expr.args![0];
-      case '-': return unary(expr, x => -x);
-      case '~': return unary(expr, x => ~x);
-      case '!': return unary(expr, x => +!x);
-      case '<': return unary(expr, x => x & 0xff);
-      case '>': return unary(expr, x => (x >> 8) & 0xff);
+      case '-': return unary(expr, OP_NEG);
+      case '~': return unary(expr, OP_NOT);
+      case '!': return unary(expr, OP_LNOT);
+      case '<': return unary(expr, OP_LOBYTE);
+      case '>': return unary(expr, OP_HIBYTE);
       case '^': {
         // Minor diff between js65, but if you use `^` on an addr instead of
         // a number, then we load the `.bank` value instead of the upper bits
@@ -174,14 +215,14 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
           if (answer) return answer;
           return expr; // not resolvable here without the linker
         }
-        return unary(expr, x => (x >>> 16) & 0xff);
+        return unary(expr, OP_BANKBYTE);
       }
       case '.sizeof': {
         const arg = expr.args![0];
         return arg.op === 'sym' ? expr : arg;
       }
-      case '.loword': return unary(expr, x => x & 0xffff);
-      case '.hiword': return unary(expr, x => (x >>> 16) & 0xffff);
+      case '.loword': return unary(expr, OP_LOWORD);
+      case '.hiword': return unary(expr, OP_HIWORD);
       // `.addrsize(sym)` is 1 for a zeropage symbol and 2 otherwise.  js65 has no
       // far/long segments, so ca65's 3 and 4 are unreachable.
       case '.addrsize': {
@@ -211,38 +252,29 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
   switch (mapped) {
     case 'str': return expr;
     // match checks that the TYPE of the left and right side are the same
-    case '.match': return func(expr, (a, b) => a.num && b.num || a.str && b.str || a.sym && b.sym ? 1 : 0);
+    case '.match': return func(expr, OP_MATCH);
     // xmatch checks that the CONTENTS of the left and right side are the same
-    case '.xmatch': return func(expr, (a, b) =>
-      (a.num !== undefined && b.num !== undefined && a.num === b.num) ||
-      (a.str !== undefined && b.str !== undefined && a.str === b.str) ||
-      (a.sym !== undefined && b.sym !== undefined && a.sym === b.sym) ? 1 : 0);
+    case '.xmatch': return func(expr, OP_XMATCH);
     case '+': return plus(expr);
     case '-': return minus(expr);
-    case '*': return binary(expr, (a, b) => a * b);
-    case '/': return binary(expr, (a, b) => {
-      if (b === 0) Tokens.fail('Division by zero', expr);
-      return Math.trunc(a / b); // ca65 truncates toward zero
-    });
-    case '.mod': return binary(expr, (a, b) => {
-      if (b === 0) Tokens.fail('Modulo operation with zero', expr);
-      return a % b;
-    });
-    case '&': return binary(expr, (a, b) => a & b);
-    case '|': return binary(expr, (a, b) => a | b);
-    case '^': return binary(expr, (a, b) => a ^ b);
-    case '<<': return binary(expr, shift((a, b) => a << b));
-    case '>>': return binary(expr, shift((a, b) => a >>> b));
-    case '<': return binary(expr, (a, b) => +(a < b));
-    case '<=': return binary(expr, (a, b) => +(a <= b));
-    case '>': return binary(expr, (a, b) => +(a > b));
-    case '>=': return binary(expr, (a, b) => +(a >= b));
-    case '=': return binary(expr, (a, b) => +(a == b));
-    case '<>': return binary(expr, (a, b) => +(a != b));
+    case '*': return binary(expr, OP_MUL);
+    case '/': return binaryAt(expr, OP_DIV);
+    case '.mod': return binaryAt(expr, OP_MOD);
+    case '&': return binary(expr, OP_AND);
+    case '|': return binary(expr, OP_OR);
+    case '^': return binary(expr, OP_XOR);
+    case '<<': return binary(expr, OP_SHL);
+    case '>>': return binary(expr, OP_SHR);
+    case '<': return binary(expr, OP_LT);
+    case '<=': return binary(expr, OP_LE);
+    case '>': return binary(expr, OP_GT);
+    case '>=': return binary(expr, OP_GE);
+    case '=': return binary(expr, OP_EQ);
+    case '<>': return binary(expr, OP_NE);
     // The boolean operators always reduce to 0 or 1, never to an operand.
-    case '&&': return binary(expr, (a, b) => +(!!a && !!b));
-    case '||': return binary(expr, (a, b) => +(!!a || !!b));
-    case '.xor': return binary(expr, (a, b) => +(!!a !== !!b));
+    case '&&': return binary(expr, OP_LAND);
+    case '||': return binary(expr, OP_LOR);
+    case '.xor': return binary(expr, OP_LXOR);
     case '.strat': {
       const [s, idx] = expr.args!;
       if (s.op !== 'str') Tokens.fail('.strat requires a string literal', expr);
@@ -603,6 +635,14 @@ function binary(expr: Expr, f: (x: number, y: number) => number): Expr {
   const [a, b] = expr.args!;
   if (!isAbs(a) || !isAbs(b)) return expr;
   const num = i32(f(i32(a.num!), i32(b.num!)));
+  return {op: 'num', num, meta: size(num)};
+}
+
+/** Like `binary` but the operator also needs the expr to report errors at. */
+function binaryAt(expr: Expr, f: (x: number, y: number, at: Expr) => number): Expr {
+  const [a, b] = expr.args!;
+  if (!isAbs(a) || !isAbs(b)) return expr;
+  const num = i32(f(i32(a.num!), i32(b.num!), expr));
   return {op: 'num', num, meta: size(num)};
 }
 
