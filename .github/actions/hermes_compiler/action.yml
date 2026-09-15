@@ -1,8 +1,9 @@
 name: 'Build Static Hermes toolchain'
 description: >-
   Build the Static Hermes (shermes) compiler and its static VM libraries from
-  source with LTO, caching the outputs keyed on the pinned Hermes commit so
-  later runs skip the build. Works on Windows, macOS (arm), and Linux hosts.
+  source with LTO, and optionally PGO when the pgo-* inputs name a training
+  workload. Outputs are cached so later runs skip the build entirely. Works on
+  Windows, macOS (arm), and Linux hosts.
 
 inputs:
   hermes-ref:
@@ -11,6 +12,27 @@ inputs:
       caller pins explicitly). Static Hermes currently lives on the unmerged
       `static_h` branch, so use a SHA from that branch (or `static_h` itself).
     required: true
+  pgo-repo:
+    description: >-
+      `owner/name` of the repository to check out for PGO training.
+    required: false
+    default: ''
+  pgo-ref:
+    description: >-
+      Commit SHA of `pgo-repo` to train on.
+    required: false
+    default: ''
+  pgo-build-command:
+    description: >-
+      Arguments passed to the instrumented project inside the training checkout.
+    required: false
+    default: ''
+  pgo-source-paths:
+    description: >-
+      Source paths that when changed should cause the PGO profile to get regenerated.
+    required: false
+    default: |
+      src/**
 
 runs:
   using: composite
@@ -24,6 +46,30 @@ runs:
     - name: Setup MSVC environment (Windows)
       if: runner.os == 'Windows'
       uses: vln-devsecops/actions-msvc@v1
+    - name: Decide whether PGO is enabled
+      id: pgo
+      shell: bash
+      env:
+        PGO_REPO: ${{ inputs.pgo-repo }}
+        PGO_REF: ${{ inputs.pgo-ref }}
+        PGO_BUILD_COMMAND: ${{ inputs.pgo-build-command }}
+      run: |
+        MISSING=()
+        [ -n "$PGO_REPO" ] || MISSING+=(pgo-repo)
+        [ -n "$PGO_REF" ] || MISSING+=(pgo-ref)
+        [ -n "$PGO_BUILD_COMMAND" ] || MISSING+=(pgo-build-command)
+        if [ ${#MISSING[@]} -eq 0 ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          # All three empty is a deliberate opt-out; a partial set is a mistake
+          # worth shouting about, since the build silently loses ~19%.
+          if [ ${#MISSING[@]} -eq 3 ]; then
+            echo "PGO not requested; building Hermes with LTO only."
+          else
+            echo "::warning title=PGO disabled::Missing ${MISSING[*]}; building Hermes without PGO. Supply all three pgo-* inputs to enable it."
+          fi
+        fi
     - name: Cache shermes build
       id: shermes-cache
       uses: actions/cache@v5
@@ -37,33 +83,57 @@ runs:
           hermes/build/external/boost
         # runner.arch is part of the key because these are native binaries and
         # the x64 and arm64 Linux runners both report runner.os == 'Linux'.
-        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v3
-    - name: Build shermes (LTO)
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v3${{ steps.pgo.outputs.enabled == 'true' && format('-pgo-{0}-{1}', inputs.pgo-ref, hashFiles(inputs.pgo-source-paths)) || '' }}
+
+    - name: Cache instrumented shermes build
+      id: shermes-pgogen-cache
+      if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true'
+      uses: actions/cache@v5
+      with:
+        path: |
+          hermes/build-pgogen/bin
+          hermes/build-pgogen/lib
+          hermes/build-pgogen/tools/shermes
+          hermes/build-pgogen/jsi
+          hermes/build-pgogen/external/boost
+        key: shermes-pgogen-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-v1
+    - name: Build instrumented shermes
+      if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true' && steps.shermes-pgogen-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/build-vm.sh" hermes/build-pgogen -fprofile-generate
+
+    - name: Checkout the PGO training workload
+      if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true'
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.pgo-repo }}
+        ref: ${{ inputs.pgo-ref }}
+        path: pgo-training
+    - name: Generate the PGO profile
+      if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PGO_BUILD_COMMAND: ${{ inputs.pgo-build-command }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/generate-profile.sh" \
+          hermes/build-pgogen pgo-training "$GITHUB_WORKSPACE/hermes/pgo.profdata"
+    - name: Upload the PGO profile
+      if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: pgo-profile-${{ runner.os }}-${{ runner.arch }}
+        path: hermes/pgo.profdata
+        if-no-files-found: error
+
+    - name: Build shermes (LTO${{ steps.pgo.outputs.enabled == 'true' && ' + PGO' || '' }})
       if: steps.shermes-cache.outputs.cache-hit != 'true'
       shell: bash
-      # We use GNU clang across all platforms (even windows)
-      # because in my testing, clang produces much much faster shermes code.
-      # I'm guessing its because computed goto in clang makes for much faster
-      # interpreters, so its just always gonna be better than msvc builds.
+      env:
+        PGO_ENABLED: ${{ steps.pgo.outputs.enabled }}
       run: |
-        EXTRA=()
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          # clang targeting *-windows-msvc runs in MS-compat mode and does not
-          # define __GNUC__, tripping Hermes' -Werror=undef in vendored llvh
-          # headers. -Wno-undef must follow that flag, so set it per-config.
-          EXTRA+=("-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -Wno-undef"
-                  "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -Wno-undef")
+        EXTRA=""
+        if [ "$PGO_ENABLED" = "true" ]; then
+          EXTRA="-fprofile-use=$GITHUB_WORKSPACE/hermes/pgo.profdata"
+          EXTRA="$EXTRA -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled"
         fi
-        cmake -S hermes -B hermes/build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-          -DHERMES_ALLOW_BOOST_CONTEXT=1 \
-          -DHERMES_ENABLE_DEBUGGER=OFF \
-          -DHERMES_BUILD_SHARED_JSI=OFF \
-          -DHERMES_ENABLE_TEST_SUITE=OFF \
-          -DHERMES_ENABLE_NAPI=OFF \
-          -DCMAKE_C_COMPILER=clang \
-          -DCMAKE_CXX_COMPILER=clang++ \
-          "${EXTRA[@]}"
-        cmake --build hermes/build --parallel --target shermes hermesvm_a shermes_console_a jsi
+        bash "$GITHUB_ACTION_PATH/build-vm.sh" hermes/build $EXTRA

@@ -48,8 +48,13 @@ jobs:
       - name: Build Static Hermes toolchain
         uses: ./.github/actions/hermes_compiler
         with:
-          # Pin to a commit on Hermes' static_h branch for reproducible builds.
           hermes-ref: a7086fcea2dd36e3d9475bd1ec8fb2f035d911b9
+          pgo-repo: NovaSquirrel/NovaTheSquirrel
+          pgo-ref: e9e79ae59b188348bd6a87117a2d5c86a34ba433
+          pgo-build-command: -C src/nova.x -I ./ -o out.nes src/nova.s
+          pgo-source-paths: |
+            src/**
+            integrations/hermes/**
       - name: Install ICU dev libraries (Linux)
         # hermesvm references system ICU for Unicode; the final clang++ link
         # needs the -dev .so symlinks (the runtime package ships only .so.NN).
