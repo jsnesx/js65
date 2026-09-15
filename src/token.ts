@@ -444,6 +444,36 @@ export function strip(t: Token): Token {
   return t;
 }
 
+/**
+ * Copies a token with its source reparented under the expansion's call site.
+ * Doing it manually instead of with a spread operator is a decent speedup
+ */
+export function reparentSource(tok: Token, callSource?: SourceInfo): Token {
+  const inner = tok.source;
+  if (!inner && !callSource) return tok;
+  const source: SourceInfo = inner && callSource ? {
+    ident: inner.ident,
+    file: inner.file,
+    line: inner.line,
+    column: inner.column,
+    parent: callSource,
+    endLine: inner.endLine,
+    endColumn: inner.endColumn,
+  } : (inner ?? callSource)!;
+  switch (tok.token) {
+    case 'grp':
+      return {token: tok.token, inner: tok.inner, source};
+    case 'num':
+      return {token: tok.token, num: tok.num, source,
+              width: tok.width, radix: tok.radix};
+    case 'ident': case 'op': case 'cs': case 'str':
+      return {token: tok.token, str: tok.str, source, rawStr: tok.rawStr,
+              char: tok.char, labelsData: tok.labelsData, deferred: tok.deferred};
+    default:
+      return {token: tok.token, source};
+  }
+}
+
 export function format(toks: readonly Token[]): string {
   return toks.map(t => {
     switch (t.token) {

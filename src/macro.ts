@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {type SourceInfo, type Token} from './token.ts';
+import {reparentSource, type Token} from './token.ts';
 import * as Tokens from './token.ts';
 
 
@@ -10,38 +10,6 @@ import * as Tokens from './token.ts';
 
 interface Source<T> {
   next(): T;
-}
-
-/**
- * Perf patch, instead of using the spread operator, we can manually copy the relevant
- * fields over, since spreading involves a lot of missing field checks, this saves a
- * significant amount of time (around 4% in a real source project lol)
- */
-function reparentSource(tok: Token, callSource?: SourceInfo): Token {
-  const inner = tok.source;
-  if (!inner && !callSource) return tok;
-  // Note: an existing parent is intentionally discarded, matching the old spread.
-  const source: SourceInfo = inner && callSource ? {
-    ident: inner.ident,
-    file: inner.file,
-    line: inner.line,
-    column: inner.column,
-    parent: callSource,
-    endLine: inner.endLine,
-    endColumn: inner.endColumn,
-  } : (inner ?? callSource)!;
-  switch (tok.token) {
-    case 'grp':
-      return {token: tok.token, inner: tok.inner, source};
-    case 'num':
-      return {token: tok.token, num: tok.num, source,
-              width: tok.width, radix: tok.radix};
-    case 'ident': case 'op': case 'cs': case 'str':
-      return {token: tok.token, str: tok.str, source, rawStr: tok.rawStr,
-              char: tok.char, labelsData: tok.labelsData, deferred: tok.deferred};
-    default:
-      return {token: tok.token, source};
-  }
 }
 
 export class Macro {

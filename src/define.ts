@@ -110,11 +110,7 @@ function produce(tokens: Token[],
       overflow.push(line = []);
       continue;
     }
-    const source =
-        tok.source && tokens[0].source ?
-            {...tok.source, parent: tokens[0].source} :
-            tok.source || tokens[0].source;
-    line.push(source ? {...tok, source} : tok);
+    line.push(Tokens.reparentSource(tok, tokens[0].source));
   }
   overflow = overflow.filter(l => l.length);
   if (overflow.length && end < tokens.length) {
