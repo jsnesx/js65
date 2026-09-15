@@ -350,6 +350,15 @@ export class Preprocessor implements Tokens.Source {
     let depth = 0;
     let maxPos = 0;
     while (pos < line.length) {
+      // expandToken checks for ident/cs/grp tokens directly, but for performance
+      // skip over anything else here to avoid the function call overhead. this
+      // matters here because its the preprocessor and we run this a lot
+      const token = line[pos].token;
+      if (token !== 'ident' && token !== 'cs' && token !== 'grp') {
+        if (pos > maxPos) maxPos = pos;
+        pos++;
+        continue;
+      }
       if (pos > maxPos) {
         maxPos = pos;
         depth = 0;
