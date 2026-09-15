@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {type Token} from './token.ts';
+import {type SourceInfo, type Token} from './token.ts';
 import * as Tokens from './token.ts';
 
 
@@ -10,6 +10,38 @@ import * as Tokens from './token.ts';
 
 interface Source<T> {
   next(): T;
+}
+
+/**
+ * Perf patch, instead of using the spread operator, we can manually copy the relevant
+ * fields over, since spreading involves a lot of missing field checks, this saves a
+ * significant amount of time (around 4% in a real source project lol)
+ */
+function reparentSource(tok: Token, callSource?: SourceInfo): Token {
+  const inner = tok.source;
+  if (!inner && !callSource) return tok;
+  // Note: an existing parent is intentionally discarded, matching the old spread.
+  const source: SourceInfo = inner && callSource ? {
+    ident: inner.ident,
+    file: inner.file,
+    line: inner.line,
+    column: inner.column,
+    parent: callSource,
+    endLine: inner.endLine,
+    endColumn: inner.endColumn,
+  } : (inner ?? callSource)!;
+  switch (tok.token) {
+    case 'grp':
+      return {token: tok.token, inner: tok.inner, source};
+    case 'num':
+      return {token: tok.token, num: tok.num, source,
+              width: tok.width, radix: tok.radix};
+    case 'ident': case 'op': case 'cs': case 'str':
+      return {token: tok.token, str: tok.str, source, rawStr: tok.rawStr,
+              char: tok.char, labelsData: tok.labelsData, deferred: tok.deferred};
+    default:
+      return {token: tok.token, source};
+  }
 }
 
 export class Macro {
@@ -68,6 +100,38 @@ export class Macro {
     }
     // All params filled in, make replacement
     const locals = new Map<string, string>();
+    const callSource = tokens[0].source;
+    const map = (toks: Token[]): Token[] => {
+      const mapped: Token[] = [];
+      for (const tok of toks) {
+        // skip over the line declaring the local variables
+        if (Tokens.eq(tok, Tokens.LOCAL))
+          return mapped;
+        if (tok.token === 'ident') {
+          const param = replacements.get(tok.str);
+          if (param) {
+            // this is actually a parameter
+            mapped.push(...param); // TODO - copy w/ child sourceinfo?
+            continue;
+          }
+          const local = locals.get(tok.str);
+          if (local) {
+            mapped.push({token: 'ident', str: local});
+            continue;
+          }
+        } else if (tok.token === 'cs' && tok.str === '.paramcount') {
+          // .paramcount can only be used in macros, so we don't need to put
+          // it in the main directive switch statement.
+          mapped.push({token: 'num', num: paramCount, radix: 10, source: tok.source});
+          continue;
+        } else if (tok.token === 'grp') {
+          mapped.push({token: 'grp', inner: map(tok.inner)});
+          continue;
+        }
+        mapped.push(reparentSource(tok, callSource));
+      }
+      return mapped;
+    };
     for (const line of this.production) {
       if (Tokens.eq(line[0], Tokens.LOCAL)) {
         const locallist = Tokens.identsFromCList(line.slice(1));
@@ -78,41 +142,6 @@ export class Macro {
       }
       // TODO - check for .local here and rename? move into assembler
       // or preprocessing...?  probably want to keep track elsewhere.
-      const map = (toks: Token[]): Token[] => {
-        const mapped: Token[] = [];
-        for (const tok of toks) {
-          // skip over the line declaring the local variables
-          if (Tokens.eq(tok, Tokens.LOCAL))
-            return mapped;
-          if (tok.token === 'ident') {
-            const param = replacements.get(tok.str);
-            if (param) {
-              // this is actually a parameter
-              mapped.push(...param); // TODO - copy w/ child sourceinfo?
-              continue;
-            }
-            const local = locals.get(tok.str);
-            if (local) {
-              mapped.push({token: 'ident', str: local});
-              continue;
-            }
-          } else if (tok.token === 'cs' && tok.str === '.paramcount') {
-            // .paramcount can only be used in macros, so we don't need to put
-            // it in the main directive switch statement.
-            mapped.push({token: 'num', num: paramCount, radix: 10, source: tok.source});
-            continue;
-          } else if (tok.token === 'grp') {
-            mapped.push({token: 'grp', inner: map(tok.inner)});
-            continue;
-          }
-          const source =
-              tok.source && tokens[0].source ?
-                  {...tok.source, parent: tokens[0].source} :
-                  tok.source || tokens[0].source;
-          mapped.push(source ? {...tok, source} : tok);
-        }
-        return mapped;
-      }
       lines.push(map(line));
     }
     return lines.filter(m => m.length != 0);
