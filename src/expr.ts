@@ -123,7 +123,6 @@ export interface LinkTimeEvalEnv {
 }
 
 const OP_NEG = (x: number) => -x;
-const OP_NOT = (x: number) => ~x;
 const OP_LNOT = (x: number) => +!x;
 const OP_LOBYTE = (x: number) => x & 0xff;
 const OP_HIBYTE = (x: number) => (x >> 8) & 0xff;
@@ -191,7 +190,7 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
     switch (mapped) {
       case '+': return expr.args![0];
       case '-': return unary(expr, OP_NEG);
-      case '~': return unary(expr, OP_NOT);
+      case '~': return bitnot(expr);
       case '!': return unary(expr, OP_LNOT);
       case '<': return unary(expr, OP_LOBYTE);
       case '>': return unary(expr, OP_HIBYTE);
@@ -630,6 +629,17 @@ function unary(expr: Expr, f: (x: number) => number): Expr {
   return {op: 'num', num, meta: size(num)};
 }
 
+/** For bitwise not to only operate on the size of the input operand */
+function bitnot(expr: Expr): Expr {
+  const arg = expr.args![0];
+  if (!isAbs(arg)) return expr;
+  const width = Number(arg.meta?.size) || size(i32(arg.num!)).size!;
+  if (width >= 4) return unary(expr, x => ~x);
+  const mask = 2 ** (width << 3) - 1;
+  const num = i32(~i32(arg.num!)) & mask;
+  return {op: 'num', num, meta: sizeMeta(width)};
+}
+
 function binary(expr: Expr, f: (x: number, y: number) => number): Expr {
   // require both to be absolute
   const [a, b] = expr.args!;
@@ -837,6 +847,7 @@ const SIZE_TRANSFORMS = new Map<string, (...args: number[]) => number>([
   ['<', () => 1], // unary (lobyte) and binary (cmp) both single-byte
   ['>', () => 1], // unary (hibyte) and binary (cmp) both single-byte
   ['!', () => 1], // not always 0 or 1
+  ['~', a => a], // complement stays at the operand's width
   ['<=', () => 1], // cmp
   ['>=', () => 1], // cmp
   ['<>', () => 1], // cmp

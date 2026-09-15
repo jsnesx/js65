@@ -132,7 +132,7 @@ describe('Expr', function() {
 
     it('should parse prefix operators', function() {
       const expr = Exprs.parseOnly([top('+'), top('~'), top('^'), tnum(1)]);
-      expect(expr).toEqual(op('+', op('~', op1('^', num(1)))));
+      expect(expr).toEqual(op('+', op1('~', op1('^', num(1)))));
     });
 
     it('should parse comparison operators', function() {

@@ -1545,6 +1545,56 @@ describe('Assembler', function() {
     });
   });
 
+  // Deliberate divergence: ca65 complements at 32 bits and errors on these.
+  describe('~ (bitwise complement)', function() {
+    it('should complement a byte within one byte', function() {
+      expect(assemble('lda #~$80\n')).toEqual([0xa9, 0x7f]);
+      expect(assemble('lda #~$7f\n')).toEqual([0xa9, 0x80]);
+    });
+
+    it('should complement the byte boundaries', function() {
+      expect(assemble('.byte ~$00, ~$01, ~$7f, ~$80, ~$fe, ~$ff\n'))
+          .toEqual([0xff, 0xfe, 0x80, 0x7f, 0x01, 0x00]);
+    });
+
+    it('should complement a word within two bytes', function() {
+      expect(assemble('.word ~$0000, ~$1234, ~$7fff, ~$8000, ~$ffff\n'))
+          .toEqual([0xff, 0xff, 0xcb, 0xed, 0x00, 0x80, 0xff, 0x7f,
+                    0x00, 0x00]);
+    });
+
+    it('should keep a byte operand one byte wide inside a .word', function() {
+      expect(assemble('.word ~$80\n')).toEqual([0x7f, 0x00]);
+    });
+
+    it('should widen to two bytes once the operand needs them', function() {
+      expect(assemble('.word ~$0100\n')).toEqual([0xff, 0xfe]);
+      expect(assembleErrors('.byte ~$0100\n')).toEqual(['Not a byte: $feff']);
+    });
+
+    it('should round-trip when applied twice', function() {
+      expect(assemble('.byte ~~$80, ~~$00, ~~$ff\n'))
+          .toEqual([0x80, 0x00, 0xff]);
+      expect(assemble('.word ~~$1234\n')).toEqual([0x34, 0x12]);
+    });
+
+    it('should never produce a negative needing a range check', function() {
+      expect(assemble('lda #~$80\n')).toEqual([0xa9, 0x7f]);
+      expect(assemble('lda #~$00\n')).toEqual([0xa9, 0xff]);
+      expect(assemble('lda #~$ff\n')).toEqual([0xa9, 0x00]);
+      expect(assemble('.byte ~$ff\n')).toEqual([0x00]);
+    });
+
+    it('should complement a byte-sized symbol at one byte', function() {
+      expect(assemble('FOO = $80\n.byte ~FOO\n')).toEqual([0x7f]);
+    });
+
+    it('should agree with the ca65-compatible masked spellings', function() {
+      expect(assemble('lda #~$80 & $ff\n')).toEqual([0xa9, 0x7f]);
+      expect(assemble('lda #<~$80\n')).toEqual([0xa9, 0x7f]);
+    });
+  });
+
   describe('.segment', function() {
     it('should change the segment', function() {
       const a = new Assembler(Cpu.P02);
