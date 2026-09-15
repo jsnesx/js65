@@ -1478,27 +1478,33 @@ export class Assembler {
         case '.endif': return this.parseNoArgs(tokens, 1);
         case '.org': return this.org(this.parseConst(tokens, 1));
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
-        case '.assert': return this.assert(...this.parseAssert(tokens));
-        case '.segment': return this.segment(...this.parseSegmentList(tokens, 1, false));
-        case '.byte': return this.byte(...this.parseDataList(tokens, true));
-        case '.hibytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.hiByte(e)));
-        case '.lobytes': return this.byte(...this.parseDataList(tokens).map(e => Exprs.loByte(e)));
+        case '.assert': {
+          const [expr, action, message] = this.parseAssert(tokens);
+          return this.assert(expr, action, message);
+        }
+        case '.segment': return this.segmentInternal(this.parseSegmentList(tokens, 1, false));
+        case '.byte': return this.byteInternal(this.parseDataList(tokens, true));
+        case '.hibytes': return this.byteInternal(this.parseDataList(tokens).map(e => Exprs.hiByte(e)));
+        case '.lobytes': return this.byteInternal(this.parseDataList(tokens).map(e => Exprs.loByte(e)));
         case '.bytestr': return this.byteInternal(this.parseByteStr(tokens));
         case '.literal': return this.byteInternal(this.parseDataList(tokens, true), new MaxKeySizeCacheMap());
-        case '.res': return this.res(...this.parseResArgs(tokens));
-        case '.word': return this.word(...this.parseDataList(tokens));
-        case '.dbyt': return this.dbyte(...this.parseDataList(tokens));
-        case '.faraddr': return this.faraddr(...this.parseDataList(tokens));
-        case '.dword': return this.dword(...this.parseDataList(tokens));
+        case '.res': {
+          const [count, value] = this.parseResArgs(tokens);
+          return this.res(count, value);
+        }
+        case '.word': return this.wordInternal(this.parseDataList(tokens));
+        case '.dbyt': return this.dbyteInternal(this.parseDataList(tokens));
+        case '.faraddr': return this.faraddrInternal(this.parseDataList(tokens));
+        case '.dword': return this.dwordInternal(this.parseDataList(tokens));
         case '.free': return this.free(this.parseConst(tokens, 1));
         case '.jsaction': return this.jsAction(tokens);
         case '.segmentprefix': return this.segmentPrefix(this.parseStr(tokens, 1));
-        case '.import': return this.import(...this.parseIdentifierList(tokens));
-        case '.export': return this.export(...this.parseIdentifierList(tokens));
-        case '.importzp': return this.importzp(...this.parseIdentifierList(tokens));
-        case '.exportzp': return this.exportzp(...this.parseIdentifierList(tokens));
-        case '.global': return this.global(...this.parseIdentifierList(tokens));
-        case '.globalzp': return this.globalzp(...this.parseIdentifierList(tokens));
+        case '.import': return this.importInternal(this.parseIdentifierList(tokens));
+        case '.export': return this.exportInternal(this.parseIdentifierList(tokens));
+        case '.importzp': return this.importzpInternal(this.parseIdentifierList(tokens));
+        case '.exportzp': return this.exportzpInternal(this.parseIdentifierList(tokens));
+        case '.global': return this.globalInternal(this.parseIdentifierList(tokens));
+        case '.globalzp': return this.globalzpInternal(this.parseIdentifierList(tokens));
         case '.charmap': return this.charmap(tokens);
         case '.strmap': return this.strmap(tokens);
         case '.pushcharmap': return this.parseNoArgs(tokens, 1), this.pushCharmap();
@@ -1506,7 +1512,7 @@ export class Assembler {
         case '.setcpu': return this.setCpu(this.parseStr(tokens, 1));
         case '.pushcpu': return this.parseNoArgs(tokens, 1), this.pushCpu();
         case '.popcpu': return this.parseNoArgs(tokens, 1), this.popCpu();
-        case '.asciiz': return this.asciiz(...this.parseDataList(tokens, true));
+        case '.asciiz': return this.asciizInternal(this.parseDataList(tokens, true));
         case '.align': return this.alignDir(tokens);
         case '.struct': return this.beginStruct(tokens, 'struct');
         case '.union': return this.beginStruct(tokens, 'struct'); // union sized like struct here
@@ -1518,9 +1524,12 @@ export class Assembler {
         case '.endscope': return this.parseNoArgs(tokens, 1), this.endScope(tokens[0].source);
         case '.proc': return this.proc(this.parseRequiredIdentifier(tokens), tokens[0].source);
         case '.endproc': return this.parseNoArgs(tokens, 1), this.endProc(tokens[0].source);
-        case '.pushseg': return this.pushSeg(...this.parseSegmentList(tokens, 1, true));
+        case '.pushseg': return this.pushSegInternal(this.parseSegmentList(tokens, 1, true));
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
-        case '.move': return this.move(...this.parseMoveArgs(tokens));
+        case '.move': {
+          const [size, source] = this.parseMoveArgs(tokens);
+          return this.move(size, source);
+        }
         case '.end': return this.parseNoArgs(tokens, 1), void (this.ended = true);
         case '.out': return this.log('info', tokens);
         case '.warning': return this.log('warn', tokens);
@@ -2192,6 +2201,10 @@ export class Assembler {
   }
 
   segment(...segments: Array<string|mod.Segment>) {
+    this.segmentInternal(segments);
+  }
+
+  segmentInternal(segments: Array<string|mod.Segment>) {
     // Usage: .segment "1a", "1b", ...
     for (const s of segments) {
       this.setSegmentMode(mod.Segment.isAnon(s) ? 'anon' : 'named');
@@ -2285,7 +2298,12 @@ export class Assembler {
   // `.asciiz` emits the bytes then a terminating NUL
   // .charmap/.strmap applies to the string bytes but not the terminator character.
   asciiz(...args: Array<Expr|string|number>) {
-    this.byteInternal([...args, 0]);
+    this.asciizInternal(args);
+  }
+
+  asciizInternal(args: Array<Expr|string|number>) {
+    args.push(0);
+    this.byteInternal(args);
   }
 
   beginStruct(tokens: Token[], kind: 'struct'|'enum') {
@@ -2511,10 +2529,14 @@ export class Assembler {
 
   res(count: number, value?: number) {
     if (!count) return;
-    this.byte(...new Array(count).fill(value ?? 0));
+    this.byteInternal(new Array(count).fill(value ?? 0));
   }
 
   word(...args: Array<Expr|number>) {
+    this.wordInternal(args);
+  }
+
+  wordInternal(args: Array<Expr|number>) {
     const {chunk} = this;
     this.markWritten(2 * args.length);
 
@@ -2534,6 +2556,10 @@ export class Assembler {
 
   /** `.faraddr`: a 24-bit little-endian address. */
   faraddr(...args: Array<Expr|number>) {
+    this.faraddrInternal(args);
+  }
+
+  faraddrInternal(args: Array<Expr|number>) {
     const {chunk} = this;
     this.markWritten(3 * args.length);
 
@@ -2555,6 +2581,10 @@ export class Assembler {
   // So we need to split this into a `.hiByte` and `.loByte` pair if this is
   // a forward reference that will be substituted in later.
   dbyte(...args: Array<Expr|number>) {
+    this.dbyteInternal(args);
+  }
+
+  dbyteInternal(args: Array<Expr|number>) {
     const {chunk} = this;
     this.markWritten(2 * args.length);
 
@@ -2575,6 +2605,10 @@ export class Assembler {
   }
 
   dword(...args: Array<Expr|number>) {
+    this.dwordInternal(args);
+  }
+
+  dwordInternal(args: Array<Expr|number>) {
     const {chunk} = this;
     this.markWritten(4 * args.length);
 
@@ -2757,14 +2791,26 @@ export class Assembler {
   }
 
   import(...idents: string[]) {
+    this.importInternal(idents);
+  }
+
+  importInternal(idents: string[]) {
     for (const ident of idents) this.declareGlobal(ident, 'import');
   }
 
   export(...idents: string[]) {
+    this.exportInternal(idents);
+  }
+
+  exportInternal(idents: string[]) {
     for (const ident of idents) this.declareGlobal(ident, 'export');
   }
 
   importzp(...idents: string[]) {
+    this.importzpInternal(idents);
+  }
+
+  importzpInternal(idents: string[]) {
     for (const ident of idents) {
       this.declareGlobal(ident, 'import');
       this.zeropageGlobals.add(ident);
@@ -2772,6 +2818,10 @@ export class Assembler {
   }
 
   exportzp(...idents: string[]) {
+    this.exportzpInternal(idents);
+  }
+
+  exportzpInternal(idents: string[]) {
     for (const ident of idents) {
       this.declareGlobal(ident, 'export');
       this.zeropageGlobals.add(ident);
@@ -2779,11 +2829,19 @@ export class Assembler {
   }
 
   global(...idents: string[]) {
+    this.globalInternal(idents);
+  }
+
+  globalInternal(idents: string[]) {
     // Don't clobber an explicit import/export declaration.
     for (const ident of idents) this.declareGlobal(ident, 'global', true);
   }
 
   globalzp(...idents: string[]) {
+    this.globalzpInternal(idents);
+  }
+
+  globalzpInternal(idents: string[]) {
     for (const ident of idents) {
       this.declareGlobal(ident, 'global', true);
       this.zeropageGlobals.add(ident);
@@ -2853,13 +2911,17 @@ export class Assembler {
   }
 
   pushSeg(...segments: Array<string|mod.Segment>) {
+    this.pushSegInternal(segments);
+  }
+
+  pushSegInternal(segments: Array<string|mod.Segment>) {
     this.preventInvalidAnonSegChange('.pushseg');
     this.flushPendingAlign();
     this.segmentStack.push(
         [this.segments, this._chunk, this._chunkIndex, this._org]);
     // If pushseg was called without any segments, just keep the current segment
     if (segments.length) {
-      this.segment(...segments);
+      this.segmentInternal(segments);
     }
   }
 
