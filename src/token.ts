@@ -439,11 +439,6 @@ export function str(t: Token) {
   fail(`Non-string token: ${nameOf(t)}`, t);
 }
 
-export function strip(t: Token): Token {
-  delete t.source;
-  return t;
-}
-
 /**
  * Copies a token with its source reparented under the expansion's call site.
  * Doing it manually instead of with a spread operator is a decent speedup

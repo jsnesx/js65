@@ -783,6 +783,30 @@ describe('Assembler', function() {
         }],
         symbols: [], segments: []});
     });
+
+    // Resolving `+` must clear its slot, so the next `+` allocates a new symbol
+    // rather than re-resolving to the first one.
+    it('should reuse a forward slot after it resolves', function() {
+      const a = new Assembler(Cpu.P02);
+      a.instruction([ident('bne'), op('+')]);
+      a.label('+');
+      a.instruction([ident('bcc'), op('+')]);
+      a.label('+');
+      a.instruction([ident('lsr')]);
+      expect(strip(a.module())).toEqual({
+        chunks: [{
+          overwrite: 'allow',
+          segments: [],
+          data: Uint8Array.of(0xd0, 0xff, 0x90, 0xff, 0x4a),
+          subs: [{offset: 1, size: 1,
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 0}, off(2)]}},
+                 {offset: 3, size: 1,
+                  expr: {op: '-', meta: {branch: true}, args: [{op: 'sym', num: 1}, off(4)]}}],
+        }],
+        symbols: [{expr: off(2)},
+                  {expr: off(4)}],
+        segments: []});
+    });
   });
 
   describe('mnemonic-named labels', function() {

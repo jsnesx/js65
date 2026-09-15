@@ -439,7 +439,7 @@ export class Assembler {
   private anonymousReverse: Expr[] = [];
 
   /** Map of global symbol incides used by forward refs to relative labels. */
-  private relativeForward: number[] = [];
+  private relativeForward: (number|undefined)[] = [];
 
   /** Map of chunk/offset positions of back-referable relative labels. */
   private relativeReverse: Expr[] = [];
@@ -1737,7 +1737,7 @@ export class Assembler {
     } else if (/^\++$/.test(ident)) {
       // relative forward ref - fill in global symbol we made earlier
       const sym = this.relativeForward[ident.length - 1];
-      delete this.relativeForward[ident.length - 1];
+      this.relativeForward[ident.length - 1] = undefined;
       if (sym != null) this.symbols[sym].expr = expr;
       if (this.opts.generateDebugInfo) {
         this.debugLabels.push({name: '@p', expr});

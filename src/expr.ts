@@ -256,14 +256,6 @@ export function evaluate(expr: Expr, linkEnv?: LinkTimeEvalEnv): Expr {
   }
 }
 
-/** Strip source info from the expression. */
-export function strip(expr: Expr) {
-  const out = {...expr};
-  if (out.args) out.args = out.args.map(strip);
-  delete out.source;
-  return out;
-}
-
 /** Searches for symbols in the expression. */
 export function symbols(expr: Expr, out: string[] = []): string[] {
   // NOTE: we don't dedupe with a set because it matters if a symbol
