@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/** A regex match tagged with where in the buffer it started. */
-export type Match = RegExpExecArray & {line: number, column: number};
-
 class State {
   constructor(readonly line: number,
               readonly column: number,
               readonly pos: number,
               readonly match: RegExpExecArray|undefined,
+              readonly matchText: string|undefined,
               readonly matchLine: number,
               readonly matchColumn: number) {}
 }
@@ -16,27 +14,22 @@ export class Buffer {
   pos = 0;
 
   private rawMatch?: RegExpExecArray;
+  private matchText?: string;
   private matchLine = 0;
   private matchColumn = 0;
 
   constructor(readonly content: string, public line = 1, public column = 0) {}
 
-  /**
-   * Making the Match itself is costly for larger projects, so we only do that
-   * when something actually needs it when they call tag(). It turns out most
-   * callers don't need the result, so avoiding creating the option yielded a
-   * pretty good speedup.
-   */
-  private tag(): Match|undefined {
-    const match = this.rawMatch as Match|undefined;
-    if (!match) return undefined;
-    match.line = this.matchLine;
-    match.column = this.matchColumn;
-    return match;
-  }
-
   private record(match: RegExpExecArray) {
     this.rawMatch = match;
+    this.matchText = match[0];
+    this.matchLine = this.line;
+    this.matchColumn = this.column;
+  }
+
+  private recordStr(s: string) {
+    this.rawMatch = undefined;
+    this.matchText = s;
     this.matchLine = this.line;
     this.matchColumn = this.column;
   }
@@ -68,14 +61,14 @@ export class Buffer {
 
   // Skip ahead to the end of this string with a known length and no newlines
   punct(s: string) {
-    this.record([s] as unknown as RegExpExecArray);
+    this.recordStr(s);
     this.pos += s.length;
     this.column += s.length;
   }
 
   saveState(): State {
     return new State(this.line, this.column, this.pos, this.rawMatch,
-                     this.matchLine, this.matchColumn);
+                     this.matchText, this.matchLine, this.matchColumn);
   }
 
   restoreState(state: State) {
@@ -83,6 +76,7 @@ export class Buffer {
     this.column = state.column;
     this.pos = state.pos;
     this.rawMatch = state.match;
+    this.matchText = state.matchText;
     this.matchLine = state.matchLine;
     this.matchColumn = state.matchColumn;
   }
@@ -134,7 +128,7 @@ export class Buffer {
   }
   tokenStr(s: string): boolean {
     if (!this.content.startsWith(s, this.pos)) return false;
-    this.record([s] as unknown as RegExpExecArray);
+    this.recordStr(s);
     this.advance(s);
     return true;
   }
@@ -145,18 +139,24 @@ export class Buffer {
     if (typeof re === 'string') return prefix.endsWith(re);
     const match = re.exec(prefix);
     if (!match) return false;
-    this.rawMatch = match;
-    this.matchLine = this.line;
-    this.matchColumn = this.column;
+    this.record(match);
     return true;
   }
 
-  match(): Match|undefined {
-    return this.tag();
+  matched(): boolean {
+    return this.matchText !== undefined;
+  }
+
+  matchLineNo(): number {
+    return this.matchLine;
+  }
+
+  matchColumnNo(): number {
+    return this.matchColumn;
   }
 
   group(index = 0): string|undefined {
-    return this.rawMatch?.[index];
+    return index === 0 ? this.matchText : this.rawMatch?.[index];
   }
 
   eof(): boolean {

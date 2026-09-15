@@ -179,8 +179,8 @@ export class Tokenizer implements Tokens.Source {
         case 0x3b /* ; */:
           buf.token(RE_COMMENT);
           if (this.opts.lintPragmas) {
-            const comment = buf.match()!;
-            this.opts.lintPragmas.record(this.file, comment.line, comment[0]);
+            this.opts.lintPragmas.record(this.file, buf.matchLineNo(),
+                                         buf.group()!);
           }
           continue;
         case 0x5c /* \ */:
@@ -330,9 +330,10 @@ export class Tokenizer implements Tokens.Source {
       // Add a `near` part to the message if we know what the last token was.
       // But only if the line matches so we don't blame an innocent line if
       // the error was so crazy that ruined the rest of the line.
-      const match = this.buffer.match();
-      const last = match && match.line === source.line &&
-          match.column === source.column ? match[0] : undefined;
+      const last = this.buffer.matched() &&
+          this.buffer.matchLineNo() === source.line &&
+          this.buffer.matchColumnNo() === source.column ?
+              this.buffer.group() : undefined;
       const located = new Tokens.SourceError(
           `${err.message}${last ? ` near '${last}'` : ''}`, source);
       located.stack = err.stack;
@@ -455,8 +456,9 @@ export class Tokenizer implements Tokens.Source {
 
   private tokenizeStr(): Token {
     const b = this.buffer;
-    const m = b.match()!;
-    const end = m[0];
+    const end = b.group()!;
+    const startLine = b.matchLineNo();
+    const startColumn = b.matchColumnNo();
     let str = '';
     while (!b.lookingAt(end)) {
       // Strings don't span lines, so running into a newline (or the end of the
@@ -465,7 +467,7 @@ export class Tokenizer implements Tokens.Source {
       // still tokenizes normally.
       if (b.eof() || b.lookingAt(NEWLINE)) {
         this.unterminated(`Unterminated string, expected ${end}`,
-                          {file: this.file, line: m.line, column: m.column});
+                          {file: this.file, line: startLine, column: startColumn});
         return this.makeStrToken(end, str);
       }
       if (b.token(RE_UNICODE_ESC)) {
