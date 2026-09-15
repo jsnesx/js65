@@ -35,7 +35,11 @@ function trimMap(name: string, json: string): TrimmedMap {
   const prefix = `src/jsmodule/${name}/`;
   return {
     version: raw.version,
-    sources: raw.sources.map(s => s.startsWith(prefix) ? s.substring(prefix.length) : s),
+    sources: raw.sources.map(s => {
+      const normalized = s.replaceAll('\\', '/');
+      return normalized.startsWith(prefix)
+          ? normalized.substring(prefix.length) : normalized;
+    }),
     sourcesContent: raw.sourcesContent,
     mappings: raw.mappings,
   };
