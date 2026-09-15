@@ -674,7 +674,7 @@ function plus(expr: Expr): Expr {
     }
   }
   if (!out.meta?.rel && out.meta?.size == null) {
-    (out.meta || (out.meta = {})).size = foldedSize(out.num!, a, b);
+    out.meta = sizeMeta(foldedSize(out.num!, a, b));
   }
   return carryZeropage(out, '+', [a, b]);
 }
@@ -689,19 +689,19 @@ function minus(expr: Expr): Expr {
   if (b.meta?.rel) {
     if (a.meta?.rel && a.meta.chunk === b.meta.chunk) {
       // Same-chunk relative subtraction - preserve branch flag if set
-      out.meta = {size: size(out.num!).size};
-      if (isBranch) out.meta.branch = true;
+      const sz = size(out.num!).size;
+      out.meta = isBranch ? {size: sz, branch: true} : sizeMeta(sz!);
       return out;
     }
     return expr;
   }
   if (a.meta?.rel) out.meta = a.meta;
   if (!out.meta?.rel && out.meta?.size == null) {
-    (out.meta || (out.meta = {})).size = foldedSize(out.num!, a, b);
+    out.meta = sizeMeta(foldedSize(out.num!, a, b));
   }
   // Preserve branch flag even for non-relative subtractions
   if (isBranch && out.op === 'num') {
-    (out.meta || (out.meta = {})).branch = true;
+    out.meta = out.meta ? {...out.meta, branch: true} : {branch: true};
   }
   return carryZeropage(out, '-', [a, b]);
 }
@@ -862,9 +862,14 @@ function fixSize(expr: Expr): Expr {
       args.length === 2 ? xform(Number(args[0].meta?.size),
                                 Number(args[1].meta?.size)) :
       xform(...args.map(e => Number(e.meta?.size)));
-  if (size) (expr.meta || (expr.meta = {})).size = size;
-  if ((expr.op === '+' || expr.op === '-') && isZeropage(expr.op, expr.args!)) {
-    (expr.meta || (expr.meta = {})).zeropage = true;
+  const zp = (expr.op === '+' || expr.op === '-') &&
+      isZeropage(expr.op, expr.args!);
+  if (size && zp) {
+    expr.meta = {...expr.meta, size, zeropage: true};
+  } else if (size) {
+    expr.meta = expr.meta ? {...expr.meta, size} : sizeMeta(size);
+  } else if (zp) {
+    expr.meta = {...expr.meta, zeropage: true};
   }
   return expr;
 }
@@ -888,11 +893,23 @@ function isZeropage(op: string, args: Expr[]): boolean {
   return addrs.length === 1 && Boolean(addrs[0].meta?.zeropage);
 }
 
+const SIZE_METAS: readonly Meta[] = [
+  Object.freeze({size: 0}),
+  Object.freeze({size: 1}),
+  Object.freeze({size: 2}),
+  Object.freeze({size: 3}),
+  Object.freeze({size: 4}),
+];
+
+function sizeMeta(width: number): Meta {
+  return SIZE_METAS[width] ?? Object.freeze({size: width});
+}
+
 export function size(num: number, token?: Token): Meta {
   if (num < 256 && token && token.token === 'num' && token.width != null) {
-    return {size: token.width};
+    return sizeMeta(token.width);
   }
-  return {size: 0 <= num && num < 256 ? 1 : 2};
+  return 0 <= num && num < 256 ? SIZE_METAS[1] : SIZE_METAS[2];
 }
 
 /**
