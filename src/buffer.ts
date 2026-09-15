@@ -1,21 +1,45 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/** A regex match, tagged with where in the buffer it started. */
+/** A regex match tagged with where in the buffer it started. */
 export type Match = RegExpExecArray & {line: number, column: number};
 
 class State {
   constructor(readonly line: number,
               readonly column: number,
               readonly pos: number,
-              readonly match: Match|undefined) {}
+              readonly match: RegExpExecArray|undefined,
+              readonly matchLine: number,
+              readonly matchColumn: number) {}
 }
 
 export class Buffer {
   pos = 0;
 
-  lastMatch?: Match;
+  private rawMatch?: RegExpExecArray;
+  private matchLine = 0;
+  private matchColumn = 0;
 
   constructor(readonly content: string, public line = 1, public column = 0) {}
+
+  /**
+   * Making the Match itself is costly for larger projects, so we only do that
+   * when something actually needs it when they call tag(). It turns out most
+   * callers don't need the result, so avoiding creating the option yielded a
+   * pretty good speedup.
+   */
+  private tag(): Match|undefined {
+    const match = this.rawMatch as Match|undefined;
+    if (!match) return undefined;
+    match.line = this.matchLine;
+    match.column = this.matchColumn;
+    return match;
+  }
+
+  private record(match: RegExpExecArray) {
+    this.rawMatch = match;
+    this.matchLine = this.line;
+    this.matchColumn = this.column;
+  }
 
   /** Go to the next line, handling things like multiline comments */
   private advance(s: string) {
@@ -44,23 +68,23 @@ export class Buffer {
 
   // Skip ahead to the end of this string with a known length and no newlines
   punct(s: string) {
-    const match = [s] as Match;
-    match.line = this.line;
-    match.column = this.column;
-    this.lastMatch = match;
+    this.record([s] as unknown as RegExpExecArray);
     this.pos += s.length;
     this.column += s.length;
   }
 
   saveState(): State {
-    return new State(this.line, this.column, this.pos, this.lastMatch);
+    return new State(this.line, this.column, this.pos, this.rawMatch,
+                     this.matchLine, this.matchColumn);
   }
 
   restoreState(state: State) {
     this.line = state.line;
     this.column = state.column;
     this.pos = state.pos;
-    this.lastMatch = state.match;
+    this.rawMatch = state.match;
+    this.matchLine = state.matchLine;
+    this.matchColumn = state.matchColumn;
   }
 
   /** Skips a run of spaces and tabs, which can never contain a newline. */
@@ -102,22 +126,16 @@ export class Buffer {
   // NOTE: re should always be used with the /y sticky flag.
   token(re: RegExp): boolean {
     re.lastIndex = this.pos;
-    const match = re.exec(this.content) as Match|null;
+    const match = re.exec(this.content);
     if (!match) return false;
-    match.line = this.line;
-    match.column = this.column;
-    this.lastMatch = match;
+    this.record(match);
     this.advance(match[0]);
     return true;
   }
   tokenStr(s: string): boolean {
-    let match: Match|null;
     if (!this.content.startsWith(s, this.pos)) return false;
-    match = [s] as Match;
-    match.line = this.line;
-    match.column = this.column;
-    this.lastMatch = match;
-    this.advance(match[0]);
+    this.record([s] as unknown as RegExpExecArray);
+    this.advance(s);
     return true;
   }
 
@@ -125,20 +143,20 @@ export class Buffer {
     // lookBehind is not used on hot paths, so we can spend the extra time to use substring here.
     const prefix = this.content.substring(0, this.pos);
     if (typeof re === 'string') return prefix.endsWith(re);
-    const match = re.exec(prefix) as Match|null;
+    const match = re.exec(prefix);
     if (!match) return false;
-    match.line = this.line;
-    match.column = this.line;
-    this.lastMatch = match;
+    this.rawMatch = match;
+    this.matchLine = this.line;
+    this.matchColumn = this.column;
     return true;
   }
 
   match(): Match|undefined {
-    return this.lastMatch;
+    return this.tag();
   }
 
   group(index = 0): string|undefined {
-    return this.lastMatch?.[index];
+    return this.rawMatch?.[index];
   }
 
   eof(): boolean {
