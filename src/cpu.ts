@@ -11,6 +11,7 @@ type Mnemonic = string;
 
 export interface Cpu {
   readonly table: Table;
+  readonly names: ReadonlySet<string>;
   op(mnemonic: Mnemonic): {[mode in AddressingMode]?: number}|undefined;
   disasm(byte: number): [Mnemonic, AddressingMode]|undefined;
   argLen(mode: AddressingMode): number;
@@ -20,8 +21,31 @@ export interface Cpu {
 
 type Table = {[mnemonic: string]: {[mode in AddressingMode]?: number}};
 
+/**
+ * Build all possible captialization combinations for the opcodes
+ * All this just to avoid a `toLowercase` :p
+ */
+function allCapitalizations(mnemonics: readonly string[]): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const m of mnemonics) {
+    const upper = m.toUpperCase();
+    if (m.length > 4 || upper.length !== m.length) {
+      throw new Error(`Mnemonic not expandable by case: ${m}`);
+    }
+    for (let mask = 0; mask < (1 << m.length); mask++) {
+      let s = '';
+      for (let i = 0; i < m.length; i++) {
+        s += (mask >> i) & 1 ? upper[i] : m[i];
+      }
+      out.add(s);
+    }
+  }
+  return out;
+}
+
 class AbstractCpu {
   private readonly reverse: ReadonlyArray<readonly [Mnemonic, AddressingMode]>;
+  readonly names: ReadonlySet<string>;
 
   constructor(readonly table: Table) {
     const reverse = [];
@@ -32,6 +56,7 @@ class AbstractCpu {
       }
     }
     this.reverse = reverse;
+    this.names = allCapitalizations(Object.keys(table));
   }
 
   op(mnemonic: string) {

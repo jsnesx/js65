@@ -685,7 +685,7 @@ export class Assembler {
   }
 
   isMnemonic(name: string): boolean {
-    return name.toLowerCase() in this.cpu.table;
+    return this.cpu.names.has(name);
   }
 
   /** ca65 `pc_assignment`: `* = $8000` is sugar for `.org $8000`. */

@@ -816,6 +816,14 @@ describe('Assembler', function() {
           .toEqual([expect.stringMatching(/named after the instruction nop/)]);
     });
 
+    it('should accept a symbol named after an Object property', function() {
+      // ca65 allows these; a prototype-chain lookup used to call them mnemonics.
+      expect(assemble('constructor = $12\n  lda constructor\n'))
+          .toEqual([0xa5, 0x12]);
+      expect(assemble('__proto__ = $13\n  lda __proto__\n'))
+          .toEqual([0xa5, 0x13]);
+    });
+
     it('should reject a mnemonic-named macro', function() {
       expect(assembleErrors('.macro nop\n  inx\n.endmacro\n'))
           .toEqual([expect.stringMatching(/named after the instruction nop/)]);
