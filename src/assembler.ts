@@ -846,6 +846,11 @@ export class Assembler {
   }
 
   resolve(expr: Expr): Expr {
+    // Fast path for plain numbers which are already resolved.
+    if (expr.op === 'num' && !expr.args &&
+        !(expr.meta?.rel && expr.meta.org != null)) {
+      return expr;
+    }
     const out = Exprs.traverse(expr, (e, rec) => {
       // Need to check to see if we are resolving a `.sizeof` operation here
       // since we don't want the symbol, but the value from symbol.size
