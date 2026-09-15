@@ -140,7 +140,7 @@ export class CfgTokenizer extends Tokenizer {
     }
     if (c === 0x25 /* % */ && this.buffer.token(RE_CFG_PERCENT)) {
       if (this.buffer.group() === '%S' && this.startAddr != null) {
-        return {token: 'num', num: this.startAddr};
+        return Tokens.numToken(this.startAddr);
       }
       return this.strTok('str');
     }

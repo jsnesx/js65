@@ -211,7 +211,7 @@ export class Preprocessor implements Tokens.Source {
             const label = line.splice(0, 2);
             // Remember that data followed the label on its source line, since
             // that's what `.sizeof(label)` measures and the split loses it.
-            if (line.length) label[0] = {...front, labelsData: true};
+            if (line.length) label[0] = Tokens.labelsData(front);
             this.outQueue.push(label);
             break;
           }
@@ -225,8 +225,7 @@ export class Preprocessor implements Tokens.Source {
             // so we just add one here to use the regular label code path.
             line.splice(0, 1);
             const label: Token[] =
-                [line.length ? {...front, labelsData: true} : front,
-                 {token: 'op', str: ':'}];
+                [line.length ? Tokens.labelsData(front) : front, Tokens.COLON];
             this.outQueue.push(label);
             break;
           }
@@ -600,7 +599,7 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private tcount(cs: Token, arg: Token[]) : Token[] {
-    return [{token: 'num', num: Tokens.count(arg), source: cs.source}];
+    return [Tokens.numToken(Tokens.count(arg), cs.source)];
   }
 
   // `.match`/`.xmatch` compare two token lists as raw tokens and not values, so
@@ -634,11 +633,11 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private matchTokens(cs: Token, a: Token[], b: Token[]) : Token[] {
-    return [{token: 'num', num: Preprocessor.tokensEqual(a, b, false) ? 1 : 0, source: cs.source}];
+    return [Tokens.numToken(Preprocessor.tokensEqual(a, b, false) ? 1 : 0, cs.source)];
   }
 
   private xmatchTokens(cs: Token, a: Token[], b: Token[]) : Token[] {
-    return [{token: 'num', num: Preprocessor.tokensEqual(a, b, true) ? 1 : 0, source: cs.source}];
+    return [Tokens.numToken(Preprocessor.tokensEqual(a, b, true) ? 1 : 0, cs.source)];
   }
 
   private constCount(toks: Token[], cs: Token): number {
@@ -741,7 +740,7 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private blank(cs: Token, arg: Token[]) : Token[] {
-    return [{token: 'num', num: arg.length === 0 ? 1 : 0}];
+    return [Tokens.numToken(arg.length === 0 ? 1 : 0, cs.source)];
   }
 
   /** `.const(expr)` is 1 when the expression is already known, 0 otherwise. */
@@ -755,7 +754,7 @@ export class Preprocessor implements Tokens.Source {
     } catch {
       known = false; // `*`, forward references and imports are not constant
     }
-    return [{token: 'num', num: known ? 1 : 0, source: cs.source}];
+    return [Tokens.numToken(known ? 1 : 0, cs.source)];
   }
 
   /**
@@ -764,34 +763,33 @@ export class Preprocessor implements Tokens.Source {
   private definedMacro(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [{token: 'num', num: this.macros.get(ident) instanceof Macro ? 1 : 0,
-             source: cs.source}];
+    return [Tokens.numToken(this.macros.get(ident) instanceof Macro ? 1 : 0,
+                            cs.source)];
   }
 
   /** Checks if the current CPU setting supports this mnemonic */
   private isMnemonic(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [{token: 'num', num: this.env.isMnemonic(ident) ? 1 : 0,
-             source: cs.source}];
+    return [Tokens.numToken(this.env.isMnemonic(ident) ? 1 : 0, cs.source)];
   }
 
   private definedSymbol(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [{token: 'num', num: this.env.definedSymbol(ident) ? 1 : 0}];
+    return [Tokens.numToken(this.env.definedSymbol(ident) ? 1 : 0, cs.source)];
   }
 
   private constantSymbol(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [{token: 'num', num: this.env.constantSymbol(ident) ? 1 : 0}];
+    return [Tokens.numToken(this.env.constantSymbol(ident) ? 1 : 0, cs.source)];
   }
 
   private referencedSymbol(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [{token: 'num', num: this.env.referencedSymbol(ident) ? 1 : 0}];
+    return [Tokens.numToken(this.env.referencedSymbol(ident) ? 1 : 0, cs.source)];
   }
 
   // TODO - does .byte expand its strings into bytes here?
@@ -1093,9 +1091,7 @@ export class Preprocessor implements Tokens.Source {
     this.repeats.push(top);
     this.stream.unshift(...top[0].map(line => line.map(token => {
       if (token.token !== 'ident' || token.str !== top[3]) return token;
-      const t: Token = {token: 'num', num: top[2]};
-      if (token.source) t.source = token.source;
-      return t;
+      return Tokens.numToken(top[2], token.source);
     })));
   }
 

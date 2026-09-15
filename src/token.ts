@@ -439,6 +439,36 @@ export function str(t: Token) {
   fail(`Non-string token: ${nameOf(t)}`, t);
 }
 
+export function sourceInfo(file: string, line: number, column: number,
+                           endLine?: number, endColumn?: number,
+                           parent?: SourceInfo, ident?: string): SourceInfo {
+  return {ident, file, line, column, parent, endLine, endColumn};
+}
+
+export function strToken(token: StringTok, str: string, source?: SourceInfo,
+                         rawStr?: string, char?: boolean, labelsData?: boolean,
+                         deferred?: boolean): StringToken {
+  return {token, str, rawStr, char, source, labelsData, deferred};
+}
+
+export function numToken(num: number, source?: SourceInfo, width?: number,
+                         radix?: number): NumberToken {
+  return {token: 'num', num, source, width, radix};
+}
+
+export function grpToken(inner: Token[], source?: SourceInfo): GroupToken {
+  return {token: 'grp', inner, source};
+}
+
+export function nullToken(token: NullTok, source?: SourceInfo): NullaryToken {
+  return {token, source};
+}
+
+export function labelsData(tok: StringToken): StringToken {
+  return strToken(tok.token, tok.str, tok.source, tok.rawStr, tok.char, true,
+                  tok.deferred);
+}
+
 /**
  * Copies a token with its source reparented under the expansion's call site.
  * Doing it manually instead of with a spread operator is a decent speedup
@@ -446,26 +476,20 @@ export function str(t: Token) {
 export function reparentSource(tok: Token, callSource?: SourceInfo): Token {
   const inner = tok.source;
   if (!inner && !callSource) return tok;
-  const source: SourceInfo = inner && callSource ? {
-    ident: inner.ident,
-    file: inner.file,
-    line: inner.line,
-    column: inner.column,
-    parent: callSource,
-    endLine: inner.endLine,
-    endColumn: inner.endColumn,
-  } : (inner ?? callSource)!;
+  const source: SourceInfo = inner && callSource ?
+      sourceInfo(inner.file, inner.line, inner.column, inner.endLine,
+                 inner.endColumn, callSource, inner.ident) :
+      (inner ?? callSource)!;
   switch (tok.token) {
     case 'grp':
-      return {token: tok.token, inner: tok.inner, source};
+      return grpToken(tok.inner, source);
     case 'num':
-      return {token: tok.token, num: tok.num, source,
-              width: tok.width, radix: tok.radix};
+      return numToken(tok.num, source, tok.width, tok.radix);
     case 'ident': case 'op': case 'cs': case 'str':
-      return {token: tok.token, str: tok.str, source, rawStr: tok.rawStr,
-              char: tok.char, labelsData: tok.labelsData, deferred: tok.deferred};
+      return strToken(tok.token, tok.str, source, tok.rawStr, tok.char,
+                      tok.labelsData, tok.deferred);
     default:
-      return {token: tok.token, source};
+      return nullToken(tok.token, source);
   }
 }
 

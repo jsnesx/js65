@@ -141,9 +141,7 @@ export class Tokenizer implements Tokens.Source {
         } else {
           const inner = stack.pop()!;
           const source = stack[--depth].pop()!.source;
-          const token: Token = {token: 'grp', inner};
-          if (source) token.source = source;
-          stack[depth].push(token);
+          stack[depth].push(Tokens.grpToken(inner, source));
         }
       } else {
         stack[depth].push(tok);
@@ -155,10 +153,7 @@ export class Tokenizer implements Tokens.Source {
       const open = stack[depth - 1].pop()!;
       this.errorCollector?.add('error', `Missing close curly`, open.source);
       const inner = stack.pop()!;
-      const source = open.source;
-      const token: Token = {token: 'grp', inner};
-      if (source) token.source = source;
-      stack[--depth].push(token);
+      stack[--depth].push(Tokens.grpToken(inner, open.source));
     }
     return stack[0].length ? stack[0] : undefined;
   }
@@ -197,11 +192,8 @@ export class Tokenizer implements Tokens.Source {
 
   private blockComment(): boolean {
     if (!this.buffer.lookingAt(RE_BLOCK_COMMENT_OPEN)) return false;
-    const source = {
-      file: this.file,
-      line: this.buffer.line,
-      column: this.buffer.column,
-    };
+    const source = Tokens.sourceInfo(this.file, this.buffer.line,
+                                     this.buffer.column);
     if (this.buffer.token(RE_BLOCK_COMMENT)) return true;
     // No closing `*/`. Swallow the rest of the file rather than tokenizing the
     // comment body as code, and report where the comment started.
@@ -228,7 +220,7 @@ export class Tokenizer implements Tokens.Source {
         }
         if (p === start + 1 && !isNumberChar(s.charCodeAt(p))) return undefined;
         const text = this.numDigits(start, start + 1, p, digits, 'hex');
-        return {token: 'num', num: +('0x' + text), width: Math.ceil(digits / 2), radix: 16};
+        return Tokens.numToken(+('0x' + text), undefined, Math.ceil(digits / 2), 16);
       }
       case 0x25 /* % */: {
         for (p++;; p++) {
@@ -238,7 +230,7 @@ export class Tokenizer implements Tokens.Source {
         }
         if (p === start + 1 && !isNumberChar(s.charCodeAt(p))) return undefined;
         const text = this.numDigits(start, start + 1, p, digits, 'binary');
-        return {token: 'num', num: +('0b' + text), width: Math.ceil(digits / 8), radix: 2};
+        return Tokens.numToken(+('0b' + text), undefined, Math.ceil(digits / 8), 2);
       }
       default: {
         for (;; p++) {
@@ -247,7 +239,7 @@ export class Tokenizer implements Tokens.Source {
           else if (!(sep && c === 0x5f /* _ */)) break;
         }
         const text = this.numDigits(start, start, p, digits, 'decimal');
-        return {token: 'num', num: +text, radix: 10};
+        return Tokens.numToken(+text, undefined, undefined, 10);
       }
     }
   }
@@ -289,7 +281,7 @@ export class Tokenizer implements Tokens.Source {
     const str = c === 0x61 /* a */ || c === 0x41 /* A */ ? 'a:' :
         c === 0x7a /* z */ || c === 0x5a /* Z */ ? 'z:' : 'f:';
     buf.punct(str);
-    return {token: 'op', str};
+    return Tokens.strToken('op', str);
   }
 
   /** `a`, `x` and `y` name registers, in either case. */
@@ -312,11 +304,8 @@ export class Tokenizer implements Tokens.Source {
     if (this.buffer.eof()) return Tokens.EOF;
 
     // remember position of non-whitespace
-    const source: Tokens.SourceInfo = {
-      file: this.file,
-      line: this.buffer.line,
-      column: this.buffer.column,
-    };
+    const source = Tokens.sourceInfo(this.file, this.buffer.line,
+                                     this.buffer.column);
     try {
       const tok = this.tokenInternal();
       if (this.opts.generateDebugInfo) {
@@ -358,7 +347,7 @@ export class Tokenizer implements Tokens.Source {
       case 0x0a /* \n */:
       case 0x0d /* \r */:
         buf.newline();
-        return {token: 'eol'};
+        return Tokens.nullToken('eol');
       case 0x40 /* @ */:
         // An `@` ident can never be a register, so there is no case to normalize.
         buf.token(RE_AT_IDENT);
@@ -370,12 +359,12 @@ export class Tokenizer implements Tokens.Source {
       case 0x22 /* " */: case 0x27 /* ' */:
         buf.token(RE_STRING_START);
         return this.tokenizeStr();
-      case 0x5b /* [ */: buf.punct('['); return {token: 'lb'};
-      case 0x7b /* { */: buf.punct('{'); return {token: 'lc'};
-      case 0x28 /* ( */: buf.punct('('); return {token: 'lp'};
-      case 0x5d /* ] */: buf.punct(']'); return {token: 'rb'};
-      case 0x7d /* } */: buf.punct('}'); return {token: 'rc'};
-      case 0x29 /* ) */: buf.punct(')'); return {token: 'rp'};
+      case 0x5b /* [ */: buf.punct('['); return Tokens.nullToken('lb');
+      case 0x7b /* { */: buf.punct('{'); return Tokens.nullToken('lc');
+      case 0x28 /* ( */: buf.punct('('); return Tokens.nullToken('lp');
+      case 0x5d /* ] */: buf.punct(']'); return Tokens.nullToken('rb');
+      case 0x7d /* } */: buf.punct('}'); return Tokens.nullToken('rc');
+      case 0x29 /* ) */: buf.punct(')'); return Tokens.nullToken('rp');
       case 0x5c /* \ */:
         // `skipIgnored` takes a backslash that continues a line, and only with the
         // feature on, so whatever reaches here either ends a statement or is stray.
@@ -411,13 +400,13 @@ export class Tokenizer implements Tokens.Source {
 
   private separator(ch: string): Token {
     const buf = this.buffer;
-    const source = {file: this.file, line: buf.line, column: buf.column};
+    const source = Tokens.sourceInfo(this.file, buf.line, buf.column);
     buf.punct(ch);
     // Check to see if we have a `\ \n` pattern which is too close to a line
     // continuation, and it may be a mistake.
     if (ch === '\\')
       this.separatorAtEol(source);
-    return {token: 'eol'};
+    return Tokens.nullToken('eol');
   }
 
   private separatorAtEol(source: Tokens.SourceInfo): void {
@@ -447,11 +436,9 @@ export class Tokenizer implements Tokens.Source {
       if (addrSize) return addrSize;
     }
     this.buffer.token(RE_IDENT);
-    const tok = this.strTok('ident') as Tokens.StringToken;
-    if (tok.str.length === 1 && this.isRegister(c)) {
-      tok.str = tok.str.toLowerCase();
-    }
-    return tok;
+    const str = this.buffer.group()!;
+    return Tokens.strToken(
+        'ident', str.length === 1 && this.isRegister(c) ? str.toLowerCase() : str);
   }
 
   private tokenizeStr(): Token {
@@ -467,7 +454,7 @@ export class Tokenizer implements Tokens.Source {
       // still tokenizes normally.
       if (b.eof() || b.lookingAt(NEWLINE)) {
         this.unterminated(`Unterminated string, expected ${end}`,
-                          {file: this.file, line: startLine, column: startColumn});
+                          Tokens.sourceInfo(this.file, startLine, startColumn));
         return this.makeStrToken(end, str);
       }
       if (b.token(RE_UNICODE_ESC)) {
@@ -487,7 +474,8 @@ export class Tokenizer implements Tokens.Source {
 
   /** mark single quoted strings as 'char' so they can be used as numeric literals later */
   private makeStrToken(quote: string, str: string): Token {
-    return quote === `'` ? {token: 'str', str, char: true} : {token: 'str', str};
+    return Tokens.strToken('str', str, undefined, undefined,
+                           quote === `'` ? true : undefined);
   }
 
   /**
@@ -501,20 +489,17 @@ export class Tokenizer implements Tokens.Source {
   }
 
   protected strTok(token: Tokens.StringToken['token']): Token {
-    return {token, str: this.buffer.group()!};
+    return Tokens.strToken(token, this.buffer.group()!);
   }
 
   private csTok(): Token {
-    let grp = this.buffer.group()!;
+    const grp = this.buffer.group()!;
     const lower = grp.toLowerCase();
     if (this.opts.leadingDotInIdentifiers && !Tokens.CS_KEYWORDS.has(lower)) {
-      return {token: 'ident', str: lower};
+      return Tokens.strToken('ident', lower);
     }
-    return {
-      token: 'cs', 
-      str: Tokens.CS_TOKEN_ALIAS_MAP.get(grp.toLowerCase()) ?? grp.toLowerCase(),
-      rawStr: grp,
-    };
+    return Tokens.strToken(
+        'cs', Tokens.CS_TOKEN_ALIAS_MAP.get(lower) ?? lower, undefined, grp);
   }
 
 }
