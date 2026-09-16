@@ -91,8 +91,14 @@ runs:
       run: |
         set -euo pipefail
         if [ "$RUNNER_OS" = "macOS" ]; then
-          brew install llvm@22
+          brew install llvm@22 lld@22
           LLVM_BIN="$(brew --prefix llvm@22)/bin"
+          # Unlike Apple Clang, Homebrew clang does not imply an SDK, so the
+          # macOS headers have to be pointed at explicitly.
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          export SDKROOT
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          echo "$(brew --prefix lld@22)/bin" >> "$GITHUB_PATH"
         else
           . /etc/os-release
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
@@ -106,6 +112,12 @@ runs:
         echo "$LLVM_BIN" >> "$GITHUB_PATH"
         "$LLVM_BIN/clang" --version
         "$LLVM_BIN/llvm-profdata" --version
+        # Compile and link a real TU so a missing SDK or C++ runtime fails here,
+        # with a readable error, instead of thousands of lines into Hermes.
+        echo '#include <cstdio>
+        int main() { std::printf("toolchain ok\n"); return 0; }' > /tmp/probe.cpp
+        "$LLVM_BIN/clang++" -std=c++17 /tmp/probe.cpp -o /tmp/probe
+        /tmp/probe
     - name: Cache instrumented shermes build
       id: shermes-pgogen-cache
       if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true'
