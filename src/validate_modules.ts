@@ -11,7 +11,7 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, Segment, Substitution, Symbol } from './module.ts';
+import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -371,6 +371,36 @@ function validateLateAssembly(v: unknown, path: string): LateAssembly {
   return { sizeQueries, condQueries, globalKinds, stream, opts };
 }
 
+function reqOffset(v: unknown, path: string): number {
+  const n = reqNumber(v, path);
+  if (!Number.isInteger(n) || n < 0) fail(path, 'expected non-negative integer');
+  return n;
+}
+
+function validateRomPatch(v: unknown, path: string): RomPatch {
+  if (!isObject(v)) fail(path, 'expected object');
+  const newLength = reqOffset(v.newLength, `${path}.newLength`);
+  let end = 0;
+  const runs = reqArray(v.runs, `${path}.runs`).map((r, i): RomPatchRun => {
+    const runPath = `${path}.runs[${i}]`;
+    if (!isObject(r)) fail(runPath, 'expected object');
+    const offset = reqOffset(r.offset, `${runPath}.offset`);
+    if (typeof r.data !== 'string') fail(`${runPath}.data`, 'expected base64 string');
+    let data: Uint8Array;
+    try {
+      data = new Base64().decode(r.data);
+    } catch {
+      fail(`${runPath}.data`, 'invalid base64');
+    }
+    // The link-time merge relies on runs being ordered and inside the ROM
+    if (offset < end) fail(runPath, 'runs must be sorted and non-overlapping');
+    end = offset + data.length;
+    if (end > newLength) fail(runPath, `run ends at ${end}, past newLength ${newLength}`);
+    return { offset, data };
+  });
+  return { newLength, runs };
+}
+
 /**
  * Validate a parsed-JSON object as a serialized Module (`.o` file).
  */
@@ -404,6 +434,9 @@ export function parseModule(obj: unknown): Validated<Module> {
     if (obj.autoImports !== undefined) {
       out.autoImports = reqArray(obj.autoImports, 'module.autoImports')
         .map((a, i) => validateAutoImport(a, `module.autoImports[${i}]`));
+    }
+    if (obj.romPatch !== undefined) {
+      out.romPatch = validateRomPatch(obj.romPatch, 'module.romPatch');
     }
     return { ok: true, value: out };
   } catch (err) {

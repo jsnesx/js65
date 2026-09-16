@@ -354,6 +354,41 @@ start:
     if (!r.ok) expect(r.error).toContain('lateAssembly.stream');
   });
 
+  it('round-trips a romPatch through a .o', () => {
+    const m: Module = {
+      name: 'patch',
+      romPatch: {
+        newLength: 0x20,
+        runs: [
+          { offset: 0x02, data: new Uint8Array([0xde, 0xad]) },
+          { offset: 0x1f, data: new Uint8Array([0xff]) },
+        ],
+      },
+    };
+    const roundTripped = deserializeObjectFile(serializeObjectFile(m));
+    expect(roundTripped.romPatch).toEqual(m.romPatch!);
+    expect(roundTripped.romPatch!.runs[0].data).toBeInstanceOf(Uint8Array);
+  });
+
+  it('rejects a malformed romPatch', () => {
+    const cases: [unknown, string][] = [
+      ['nope', 'module.romPatch: expected object'],
+      [{ runs: [] }, 'module.romPatch.newLength'],
+      [{ newLength: -1, runs: [] }, 'module.romPatch.newLength'],
+      [{ newLength: 4, runs: 'nope' }, 'module.romPatch.runs'],
+      [{ newLength: 4, runs: [{ offset: 1.5, data: b64([1]) }] }, 'module.romPatch.runs[0].offset'],
+      [{ newLength: 4, runs: [{ offset: 0, data: [1] }] }, 'module.romPatch.runs[0].data'],
+      [{ newLength: 4, runs: [{ offset: 0, data: '!!!not base64!!!' }] }, 'module.romPatch.runs[0].data'],
+      [{ newLength: 4, runs: [{ offset: 3, data: b64([1, 2]) }] }, 'past newLength'],
+      [{ newLength: 8, runs: [{ offset: 0, data: b64([1, 2]) }, { offset: 1, data: b64([3]) }] }, 'sorted and non-overlapping'],
+    ];
+    for (const [romPatch, msg] of cases) {
+      const r = parseModule({ romPatch });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain(msg);
+    }
+  });
+
   it('rejects a truncated (non-array) lateAssembly.condQueries', () => {
     const r = parseModule({
       lateAssembly: { sizeQueries: [], condQueries: 'nope', globalKinds: {}, stream: [], opts: {} },
@@ -419,12 +454,12 @@ describe('module format version', () => {
   it('refuses a hand-edited stale version', () => {
     const stale = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ version: 0, chunks: [] })));
     expect(() => deserializeObjectFile(stale, 'stale.o'))
-      .toThrow(/stale\.o: stale module format \(got 0, need 2\); rebuild the \.o file/);
+      .toThrow(/stale\.o: stale module format \(got 0, need 3\); rebuild the \.o file/);
   });
 
   it('treats a missing version as stale', () => {
     const noVersion = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ chunks: [] })));
     expect(() => deserializeObjectFile(noVersion, 'noversion.o'))
-      .toThrow(/noversion\.o: stale module format \(got none, need 2\); rebuild the \.o file/);
+      .toThrow(/noversion\.o: stale module format \(got none, need 3\); rebuild the \.o file/);
   });
 });

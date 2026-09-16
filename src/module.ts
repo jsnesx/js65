@@ -203,7 +203,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 2;
+export const MODULE_FORMAT_VERSION = 3;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {
@@ -233,6 +233,21 @@ export interface LateAssembly {
   opts: AssemblerOptions;
 }
 
+/** One contiguous run of bytes a JS block wrote into the base ROM. */
+export interface RomPatchRun {
+  offset: number;
+  /** Named `data` so serializeModule base64-encodes it like chunk data. */
+  data: Uint8Array;
+}
+
+/** Sparse base ROM edits made by one module's JS blocks, merged at link time. */
+export interface RomPatch {
+  /** ROM length when the module finished, which may be past the base ROM end. */
+  newLength: number;
+  /** Sorted by offset, non-overlapping, and within newLength. */
+  runs: RomPatchRun[];
+}
+
 export interface Module {
   /** .o format version this module was serialized with. */
   version?: number;
@@ -250,4 +265,6 @@ export interface Module {
   lateAssembly?: LateAssembly;
   /** All undefined symbols turned into imports */
   autoImports?: AutoImport[];
+  /** Present only when a JS block edited the base ROM. */
+  romPatch?: RomPatch;
 }
