@@ -83,8 +83,29 @@ runs:
           hermes/build/external/boost
         # runner.arch is part of the key because these are native binaries and
         # the x64 and arm64 Linux runners both report runner.os == 'Linux'.
-        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v3${{ steps.pgo.outputs.enabled == 'true' && format('-pgo-{0}-{1}', inputs.pgo-ref, hashFiles(inputs.pgo-source-paths)) || '' }}
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v5${{ steps.pgo.outputs.enabled == 'true' && format('-pgo-{0}-{1}', inputs.pgo-ref, hashFiles(inputs.pgo-source-paths)) || '' }}
 
+    - name: Load a full LLVM toolchain (macOS/Linux)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          brew install llvm@22
+          LLVM_BIN="$(brew --prefix llvm@22)/bin"
+        else
+          . /etc/os-release
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/llvm.asc > /dev/null
+          echo "deb http://apt.llvm.org/$VERSION_CODENAME/ llvm-toolchain-$VERSION_CODENAME-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update
+          sudo apt-get install -y llvm-22 clang-22 lld-22 libclang-rt-22-dev
+          LLVM_BIN=/usr/lib/llvm-22/bin
+        fi
+        echo "$LLVM_BIN" >> "$GITHUB_PATH"
+        "$LLVM_BIN/clang" --version
+        "$LLVM_BIN/llvm-profdata" --version
     - name: Cache instrumented shermes build
       id: shermes-pgogen-cache
       if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true'
@@ -96,7 +117,7 @@ runs:
           hermes/build-pgogen/tools/shermes
           hermes/build-pgogen/jsi
           hermes/build-pgogen/external/boost
-        key: shermes-pgogen-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-v1
+        key: shermes-pgogen-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-v3
     - name: Build instrumented shermes
       if: steps.pgo.outputs.enabled == 'true' && steps.shermes-cache.outputs.cache-hit != 'true' && steps.shermes-pgogen-cache.outputs.cache-hit != 'true'
       shell: bash
