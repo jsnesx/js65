@@ -120,6 +120,8 @@ export interface AssemblerOptions {
   jsActions?: JsActionTable;
   /** Enables the Javascript Preprocessor. Without this .js* will error out. */
   allowJavascript?: boolean;
+  /** Base ROM exposed to `.jsbegin` blocks as `baserom`. Edits land in `Module.romPatch`. */
+  baseRom?: Uint8Array;
 
   lineContinuations?: boolean;
   numberSeparators?: boolean;
@@ -439,6 +441,7 @@ export function assemble(
         callbacks,
         includePaths: options?.includePaths,
         binIncludePaths: options?.binIncludePaths,
+        baseRom: options?.baseRom,
       });
 
       // Tokenize and assemble source code
@@ -455,6 +458,8 @@ export function assemble(
 
       const module = asm.module();
       module.name = input.name;
+      const romPatch = staged.romPatch?.();
+      if (romPatch) module.romPatch = romPatch;
       modules.push(module);
       moduleMessages.push([...asm.getMessages()]);
 
@@ -742,6 +747,7 @@ export function compile(
       defines: options.defines,
       features: options.features,
       allowJavascript: options.allowJavascript,
+      baseRom,
       allowBrackets: options.allowBrackets,
       labelsWithoutColons: options.labelsWithoutColons,
       pcAssignment: options.pcAssignment,

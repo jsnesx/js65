@@ -504,6 +504,117 @@ describe('a block running inside the assembler', function() {
   });
 });
 
+describe('baserom', function() {
+  const block = (body: string) => `.jsbegin\n${body}\n.jsend\n`;
+  /** Plain arrays for readable expectations. */
+  const runsOf = (r: ReturnType<typeof run>) =>
+      r.romPatch!()?.runs.map(x => [x.offset, [...x.data]]);
+
+  it('reads the base bytes', function() {
+    const r = run(block('a.byte([baserom[1], baserom.length]);'), {},
+                  {baseRom: new Uint8Array([7, 8, 9])});
+    expect(r.actions[0][0]).toMatchObject({action: 'byte', bytes: [8, 3]});
+  });
+
+  it('never touches the caller ROM', function() {
+    const base = new Uint8Array([1, 2, 3, 4]);
+    const r = run(block('baserom[0] = 9; baserom.buffer.resize(8);'), {}, {baseRom: base});
+    expect(r.romPatch!()!.newLength).toBe(8);
+    expect([...base]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('has no patch when nothing changed', function() {
+    const r = run(block('baserom[1] = 2;'), {}, {baseRom: new Uint8Array([1, 2, 3])});
+    expect(r.romPatch!()).toBeUndefined();
+  });
+
+  it('records scattered writes as separate runs', function() {
+    const r = run(block('baserom[1] = 0xaa; baserom[2] = 0xbb; baserom[4] = 0xcc; baserom[15] = 0xdd;'),
+                  {}, {baseRom: new Uint8Array(16)});
+    expect(runsOf(r)).toEqual([[1, [0xaa, 0xbb]], [4, [0xcc]], [15, [0xdd]]]);
+    expect(r.romPatch!()!.newLength).toBe(16);
+  });
+
+  it('does not alias run data to the live ROM', function() {
+    const r = run(block('baserom[0] += 1;'), {}, {baseRom: new Uint8Array(4)});
+    const patch = r.romPatch!()!;
+    r.jsActions.run(0, NO_SYMBOLS);
+    expect([...patch.runs[0].data]).toEqual([1]);
+  });
+
+  it('lets a later block see an earlier block write', function() {
+    const r = run(block('baserom[0] = 5;') + block('a.byte(baserom[0]);'), {},
+                  {baseRom: new Uint8Array(1)});
+    expect(r.actions[1][0]).toMatchObject({bytes: [5]});
+  });
+
+  it('grows and records writes into the new tail', function() {
+    const r = run(block('baserom.buffer.resize(6); baserom[4] = 0x55;'), {},
+                  {baseRom: new Uint8Array([1, 2])});
+    expect(r.romPatch!()).toEqual(
+        {newLength: 6, runs: [{offset: 4, data: new Uint8Array([0x55])}]});
+  });
+
+  it('records growth alone with no runs', function() {
+    const r = run(block('baserom.buffer.resize(4);'), {}, {baseRom: new Uint8Array([1, 2])});
+    expect(r.romPatch!()).toEqual({newLength: 4, runs: []});
+  });
+
+  it('binds an empty growable array with no base ROM', function() {
+    const r = run(block(
+        'a.byte([baserom instanceof Uint8Array ? 1 : 0, baserom.length]);' +
+        'baserom.buffer.resize(3); baserom[2] = 7;'));
+    expect(r.actions[0][0]).toMatchObject({bytes: [1, 0]});
+    expect(runsOf(r)).toEqual([[2, [7]]]);
+  });
+
+  it('refuses to grow past the cap', function() {
+    expect(() => run(block('baserom.buffer.resize(baserom.buffer.maxByteLength + 1);')))
+        .toThrow(/JavaScript block failed/);
+  });
+
+  it('reports a detached buffer against the file', function() {
+    const r = run(block('baserom.buffer.transfer();'), {}, {baseRom: new Uint8Array(4)});
+    expect(() => r.romPatch!()).toThrow(/detached/);
+  });
+
+  it('rejects shrinking below the base length', function() {
+    const r = run(block('baserom.buffer.resize(2);'), {}, {baseRom: new Uint8Array(4)});
+    expect(() => r.romPatch!()).toThrow(/shrunk from 4 to 2/);
+  });
+
+  it('rejects a .jsinput that would shadow it', function() {
+    expect(() => run('.jsinput baserom, "x.bin"\n', {'x.bin': 'x'}))
+        .toThrow(/cannot be named baserom/);
+  });
+
+  it('lands in the module and keeps modules isolated', function() {
+    const result = assemble([
+      {type: 'source', name: 'one.s', code: block('baserom[0] = 0x11;')},
+      {type: 'source', name: 'two.s', code: block('a.byte(baserom[0]); baserom[1] = 0x22;')},
+      {type: 'source', name: 'three.s', code: '.byte 1\n'},
+    ], {allowJavascript: true, baseRom: new Uint8Array([0xee, 0xee])});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    const [one, two, three] = result.modules;
+    expect(one.romPatch).toEqual({newLength: 2, runs: [{offset: 0, data: new Uint8Array([0x11])}]});
+    expect(two.romPatch).toEqual({newLength: 2, runs: [{offset: 1, data: new Uint8Array([0x22])}]});
+    expect(three.romPatch).toBeUndefined();
+    // two.s saw the pristine byte, not one.s's edit
+    expect([...two.chunks![0].data]).toEqual([0xee]);
+  });
+
+  it('reports a bad ROM state as an assembly error', function() {
+    const result = assemble([{type: 'source', name: 'bad.s',
+                              code: '\n' + block('baserom.buffer.transfer();')}],
+                            {allowJavascript: true});
+    expect(result.success).toBe(false);
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('detached'),
+      source: expect.objectContaining({file: 'bad.s', line: 2}),
+    }));
+  });
+});
+
 describe('jsPreprocess scanning', function() {
   it('ignores a marker that is not the first thing on its line', function() {
     const code = '  lda #3 ; .jsbegin\n';

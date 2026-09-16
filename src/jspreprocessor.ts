@@ -8,6 +8,7 @@ import { SourceError, type SourceInfo } from './error.ts';
 import { JS_MODULES, jsModuleMap, jsModuleNames } from './jsmodule/index.ts';
 import { mapPosition } from './jsmodule/sourcemap.ts';
 import type { FileCallbacks } from './libassembler.ts';
+import type { RomPatch, RomPatchRun } from './module.ts';
 import type { JsActionTable, JsBlockContext } from './options.ts';
 import { dirOf, joinDir } from './util.ts';
 
@@ -17,6 +18,7 @@ export interface JsPreprocessOptions {
   callbacks?: FileCallbacks;
   includePaths?: string[];
   binIncludePaths?: string[];
+  baseRom?: Uint8Array;
 }
 
 export interface JsPreprocessResult {
@@ -26,6 +28,11 @@ export interface JsPreprocessResult {
   usedJavascript: boolean;
   /** How many blocks were compiled, so the frontend can report where JS lives. */
   blocks: number;
+  /**
+   * Diffs the file's `baserom` against the base once its blocks have run.
+   * Undefined when the file has no JavaScript.
+   */
+  romPatch?: () => RomPatch | undefined;
 }
 
 /** One `.jsinput` binding: a file's path plus its contents both ways. */
@@ -161,6 +168,8 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
       } else {
         const args = RE_INPUT_ARGS.exec(rest);
         if (!args) fail(file, lineNo, `Expected .jsinput <name>, "<path>"`);
+        // Inputs spread last into the block scope, so this would silently win
+        if (args[1] === 'baserom') fail(file, lineNo, `.jsinput cannot be named baserom`);
         decls.inputs.push(
             {name: args[1], pattern: unquote(file, lineNo, args[2]), line: lineNo});
       }
@@ -250,6 +259,41 @@ function resolveInputs(file: string, decls: Declarations,
     });
   }
   return scope;
+}
+
+/** Space is reserved not committed until used, so this isn't affecting ram usage by default */
+const BASEROM_MAX_LENGTH = 32 * 1024 * 1024; // 32 MB
+
+/** A copy of `base` in a resizable buffer, so blocks can grow it in place. */
+function growableRom(base: Uint8Array): Uint8Array<ArrayBuffer> {
+  const buffer = new ArrayBuffer(base.length, {
+    maxByteLength: Math.max(BASEROM_MAX_LENGTH, base.length),
+  });
+  const rom = new Uint8Array(buffer);
+  rom.set(base);
+  return rom;
+}
+
+function diffRom(base: Uint8Array, rom: Uint8Array<ArrayBuffer>): RomPatch | undefined {
+  if (rom.buffer.detached) {
+    throw new Error('baserom buffer was detached (transfer() is not allowed)');
+  }
+  const newLength = rom.length;
+  // The link-time merge keeps the largest length, so a shrink could never apply
+  if (newLength < base.length) {
+    throw new Error(`baserom was shrunk from ${base.length} to ${newLength} bytes; the ROM can only grow`);
+  }
+  const runs: RomPatchRun[] = [];
+  let i = 0;
+  while (i < newLength) {
+    if (rom[i] === (base[i] ?? 0)) { i++; continue; }
+    const start = i;
+    while (i < newLength && rom[i] !== (base[i] ?? 0)) i++;
+    // slice, not subarray: the run must not alias the live buffer
+    runs.push({ offset: start, data: rom.slice(start, i) });
+  }
+  if (!runs.length && newLength === base.length) return undefined;
+  return { newLength, runs };
 }
 
 /** Where a segment lands in the combined code, ordered by `start`. */
@@ -374,6 +418,8 @@ export function jsPreprocess(code: string, file: string,
 
   const out = [...lines];
   const jsDeflate = deflate();
+  const base = opts.baseRom ?? new Uint8Array(0);
+  const baserom = growableRom(base);
   for (const b of blocks) {
     // The body starts on the line after `.jsbegin`.
     const {code: src, spans} =
@@ -381,7 +427,7 @@ export function jsPreprocess(code: string, file: string,
     const index = opts.jsActions.add(ctx => {
       const a = new AsmModule(file, {file, line: b.start});
       try {
-        engine.run(src, {a, defines: definesView(ctx),
+        engine.run(src, {a, defines: definesView(ctx), baserom,
                          __js65_deflate: jsDeflate, ...inputs});
       } catch (err) {
         throw blockError(err, file, b, spans);
@@ -397,5 +443,12 @@ export function jsPreprocess(code: string, file: string,
     if (m && m[1].toLowerCase() === '.jsinclude') out[i] = '';
   }
 
-  return {code: out.join('\n'), usedJavascript: true, blocks: blocks.length};
+  const romPatch = () => {
+    try {
+      return diffRom(base, baserom);
+    } catch (err) {
+      fail(file, blocks[0]?.start ?? 1, (err as Error).message);
+    }
+  };
+  return {code: out.join('\n'), usedJavascript: true, blocks: blocks.length, romPatch};
 }
