@@ -19,12 +19,23 @@ if [ -n "$EXTRA_FLAGS" ]; then
   CONFIG_FLAGS="$CONFIG_FLAGS $EXTRA_FLAGS"
 fi
 
+# Pass the -fprofile flags to the linker too
+LINK_FLAGS=""
+for f in $EXTRA_FLAGS; do
+  case "$f" in
+    -fprofile-*) LINK_FLAGS="$LINK_FLAGS $f" ;;
+  esac
+done
+
 # We use GNU clang across all platforms (even windows) because in my testing,
 # clang produces much much faster shermes code. I'm guessing its because
 # computed goto in clang makes for much faster interpreters, so its just always
 # gonna be better than msvc builds.
 cmake -S hermes -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=$LINK_FLAGS" \
+  "-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=$LINK_FLAGS" \
+  "-DCMAKE_MODULE_LINKER_FLAGS_RELEASE=$LINK_FLAGS" \
   -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DHERMES_ALLOW_BOOST_CONTEXT=1 \

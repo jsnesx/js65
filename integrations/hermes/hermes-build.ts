@@ -93,6 +93,10 @@ const LINKER = isMac ? [] : ['-fuse-ld=lld'];
 const PIC = isWin ? [] : ['-fPIC'];
 const VISIBILITY = isWin ? [] : ['-fvisibility=hidden'];
 
+// When linking against an instrumented Hermes VM, the driver needs the same
+// -fprofile-generate so it pulls in compiler-rt's profile runtime.
+const PROFILE = env('JS65_PROFILE_FLAGS', '').split(' ').filter((f) => f);
+
 // boost_context lives under external/boost/<version>/libs/context; the version
 // is pinned by the Hermes build, so locate it rather than hard-code it. Fail
 // loudly if it can't be found so the error is actionable, instead of guessing a
@@ -174,7 +178,7 @@ compileC('integrations/hermes/third_party/miniz/miniz.c', 'miniz.o');
 // 4. link the unit + core + an entry object against the static Hermes VM libs.
 const link = (out: string, entryObj: string, extra: string[]) =>
   run(`link ${out}`, CLANGXX, [
-    ...CRT, ...LTO, ...LINKER, ...extra,
+    ...CRT, ...LTO, ...LINKER, ...PROFILE, ...extra,
     'build/hermes.unit.o', 'build/hermes_core.o', 'build/miniz.o', `build/${entryObj}`, '-o', out,
     ...LIBDIRS.map((d) => `-L${d}`),
     ...LIBS.map((l) => `-l${l}`),

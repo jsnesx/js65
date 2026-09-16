@@ -71,6 +71,7 @@
     "profile": "bun run bench/profile.ts",
     "cpuprof": "bun run bench/cpuprof.ts",
     "verify": "bun run bench/verify.ts",
+    "hermes-pgo": "bun run bench/hermespgo.ts",
     "build:npm": "bun run jsmodules && tsc -p tsconfig.build.json",
     "prepack": "bun run jsmodules && tsc -p tsconfig.build.json",
     "typecheck": "bun run jsmodules && tsc -p tsconfig.json"

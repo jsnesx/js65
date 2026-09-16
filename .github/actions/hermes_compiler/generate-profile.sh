@@ -32,6 +32,7 @@ export LLVM_PROFILE_FILE="$RAW_DIR/discard/shermes-%p.profraw"
 HERMES_SRC="$WORKSPACE/hermes" \
 HERMES_BUILD="$INSTRUMENTED" \
 HERMES_CONFIG='' \
+JS65_PROFILE_FLAGS='-fprofile-generate' \
   bun run hermes-exe
 
 export LLVM_PROFILE_FILE="$RAW_DIR/train-%p.profraw"
