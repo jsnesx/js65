@@ -19,11 +19,11 @@ if [ -n "$EXTRA_FLAGS" ]; then
   CONFIG_FLAGS="$CONFIG_FLAGS $EXTRA_FLAGS"
 fi
 
-# Pass the -fprofile flags to the linker too
+# Pass the -fprofile-generate flags to the linker too
 LINK_FLAGS=""
 for f in $EXTRA_FLAGS; do
   case "$f" in
-    -fprofile-*) LINK_FLAGS="$LINK_FLAGS $f" ;;
+    -fprofile-generate*) LINK_FLAGS="$LINK_FLAGS $f" ;;
   esac
 done
 

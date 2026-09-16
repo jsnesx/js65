@@ -61,3 +61,9 @@ fi
 
 "$PROFDATA" merge -output="$OUT" "${RAW[@]}"
 "$PROFDATA" show "$OUT" | head -n 20
+
+# The training build wrote an instrumented js65 and its objects into the shared
+# build/ dir. Drop them so the caller's real build and tests don't pick them up.
+rm -rf "$RAW_DIR"
+rm -f "$WORKSPACE/build/js65$EXE" "$WORKSPACE/build"/*.o
+rm -f "$WORKSPACE/build/js65.dll" "$WORKSPACE/build/libjs65.so" "$WORKSPACE/build/libjs65.dylib"
