@@ -71,3 +71,8 @@ const cli = new Cli({
 export async function main(args: string[]) {
   await cli.run(args);
 }
+
+main(process.argv.slice(2)).then(
+  () => process.exit(process.exitCode ?? 0),
+  () => process.exit(1),   // run() already printed the diagnostic
+);

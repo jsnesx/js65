@@ -1,7 +1,6 @@
-# The VSIX is the esbuild bundle plus the js65 package tree under `server/`,
-# which the extension forks as `js65 lsp`. Packaged with `--no-dependencies`, so
-# the extension's own node_modules never ships; `server/node_modules` is the
-# server's runtime deps and is copied in deliberately.
+# The VSIX is the esbuild bundle plus `server/js65.mjs`, the single-file js65
+# bundle the extension forks as `js65 lsp`. Packaged with `--no-dependencies`,
+# so no node_modules ships at all.
 # `dist/extension.js` and `server/**` are deliberately absent from this list.
 .vscode/**
 .vscode-test/**

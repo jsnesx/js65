@@ -1,6 +1,3 @@
 #!/usr/bin/env node
-import { main } from '../../dist/integrations/node.js';
-main(process.argv.slice(2)).then(
-  () => process.exit(process.exitCode ?? 0),
-  () => process.exit(1),   // run() already printed the diagnostic
-);
+// `node.js` runs itself when it is the entry or a worker, so this only loads it.
+import '../../dist/integrations/node.js';

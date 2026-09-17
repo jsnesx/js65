@@ -10,7 +10,7 @@ import { ExtensionContext, workspace } from 'vscode';
 import { ServerOptions, TransportKind } from 'vscode-languageclient/node';
 
 /** The js65 entry inside the bundled tree, relative to `server/`. */
-export const SERVER_BUNDLE = path.join('integrations', 'npm', 'js65.mjs');
+export const SERVER_BUNDLE = 'js65.mjs';
 
 /** Where a server module came from surfaced in the output channel. */
 export interface ResolvedServer {
