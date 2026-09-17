@@ -21,6 +21,56 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout js65
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: ".bun-version"
+      - name: Stamp the version from the git tag
+        run: bun run gen-version
+      - name: Install deps
+        run: bun install
+      - name: Run Test Cases
+        run: bun run test
+      - name: Build Bun release (js65-bun)
+        run: bun run exe
+      - name: Build integration library
+        run: bun run lib
+      - name: Stage binaries with their RID
+        shell: bash
+        run: |
+          mkdir -p "dist/bun"
+          # Both engines ship under the same file name so the two downloads are
+          # drop-in interchangeable; the artifact name says which engine it is.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp build/js65-bun.exe dist/bun/js65.exe
+          else
+            cp build/js65-bun dist/bun/js65
+          fi
+      - name: Upload js65 (bun engine)
+        uses: actions/upload-artifact@v7
+        with:
+          name: js65-bun-${{ matrix.rid }}
+          path: dist/bun/*
+          if-no-files-found: error
+
+  hermes-pgo:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
             dotnet: true
           - os: ubuntu-latest
             rid: linux-x64
@@ -35,6 +85,7 @@ jobs:
             rid: osx-arm64
             dotnet: true
     runs-on: ${{ matrix.os }}
+    needs: build
     steps:
       - name: Checkout js65
         uses: actions/checkout@v6
@@ -104,14 +155,6 @@ jobs:
           # Ninja is single-config, so there is no per-config output subdir.
           HERMES_CONFIG: ''
         run: bun run hermes-exe
-      - name: Run Test Cases
-        # `bun run test` rather than `bun test test`: it also builds the language
-        # server bundle and runs the lsp/server suite against it.
-        run: bun run test
-      - name: Build Bun release (js65-bun)
-        run: bun run exe
-      - name: Build integration library
-        run: bun run lib
       - name: Build desktop packages
         if: matrix.dotnet
         # The Hermes engine loads build/{js65.dll|libjs65.so|libjs65.dylib} in-process; those were
@@ -129,15 +172,13 @@ jobs:
       - name: Stage binaries with their RID
         shell: bash
         run: |
-          mkdir -p "dist/hermes" "dist/bun" "dist/lib/${{ matrix.rid }}"
+          mkdir -p "dist/hermes" "dist/lib/${{ matrix.rid }}"
           # Both engines ship under the same file name so the two downloads are
           # drop-in interchangeable; the artifact name says which engine it is.
           if [ "$RUNNER_OS" = "Windows" ]; then
             cp build/js65.exe dist/hermes/js65.exe
-            cp build/js65-bun.exe dist/bun/js65.exe
           else
             cp build/js65 dist/hermes/js65
-            cp build/js65-bun dist/bun/js65
           fi
           # Shared library consumed in-process by the js65.hermes engine. Keep the
           # platform filename (js65.dll | libjs65.so | libjs65.dylib) under a per-RID dir.
@@ -149,12 +190,6 @@ jobs:
         with:
           name: js65-${{ matrix.rid }}
           path: dist/hermes/*
-          if-no-files-found: error
-      - name: Upload js65 (bun engine)
-        uses: actions/upload-artifact@v7
-        with:
-          name: js65-bun-${{ matrix.rid }}
-          path: dist/bun/*
           if-no-files-found: error
       - name: Upload native shared library
         # Consumed by the package job, which aggregates every platform's native shared library
@@ -208,7 +243,7 @@ jobs:
 
   package:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, hermes-pgo]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -285,7 +320,7 @@ jobs:
     permissions:
       id-token: write  # enable GitHub OIDC token issuance for this job
     runs-on: ubuntu-latest
-    needs: package
+    needs: [build, package]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       # Get a short-lived NuGet API key
@@ -359,7 +394,7 @@ jobs:
           if-no-files-found: error
 
   publish-npm:
-    needs: npm-package
+    needs: [build, npm-package]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -414,7 +449,7 @@ jobs:
 
   github-release:
     runs-on: ubuntu-latest
-    needs: [build, vscode-extension, package, npm-package]
+    needs: [build, hermes-pgo, vscode-extension, package, npm-package]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -457,9 +492,11 @@ jobs:
 
   website:
     runs-on: ubuntu-latest
-    needs: github-release
+    needs: [build, github-release]
+    # always() only so the skipped-release path (a plain main push) still deploys.
     if: |
       always()
+      && needs.build.result == 'success'
       && (needs.github-release.result == 'success' || needs.github-release.result == 'skipped')
       && github.event_name != 'pull_request'
       && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
