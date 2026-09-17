@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {type MesenLabelFormat} from '../src/linker.ts';
+import {type MesenLabelFormat as LinkerLabel} from '../src/linker.ts';
 import {compile} from '../src/libassembler.ts';
 
 const DEFAULT_INIT = `
@@ -34,6 +34,9 @@ async function assembleAndGetDebugInfo(source: string, filename: string = 'test.
   // console.log("mlb ", mlb);
   return mlb;
 }
+
+/** An MLB line as written, with the address still formatted. */
+type MesenLabelFormat = Omit<LinkerLabel, 'start' | 'end'> & {address: string};
 
 function parseMlbLine(line: string): MesenLabelFormat | null {
   if (!line.trim()) return null;

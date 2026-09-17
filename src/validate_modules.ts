@@ -11,7 +11,7 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
+import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, JsPost, JsPostSource, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -401,6 +401,33 @@ function validateRomPatch(v: unknown, path: string): RomPatch {
   return { newLength, runs };
 }
 
+function validateJsPost(v: unknown, path: string): JsPost {
+  if (!isObject(v)) fail(path, 'expected object');
+  const file = reqString(v.file, `${path}.file`);
+  const prelude = reqArray(v.prelude, `${path}.prelude`).map((p, i): JsPostSource => {
+    const srcPath = `${path}.prelude[${i}]`;
+    if (!isObject(p)) fail(srcPath, 'expected object');
+    const out: JsPostSource = {
+      file: reqString(p.file, `${srcPath}.file`),
+      firstLine: reqNumber(p.firstLine, `${srcPath}.firstLine`),
+    };
+    const module = optString(p.module, `${srcPath}.module`);
+    if (module !== undefined) out.module = module;
+    const text = optString(p.text, `${srcPath}.text`);
+    if (text !== undefined) out.text = text;
+    if ((module === undefined) === (text === undefined)) fail(srcPath, 'expected one of module or text');
+    return out;
+  });
+  const blocks = reqArray(v.blocks, `${path}.blocks`).map((b, i) => {
+    const blockPath = `${path}.blocks[${i}]`;
+    if (!isObject(b)) fail(blockPath, 'expected object');
+    return { line: reqNumber(b.line, `${blockPath}.line`), body: reqString(b.body, `${blockPath}.body`) };
+  });
+  // The linker reports errors against the first block
+  if (!blocks.length) fail(`${path}.blocks`, 'expected at least one block');
+  return { file, prelude, blocks };
+}
+
 /**
  * Validate a parsed-JSON object as a serialized Module (`.o` file).
  */
@@ -437,6 +464,9 @@ export function parseModule(obj: unknown): Validated<Module> {
     }
     if (obj.romPatch !== undefined) {
       out.romPatch = validateRomPatch(obj.romPatch, 'module.romPatch');
+    }
+    if (obj.jsPost !== undefined) {
+      out.jsPost = validateJsPost(obj.jsPost, 'module.jsPost');
     }
     return { ok: true, value: out };
   } catch (err) {

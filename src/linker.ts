@@ -30,9 +30,19 @@ export interface Export {
 export type MesenLabelFormatType = "NesMemory"|"NesPrgRom"|"NesInternalRam"|"NesSaveRam"|"NesWorkRam";
 export interface MesenLabelFormat {
   type: MesenLabelFormatType,
-  address: string,
+  start: number,
+  /** Exclusive */
+  end: number,
   label: string,
   comment: string,
+}
+
+/** Mesen uses inclusive end addresses, so subtract 1 from end */
+function formatAddr(start: number, end: number): string {
+  if (end > start + 1) {
+    return `${start.toString(16)}-${(end - 1).toString(16)}`;
+  }
+  return start.toString(16);
 }
 
 const RE_COLON = /:/g;
@@ -71,6 +81,8 @@ export class Linker {
 
   private _link: Link;
   private _exports?: Map<string, Export>;
+  /** LabelName -> {} */
+  labelMap?: Map<string, MesenLabelFormat>;
 
   constructor(opts: LinkerOptions = {}) {
     this.opts = opts;
@@ -312,7 +324,7 @@ export class Linker {
 
     // Helper function to add or merge an entry into the labelMap
     const addLabel = (entry: MesenLabelFormat, isAnonTemp: boolean = false) => {
-      const key = `${entry.type}:${entry.address}`;
+      const key = `${entry.type}:${formatAddr(entry.start, entry.end)}`;
       const existing = labelMap.get(key);
 
       if (existing) {
@@ -389,7 +401,8 @@ export class Linker {
       const isAnonTemp = isAnonTempLabel(s.expr.sym!);
       addLabel({
         type: labelType,
-        address: `${addr.toString(16)}`,
+        start: addr,
+        end: addr + 1,
         label: s.expr.sym!,
         comment
       }, isAnonTemp);
@@ -439,7 +452,8 @@ export class Linker {
         // Labels from chunk labelIndex are real labels, not anonymous/temp
         addLabel({
           type: labelType,
-          address: addr.toString(16),
+          start: addr,
+          end: addr + 1,
           label: labelName,
           comment
         }, false);
@@ -478,15 +492,6 @@ export class Linker {
 
         seenLabels.add(n);
 
-        // Format address as range if more than one byte, otherwise single address
-        // Mesen uses inclusive end addresses, so subtract 1 from end
-        const formatAddr = (start: number, end: number) => {
-          if (end > start + 1) {
-            return `${start.toString(16)}-${(end - 1).toString(16)}`;
-          }
-          return start.toString(16);
-        };
-
         if (isRamChunk) {
           // For RAM, use org address directly with proper type
           const memAddrStart = c.org! + rangeStart;
@@ -507,7 +512,8 @@ export class Linker {
           // Labels from chunk labelIndex (via rev map) are real labels
           addLabel({
             type: labelType,
-            address: formatAddr(addrStart, addrEnd),
+            start: addrStart,
+            end: addrEnd,
             label: n,
             comment: comment,
           }, false);
@@ -518,7 +524,8 @@ export class Linker {
           // Labels from chunk labelIndex (via rev map) are real labels
           addLabel({
             type: "NesPrgRom",
-            address: formatAddr(prgRomOffsetStart, prgRomOffsetEnd),
+            start: prgRomOffsetStart,
+            end: prgRomOffsetEnd,
             label: n,
             comment: comment,
           }, false);
@@ -556,9 +563,16 @@ export class Linker {
       flushRange();
     }
 
+    // Merging above needs `type:address` keys, but a user looks a label up by name
+    this.labelMap = new Map();
+    for (const label of labelMap.values()) {
+      if (label.label && !this.labelMap.has(label.label)) {
+        this.labelMap.set(label.label, label);
+      }
+    }
     // Generate final output from the merged labelMap
     for (const label of labelMap.values()) {
-      data += `${label.type}:${label.address}:${label.label}:${label.comment}\n`;
+      data += `${label.type}:${formatAddr(label.start, label.end)}:${label.label}:${label.comment}\n`;
     }
     return data;
   }

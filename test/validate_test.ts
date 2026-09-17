@@ -389,6 +389,21 @@ start:
     }
   });
 
+  it('rejects a malformed jsPost', () => {
+    const cases: [unknown, string][] = [
+      ['nope', 'module.jsPost: expected object'],
+      [{ prelude: [], blocks: [{ line: 1, body: '' }] }, 'module.jsPost.file'],
+      [{ file: 'a.s', prelude: [{ file: 'x', firstLine: 1 }], blocks: [{ line: 1, body: '' }] }, 'one of module or text'],
+      [{ file: 'a.s', prelude: [], blocks: [] }, 'at least one block'],
+      [{ file: 'a.s', prelude: [], blocks: [{ line: 1 }] }, 'module.jsPost.blocks[0].body'],
+    ];
+    for (const [jsPost, msg] of cases) {
+      const r = parseModule({ jsPost });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain(msg);
+    }
+  });
+
   it('rejects a truncated (non-array) lateAssembly.condQueries', () => {
     const r = parseModule({
       lateAssembly: { sizeQueries: [], condQueries: 'nope', globalKinds: {}, stream: [], opts: {} },
@@ -454,12 +469,12 @@ describe('module format version', () => {
   it('refuses a hand-edited stale version', () => {
     const stale = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ version: 0, chunks: [] })));
     expect(() => deserializeObjectFile(stale, 'stale.o'))
-      .toThrow(/stale\.o: stale module format \(got 0, need 3\); rebuild the \.o file/);
+      .toThrow(/stale\.o: stale module format \(got 0, need 4\); rebuild the \.o file/);
   });
 
   it('treats a missing version as stale', () => {
     const noVersion = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ chunks: [] })));
     expect(() => deserializeObjectFile(noVersion, 'noversion.o'))
-      .toThrow(/noversion\.o: stale module format \(got none, need 3\); rebuild the \.o file/);
+      .toThrow(/noversion\.o: stale module format \(got none, need 4\); rebuild the \.o file/);
   });
 });

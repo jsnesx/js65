@@ -203,7 +203,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 3;
+export const MODULE_FORMAT_VERSION = 4;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {
@@ -248,6 +248,31 @@ export interface RomPatch {
   runs: RomPatchRun[];
 }
 
+/** Code that a link-time block runs ahead of its body (for .jsmodule/.jsinclude). */
+export interface JsPostSource {
+  file: string;
+  firstLine: number;
+  /** `.jsmodule` name. Its text is left out since the linker has its own copy. */
+  module?: string;
+  /** `.jsinclude` contents, frozen at assembly time. */
+  text?: string;
+}
+
+/** Code for the actual `.jspostbegin` block */
+export interface JsPostBlock {
+  /** 1-based line of the `.jspostbegin`. */
+  line: number;
+  body: string;
+}
+
+export interface JsPost {
+  file: string;
+  /** All of the jsinclude/module text imported */
+  prelude: JsPostSource[];
+  /** Each of the locations for the jspost blocks */
+  blocks: JsPostBlock[];
+}
+
 export interface Module {
   /** .o format version this module was serialized with. */
   version?: number;
@@ -267,4 +292,6 @@ export interface Module {
   autoImports?: AutoImport[];
   /** Present only when a JS block edited the base ROM. */
   romPatch?: RomPatch;
+  /** Present only when the source had `.jspostbegin` blocks. */
+  jsPost?: JsPost;
 }

@@ -8,7 +8,8 @@ import { SourceError, type SourceInfo } from './error.ts';
 import { JS_MODULES, jsModuleMap, jsModuleNames } from './jsmodule/index.ts';
 import { mapPosition } from './jsmodule/sourcemap.ts';
 import type { FileCallbacks } from './libassembler.ts';
-import type { RomPatch, RomPatchRun } from './module.ts';
+import type { MesenLabelFormat } from './linker.ts';
+import type { JsPost, RomPatch, RomPatchRun } from './module.ts';
 import type { JsActionTable, JsBlockContext } from './options.ts';
 import { dirOf, joinDir } from './util.ts';
 
@@ -33,6 +34,8 @@ export interface JsPreprocessResult {
    * Undefined when the file has no JavaScript.
    */
   romPatch?: () => RomPatch | undefined;
+  /** `.jspostbegin` blocks to store in the module for the linker to run. */
+  jsPost?: JsPost;
 }
 
 /** One `.jsinput` binding: a file's path plus its contents both ways. */
@@ -119,14 +122,18 @@ interface Block {
   body: string;
 }
 
+const BLOCK_ENDS = new Set(['.jsend', '.jspostend']);
+
 /** Splits the file into declarations, blocks, and the lines that are neither. */
-function scan(lines: readonly string[], file: string): {decls: Declarations, blocks: Block[]} {
+function scan(lines: readonly string[], file: string):
+    {decls: Declarations, blocks: Block[], posts: Block[]} {
   const decls: Declarations = {includes: [], inputs: [], modules: []};
   const blocks: Block[] = [];
+  const posts: Block[] = [];
   // Depth is used for a basic check to see if the `.jsinclude/jsinput` are inside `.if` blocks
   // which is likely an error.
   let depth = 0;
-  let block: {start: number, body: string[]} | undefined;
+  let block: {start: number, body: string[], post: boolean} | undefined;
 
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
@@ -135,11 +142,15 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
     const rest = m ? m[2] : '';
 
     if (block) {
-      if (directive === '.jsend') {
-        blocks.push({start: block.start, end: lineNo, body: block.body.join('\n')});
+      const end = block.post ? '.jspostend' : '.jsend';
+      if (directive === end) {
+        (block.post ? posts : blocks).push(
+            {start: block.start, end: lineNo, body: block.body.join('\n')});
         block = undefined;
-      } else if (directive === '.jsbegin') {
-        fail(file, lineNo, `.jsbegin inside a block that started on line ${block.start}`);
+      } else if (directive === '.jsbegin' || directive === '.jspostbegin') {
+        fail(file, lineNo, `${directive} inside a block that started on line ${block.start}`);
+      } else if (directive && BLOCK_ENDS.has(directive)) {
+        fail(file, lineNo, `${directive} closing a block that needs ${end}`);
       } else {
         block.body.push(lines[i]);
       }
@@ -149,6 +160,18 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
     if (!directive) continue;
 
     if (directive === '.jsend') fail(file, lineNo, `.jsend without a matching .jsbegin`);
+    if (directive === '.jspostend') {
+      fail(file, lineNo, `.jspostend without a matching .jspostbegin`);
+    }
+    if (directive === '.jspostbegin') {
+      if (depth > 0) {
+        fail(file, lineNo,
+             `.jspostbegin cannot appear inside .if/.macro/.proc/.repeat: ` +
+             `it runs once at link time, so it can never be conditional`);
+      }
+      block = {start: lineNo, body: [], post: true};
+      continue;
+    }
 
     if (directive === '.jsbegin' || DECLARATIONS.has(directive)) {
       if (depth > 0 && DECLARATIONS.has(directive)) {
@@ -157,7 +180,7 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
              `it is resolved before any block runs, so it can never be conditional`);
       }
       if (directive === '.jsbegin') {
-        block = {start: lineNo, body: []};
+        block = {start: lineNo, body: [], post: false};
       } else if (directive === '.jsinclude') {
         decls.includes.push({path: unquote(file, lineNo, rest), line: lineNo});
       } else if (directive === '.jsmodule') {
@@ -180,8 +203,11 @@ function scan(lines: readonly string[], file: string): {decls: Declarations, blo
     else if (CLOSERS.has(directive) && depth > 0) depth--;
   }
 
-  if (block) fail(file, block.start, `.jsbegin without a matching .jsend`);
-  return {decls, blocks};
+  if (block) {
+    fail(file, block.start, block.post ? `.jspostbegin without a matching .jspostend`
+                                       : `.jsbegin without a matching .jsend`);
+  }
+  return {decls, blocks, posts};
 }
 
 /** Starts a code block that we use to map back to the original source for error reporting */
@@ -274,7 +300,7 @@ function growableRom(base: Uint8Array): Uint8Array<ArrayBuffer> {
   return rom;
 }
 
-function diffRom(base: Uint8Array, rom: Uint8Array<ArrayBuffer>): RomPatch | undefined {
+export function diffRom(base: Uint8Array, rom: Uint8Array<ArrayBuffer>): RomPatch | undefined {
   if (rom.buffer.detached) {
     throw new Error('baserom buffer was detached (transfer() is not allowed)');
   }
@@ -347,7 +373,7 @@ function locate(spans: readonly Span[], frame: JsFrame): {source: SourceInfo, ki
  * Create the actual stack trace for the error starting with the `.jsbegin` block
  * and adding in each of the javascript stacks to it.
  */
-function blockError(err: unknown, file: string, block: Block,
+function blockError(err: unknown, file: string, start: number,
                     spans: readonly Span[]): SourceError {
   const message = `JavaScript block failed: ${
       err instanceof Error ? err.message : String(err)}`;
@@ -358,14 +384,14 @@ function blockError(err: unknown, file: string, block: Block,
   const head = placed.findIndex(l => l.kind === 'project');
   const rest = placed.filter((_, i) => i !== head);
   let source: SourceInfo | undefined =
-      head >= 0 ? {file, line: block.start, column: 0} : undefined;
+      head >= 0 ? {file, line: start, column: 0} : undefined;
   // Outermost first, so the innermost frame ends up nearest the head.
   for (let i = rest.length - 1; i >= 0; i--) {
     source = {...rest[i].source, parent: source};
   }
   const out = new SourceError(message, head >= 0
       ? {...placed[head].source, parent: source}
-      : {file, line: block.start, column: 0, parent: source});
+      : {file, line: start, column: 0, parent: source});
   if (located.length) {
     out.stack = [`${out.name}: ${message}`,
                  ...located.map(({source: s}, i) =>
@@ -389,13 +415,14 @@ function blank(lines: string[], start: number, end: number, text = '') {
 export function jsPreprocess(code: string, file: string,
                              opts: JsPreprocessOptions): JsPreprocessResult {
   const lines = code.split('\n');
-  const {decls, blocks} = scan(lines, file);
-  if (!blocks.length && !decls.includes.length && !decls.inputs.length &&
+  const {decls, blocks, posts} = scan(lines, file);
+  if (!blocks.length && !posts.length && !decls.includes.length && !decls.inputs.length &&
       !decls.modules.length) {
     return {code, usedJavascript: false, blocks: 0};
   }
   if (!opts.allowJavascript) {
     const first = [...blocks.map(b => ({line: b.start, what: '.jsbegin'})),
+                   ...posts.map(b => ({line: b.start, what: '.jspostbegin'})),
                    ...decls.includes.map(d => ({line: d.line, what: '.jsinclude'})),
                    ...decls.inputs.map(d => ({line: d.line, what: '.jsinput'})),
                    ...decls.modules.map(d => ({line: d.line, what: '.jsmodule'}))]
@@ -430,12 +457,13 @@ export function jsPreprocess(code: string, file: string,
         engine.run(src, {a, defines: definesView(ctx), baserom,
                          __js65_deflate: jsDeflate, ...inputs});
       } catch (err) {
-        throw blockError(err, file, b, spans);
+        throw blockError(err, file, b.start, spans);
       }
       return a.actions;
     });
     blank(out, b.start, b.end, `.jsaction ${index}`);
   }
+  for (const p of posts) blank(out, p.start, p.end);
   for (const {line} of decls.inputs) blank(out, line, line);
   for (const {line} of decls.modules) blank(out, line, line);
   for (let i = 0; i < lines.length; i++) {
@@ -450,5 +478,49 @@ export function jsPreprocess(code: string, file: string,
       fail(file, blocks[0]?.start ?? 1, (err as Error).message);
     }
   };
-  return {code: out.join('\n'), usedJavascript: true, blocks: blocks.length, romPatch};
+  const jsPost: JsPost | undefined = posts.length ? {
+    file,
+    prelude: prelude.map(({text, ...s}) => s.module != null ? s : {...s, text}),
+    blocks: posts.map(p => ({line: p.start, body: p.body})),
+  } : undefined;
+  return {code: out.join('\n'), usedJavascript: true, blocks: blocks.length, romPatch, jsPost};
+}
+
+/**
+ * Runs every module's `.jspostbegin` blocks against a copy of the final ROM.
+ * Blocks see the ROM as `rom`, which they may resize, and the debug labels as `labelMap`.
+ */
+export function jsPostprocess(posts: readonly JsPost[], image: Uint8Array,
+                              labelMap: ReadonlyMap<string, MesenLabelFormat>): Uint8Array<ArrayBuffer> {
+  const engine = jsEngine();
+  if (!engine) {
+    fail(posts[0].file, posts[0].blocks[0].line,
+         `This frontend has no JavaScript engine, so .jspostbegin blocks cannot run`);
+  }
+  const jsDeflate = deflate();
+  const rom = growableRom(image);
+  for (const post of posts) {
+    const prelude = post.prelude.map((s): JsSegment => {
+      if (s.module == null) return {...s, text: s.text ?? ''};
+      const text = JS_MODULES.get(s.module);
+      if (text == null) {
+        fail(post.file, post.blocks[0].line,
+             `Unknown .jsmodule: ${s.module}\n  Known modules: ${jsModuleNames().join(', ')}`);
+      }
+      return {...s, text};
+    });
+    for (const b of post.blocks) {
+      const {code, spans} = combine(prelude, {text: b.body, file: post.file, firstLine: b.line + 1});
+      try {
+        engine.run(code, {rom, labelMap, __js65_deflate: jsDeflate});
+      } catch (err) {
+        throw blockError(err, post.file, b.line, spans);
+      }
+      if (rom.buffer.detached) {
+        fail(post.file, b.line, 'rom buffer was detached (transfer() is not allowed)');
+      }
+    }
+  }
+  // Hand back a plain buffer, since not every consumer copes with a resizable one
+  return rom.slice();
 }

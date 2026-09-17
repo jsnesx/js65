@@ -10,6 +10,7 @@ import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
 import {assemble, compile, deserializeObjectFile, link, serializeObjectFile,
         type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
 import {Linker} from '../src/linker.ts';
+import {SourceContents} from '../src/tokenstream.ts';
 import {JsActionTable, type JsBlockContext} from '../src/options.ts';
 import type {SourceInfo} from '../src/error.ts';
 
@@ -726,6 +727,103 @@ describe('baserom merged at link time', function() {
       0, 0, 0, 0, 1, 1,
       0, 0, 4, 0, 0, 0, 0x1c, 0,
       0x45, 0x4f, 0x46]);
+  });
+});
+
+describe('.jspostbegin at link time', function() {
+  const SEG = '.segment "PRG" :size 8 :mem $8000 :off 0\n.org $8000\n';
+  const post = (body: string) => `.jspostbegin\n${body}\n.jspostend\n`;
+  const src = (name: string, code: string): AssemblyInput => ({type: 'source', name, code});
+  const build = (inputs: AssemblyInput[], extra: Record<string, unknown> = {},
+                 baseRom?: Uint8Array) =>
+      compile(inputs, {allowJavascript: true, ...extra}, callbacks({
+        'lib.js': 'const at = name => labelMap.get(name).start;',
+      }), baseRom);
+  const errors = (r: {messages: {level: string, message: string}[]}) =>
+      r.messages.filter(m => m.level === 'error').map(m => m.message);
+
+  it('edits the placed ROM, looking labels up in labelMap', function() {
+    const code = `${SEG}Data: .byte 1, 2\nMirror: .byte 1, 2\n` +
+        `.jsinclude "lib.js"\n${post('rom[at("Mirror") + 1] = 9;')}`;
+    const r = build([src('main.s', code)], {generateDebugInfo: true});
+    expect(errors(r)).toEqual([]);
+    expect([...r.outputs[0].data].slice(0, 4)).toEqual([1, 2, 1, 9]);
+  });
+
+  it('has an empty labelMap without debug info', function() {
+    const r = build([src('a.s', `${SEG}X: .byte 0\n${post('rom[0] = labelMap.size;')}`)]);
+    expect(errors(r)).toEqual([]);
+    expect(r.outputs[0].data[0]).toBe(0);
+  });
+
+  it('runs after chunks and baserom edits land, in module order', function() {
+    const r = build([
+      src('a.s', `${SEG}.byte 5\n.jsbegin\nbaserom[1] = 6;\n.jsend\n` +
+                 post('rom[2] = rom[0] + rom[1];')),
+      src('b.s', post('rom[3] = rom[2] * 2;')),
+    ], {}, new Uint8Array(8));
+    expect(errors(r)).toEqual([]);
+    expect([...r.outputs[0].data].slice(0, 4)).toEqual([5, 6, 11, 22]);
+  });
+
+  it('can grow the ROM', function() {
+    const r = build([src('a.s', `${SEG}.byte 1\n${post('rom.buffer.resize(10); rom[9] = 7;')}`)]);
+    expect(r.outputs[0].data.length).toBe(10);
+    expect(r.outputs[0].data[9]).toBe(7);
+  });
+
+  it('puts its edits into an IPS patch', function() {
+    const r = build([src('a.s', post('rom[2] = 7;'))], {outputFormat: 'ips'}, new Uint8Array(4));
+    expect(errors(r)).toEqual([]);
+    expect([...r.outputs[0].data]).toEqual([
+      0x50, 0x41, 0x54, 0x43, 0x48,
+      0, 0, 2, 0, 1, 7,
+      0x45, 0x4f, 0x46]);
+  });
+
+  it('survives the object file round trip without the include on disk', function() {
+    const asm = assemble([src('a.s', `${SEG}Here: .byte 0\n.jsinclude "lib.js"\n.jsmodule png\n` +
+                                     post('rom[at("Here")] = typeof png === "object" ? 3 : 4;'))],
+                         {allowJavascript: true, generateDebugInfo: true}, callbacks({
+                           'lib.js': 'const at = name => labelMap.get(name).start;',
+                         }));
+    expect(asm.success).toBe(true);
+    const module = deserializeObjectFile(serializeObjectFile(asm.modules[0]));
+    expect(module.jsPost!.prelude.find(p => p.module === 'png')!.text).toBeUndefined();
+    const r = link([module], {allowJavascript: true}, 'binary', new SourceContents());
+    expect(errors(r)).toEqual([]);
+    expect(r.data[0]).toBe(3);
+  });
+
+  it('refuses to run when the link does not allow JavaScript', function() {
+    const asm = assemble([src('a.s', `\n${post('rom[0] = 1;')}`)], {allowJavascript: true});
+    const r = link(asm.modules, {baseRom: new Uint8Array(1)});
+    expect(r.success).toBe(false);
+    expect(r.messages[0]).toMatchObject({message: expect.stringMatching(/requires --allow-javascript/),
+                                         source: {file: 'a.s', line: 2}});
+  });
+
+  it('reports a throw against the block', function() {
+    const r = build([src('a.s', `\n\n${post('\nthrow new Error("nope");')}`)], {}, new Uint8Array(1));
+    expect(r.success).toBe(false);
+    const err = r.messages.find(m => m.level === 'error')!;
+    expect(err.message).toContain('nope');
+    expect(err.source).toMatchObject({file: 'a.s', line: 5});
+  });
+
+  it('blanks the block out of the assembled source', function() {
+    const result = run(`lda #1\n${post('rom[0] = 1;')}rts\n`);
+    expect(result.code).toBe('lda #1\n\n\n\nrts\n');
+    expect(result.jsPost).toEqual({file: 'main.s', prelude: [],
+                                   blocks: [{line: 2, body: 'rom[0] = 1;'}]});
+  });
+
+  it('rejects a block inside .if and mismatched ends', function() {
+    expect(() => run(`.if 1\n${post('')}.endif\n`)).toThrow(/cannot appear inside/);
+    expect(() => run('.jspostbegin\n.jsend\n')).toThrow(/needs \.jspostend/);
+    expect(() => run('.jsbegin\n.jspostend\n')).toThrow(/needs \.jsend/);
+    expect(() => run('.jspostend\n')).toThrow(/without a matching \.jspostbegin/);
+    expect(() => run('.jspostbegin\n')).toThrow(/without a matching \.jspostend/);
   });
 });
 

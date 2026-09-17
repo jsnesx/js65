@@ -21,7 +21,7 @@ import { runActions, type CodeRunner } from './actions.ts';
 import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
-import { jsPreprocess } from './jspreprocessor.ts';
+import { diffRom, jsPostprocess, jsPreprocess } from './jspreprocessor.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
@@ -168,6 +168,8 @@ export interface LinkerOptions {
   debugLevel?: number;
   /** Emit a linker map (free space / placed chunks report) as a sidecar output. */
   generateMapFile?: boolean;
+  /** Enables' `.jspostbegin` blocks to postprocess the final ROM. */
+  allowJavascript?: boolean;
 }
 
 /** Output format control */
@@ -461,6 +463,7 @@ export function assemble(
       module.name = input.name;
       const romPatch = staged.romPatch?.();
       if (romPatch) module.romPatch = romPatch;
+      if (staged.jsPost) module.jsPost = staged.jsPost;
       modules.push(module);
       moduleMessages.push([...asm.getMessages()]);
 
@@ -518,6 +521,14 @@ export function link(
   const collector = new ErrorCollector();
 
   try {
+    const posts = modules.flatMap(m => m.jsPost ? [m.jsPost] : []);
+    if (posts.length && !options?.allowJavascript) {
+      throw new SourceError(
+          `.jspostbegin requires --allow-javascript\n` +
+          `  JavaScript blocks execute arbitrary code at link time and are disabled by default.`,
+          {file: posts[0].file, line: posts[0].blocks[0].line, column: 0});
+    }
+
     const linker = new Linker({
       target: options?.target,
       linkerConfig: options?.linkerConfig,
@@ -539,6 +550,10 @@ export function link(
     // is patched into the base ROM.
     const extraOutputs = linker.outputFiles();
 
+    // Before the output, since post blocks read the labelMap it leaves behind
+    const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
+    const labelMap = linker.labelMap ?? new Map();
+
     // Generate output based on format
     let binaryData: Uint8Array;
     if (outputFormat === 'ips') {
@@ -555,14 +570,25 @@ export function link(
       for (const [start, data] of out.chunks()) {
         patch.set(start, data);
       }
-      binaryData = patch.toIpsPatch(options?.baseRom, linker.romImage()?.length);
+      let length = linker.romImage()?.length;
+      if (posts.length) {
+        const before = linker.romImage()?.slice() ?? new Uint8Array(out.length);
+        out.apply(before);
+        const after = jsPostprocess(posts, before, labelMap);
+        if (after.length < before.length) {
+          throw new Error(`rom was shrunk from ${before.length} to ${
+                          after.length} bytes, but an IPS patch can only grow the ROM`);
+        }
+        for (const {offset, data} of diffRom(before, after)?.runs ?? []) patch.set(offset, data);
+        length = after.length;
+      }
+      binaryData = patch.toIpsPatch(options?.baseRom, length);
     } else {
       const data = linker.romImage() ?? new Uint8Array(out.length);
       out.apply(data);
-      binaryData = data;
+      binaryData = posts.length ? jsPostprocess(posts, data, labelMap) : data;
     }
 
-    const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
     const mapFile = options?.generateMapFile ? linker.report(true) : '';
 
     allMessages.push(...collector.getMessages());
@@ -773,6 +799,7 @@ export function compile(
       generateMapFile: options.generateMapFile,
       linkerConfig: options.linkerConfig,
       linkerConfigName: options.linkerConfigName,
+      allowJavascript: options.allowJavascript,
     };
     const outputFormat: OutputFormat = options.outputFormat ?? 'binary';
     const sourceContents = options.generateDebugInfo ? new SourceContents() : undefined;

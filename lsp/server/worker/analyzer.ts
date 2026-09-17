@@ -521,6 +521,7 @@ export class Analyzer {
           target: analysis.project.target,
           linkerConfig: analysis.project.linkerConfig,
           linkerConfigName: analysis.project.linkerConfigPath,
+          allowJavascript: analysis.project.allowJavascript,
         });
         messages = out.messages;
       } catch (err) {
