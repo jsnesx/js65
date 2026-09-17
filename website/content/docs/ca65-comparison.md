@@ -21,8 +21,9 @@ For more information on the specifics of patching see the [Patching guide](/docs
 
 ## Run Javascript code to preprocess data
 
-Instead of relying on hacking together scripts into your build process, make the script itself inside your source files using the [`JS Preprocessor`](/docs/jspreprocessor).
+Instead of relying on hacking together scripts into your build process, make the script itself inside your source files using the [`Javascript Processor`](/docs/jspreprocessor).
 Use the `.jsinput`/`jsinclude`/`jsmodule` to load files into the JS context, and output data directly into the current assembly stream using the global `a` variable which is a builder to generate output.
+Javascript blocks can either be executed as part of the assembly phase with `.jsbegin` or run as a post processor after the final rom is generated with `.jspostbegin`, allowing you to hash the final output or perform other last minute edits to the rom.
 
 ## Segments expanded
 

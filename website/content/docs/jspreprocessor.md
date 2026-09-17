@@ -1,5 +1,5 @@
 ---
-title: JS Preprocessor
+title: JS Processor
 weight: 8
 ---
 
@@ -8,7 +8,8 @@ weight: 8
 One consistent issue developers face when making a project is handling asset conversion.
 The problem with an assembler that includes custom directives for asset processing in my experience is either so basic that its near useless, or so specific that it doesn't apply to most projects.
 So instead of making something too specific or too basic, `js65` hands the keys to the developer to let them develop what they would like.
-The JS preprocessor lets a developer select files to read, use Javascript to process these file inputs, and then generated code and data.  
+The JS Processor lets a developer select files to read, use Javascript to process these file inputs, and then generated code and data.
+Along side the JS Preprocessor, js65 also has a JS Postprocessor, letting you run a script that executes after the final linking is done, to perform last minute edits to the output.
 
 ## Is this secure?
 
@@ -23,7 +24,16 @@ The Javascript preprocessor runs before any of the other stages in the assembler
 These functions are later executed as part of the assembler as a regular directive, which allows you to conditionally control the execution with the standard preprocessor directives.
 Note that while the execution is handled with a custom `.jsaction` directive, the inputs and modules are preloaded durnig the JS preprocessor stage, so running a `.jsinput` directive twice is an error.
 
-## `.jsinput`
+## Using the JS Postprocessor
+
+The Postprocessor differs only slightly from the preprocessor in when the execution happens and what values are available at this stage.
+Instead of running during assembly time, the Javascript code blocks are saved into the module so that it can run after the linking is fully complete.
+At this stage, you have access to two new values: `rom` containing the final output, and `labelMap` containing a map of all label names (see [Predefined Global Values](#predefined-global-values))
+Postprocessing blocks of code are collected before assembly even runs, so it's not possible right now to enable/disable them with conditional assembly statements.
+
+## Directives
+
+### `.jsinput`
 
 Declares a file or glob/list of files that should be included in EACH of the `js` blocks in the file.
 Takes two parameters, the first is a variable name that the file or list of files will be called in the script.
@@ -44,26 +54,25 @@ declare interface JsInputFile {
 .jsinput data, "foo.dat"
 ```
 
-## `.jsmodule`
+### `.jsmodule`
 
 Includes a prebuilt module of javascript helper files with `.jsmodule <name>`
 Currently, js65 includes the following two modules.
 
-- `bmp` - Port of `bmp-js` under the MIT license (see 3rd party licenses).
-The `bmp` module provices the following API
+- `bmp` - Port of `bmp-js` under the MIT license (see 3rd party licenses). [Documentation](#bmp-module-example-and-interface)
+- `png` - Port of `upng` under the MIT license (see 3rd party licenses). [Documentation](#png-interface)
 
-
-## `.jsbegin`
+### `.jsbegin`
 
 Starts a JS block and compiles into a runnable `.jsaction`.
 This action can be conditionally compiled along side other normal preprocessor directives.
-See the [Example](#Example) to see it in action, and see 
+See the [Example](#Example) to see it in action, and see [Predefined Global Values](#predefined-global-values) for details on the global variables available.
 
-## `.jsend`
+### `.jsend`
 
 Ends a JS block started with `.jsbegin`
 
-## `.jsaction`
+### `.jsaction`
 
 This is what the `.jsbegin`/`.jsend` block turns into internally.
 Since it is an assembly directive, that means it respects the current processing state for the assembly unit.
@@ -71,7 +80,21 @@ In other words, if you surround the `.js` block with `.if 0` it WILL NOT EXECUTE
 This also means that you can intentionally run a `.jsaction` yourself by typing out `.jsaction <num>` where `num` is the zero based index from the start of the file for that particular `.js` block.
 It ALSO means that you may unintentionally run a `.js` block multiple times if you put this in a header file that is included in multiple places, so be careful.
 
-## Predefined global values
+### `.jspostbegin`
+
+Creates a Javascript code block that will be executed after the final output rom is generated.
+This directive is processed before assembly starts and it does not generate a `.jsaction`-like directive, so `.jspostbegin` cannot be conditionally compiled as part of assembly.
+Any post blocks will always be executed unconditionally after the linking is complete.
+There is no assembly output at this stage, any changes you make should be made directly to the `rom` buffer itself.
+The compiled list of labels are available at `labelMap` for you to use to gather offsets as needed.
+
+### `.jspostend`
+
+Ends a block that started with `.jspostbegin`
+
+## Predefined global variables
+
+### Preprocessing
 
 Inside a `.js` block, there are two global variables `a` and `defines` that are always present.
 `a` is of type `AssemblyAction` and allows you to create output assembly statements from inside JS.
@@ -134,6 +157,36 @@ BASE = 7
 // writes 8, because BASE is already assigned above this line
 a.byte(defines.BASE + 1);
 .jsend
+```
+
+### Postprocessing
+
+Inside of a `.jspostbegin` block, the following two values are passed in.
+
+```ts
+/**
+ * \`.jspostbegin\` only. Copy of the final linked ROM, which becomes the output once
+ * every block has run. Can be grown with \`rom.buffer.resize(n)\`.
+ * If you are writing a \`.jsbegin\` block and want data from the original rom
+ * that you are patching, see \`.baserom\` instead.
+ */
+declare const rom: Uint8Array<ArrayBuffer>;
+
+export type MesenLabelFormatType = "NesMemory"|"NesPrgRom"|"NesInternalRam"|"NesSaveRam"|"NesWorkRam";
+export interface MesenLabelFormat {
+  type: MesenLabelFormatType,
+  start: number,
+  /** Exclusive */
+  end: number,
+  label: string,
+  comment: string,
+}
+
+/**
+ * \`.jspostbegin\` only. Debug labels keyed by label name, empty unless the
+ * link generates debug info.
+ */
+declare const labelMap: ReadonlyMap<string, MesenLabelFormat>;
 ```
 
 ## Example

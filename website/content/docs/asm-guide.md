@@ -164,7 +164,7 @@ For the most part, the `feature` list matches what `ca65` supports, but there ar
 
 * `js65_multiops_per_line` - Allows multiple opcodes per line separated by spaces. For example, this is allowed on one line `lda #4 clc adc $1 sta ObjXCoord+10,x` but `lda foo label: sta $00` because `label:` is not an opcode.
 * `js65_backslash_separator` - Enable to make `\` function as a new line character, allowing multiple directives on the same line. EX: `lda foo \ .byte $2c \ skip: lda #1` is allowed since `\` is a line terminator.
-* `js65_backtick_separator` - Same as `js65_backslash_separator` but uses `\`` as the new line character instead.
+* `js65_backtick_separator` - Same as `js65_backslash_separator` but uses `` ` `` as the new line character instead.
 
 ### Different Defaults
 
