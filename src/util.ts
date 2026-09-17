@@ -246,31 +246,77 @@ export class SparseByteArray {
     return out;
   }
 
-  toIpsPatch(): Uint8Array {
-    let size = 8;
-    for (const [, chunk] of this._chunks) {
-      size += 5 + chunk.length;
+  /**
+   * Encodes the chunks as an IPS patch.
+   * Two workarounds are added to this that may cause issues with an IPS patch:
+   * - Records longer than $ffff bytes are split (cant make a single record larger than $ffff bytes)
+   * - Records may not start at $454f46 since patchers read that offset as the "EOF" footer.
+   * The target param exists solely for the second case. In order to skip the EOF offset, we pull in a
+   * byte from the original file, and then set the offset to $454f46-1 with the new byte
+   */
+  toIpsPatch(target?: ArrayLike<number>, length = 0): Uint8Array {
+    const EOF = 0x454f46;
+    const MAX = 0xffff;
+    const end = Math.max(this._length, length);
+    if (end > 0x1000000) {
+      throw new Error(`IPS offsets stop at $ffffff, but the patch reaches $${(end - 1).toString(16)}`);
     }
-    const buffer = new Uint8Array(size);
-    let i = 5;
-    buffer[0] = 0x50;
-    buffer[1] = 0x41;
-    buffer[2] = 0x54;
-    buffer[3] = 0x43;
-    buffer[4] = 0x48;
-    for (const [start, chunk] of this._chunks) {
-      if (chunk.length > 0xffff) throw new Error(`Oops!`);
-      buffer[i++] = start >>> 16;
-      buffer[i++] = (start >>> 8) & 0xff;
-      buffer[i++] = start & 0xff;
-      buffer[i++] = chunk.length >>> 8;
-      buffer[i++] = chunk.length & 0xff;
-      buffer.subarray(i, i + chunk.length).set(chunk);
-      i += chunk.length;
+    const parts: Uint8Array[] = [Uint8Array.of(0x50, 0x41, 0x54, 0x43, 0x48)];
+    const header = (start: number, size: number) =>
+        parts.push(Uint8Array.of(start >>> 16, (start >>> 8) & 0xff, start & 0xff,
+                                 size >>> 8, size & 0xff));
+    const borrow = (): number => {
+      const at = EOF - 1;
+      // Past the end of the target is a gap the patcher fills with zeros
+      const byte = this.get(at) ?? (target && (at < target.length ? target[at] : 0));
+      if (byte == null) {
+        throw new Error(`An IPS record cannot start at $454f46 without the unpatched ROM to take the byte before it from`);
+      }
+      return byte;
+    };
+
+    for (const [chunkStart, chunk] of this._chunks) {
+      let start = chunkStart;
+      let data = chunk;
+      if (start === EOF) {
+        data = new Uint8Array(chunk.length + 1);
+        data[0] = borrow();
+        data.set(chunk, 1);
+        start--;
+      }
+      while (data.length) {
+        let size = Math.min(data.length, MAX);
+        // End a byte early so the next record doesn't start at "EOF"
+        if (start + size === EOF && size < data.length) size--;
+        header(start, size);
+        parts.push(data.subarray(0, size));
+        start += size;
+        data = data.subarray(size);
+      }
     }
-    buffer[i] = 0x45;
-    buffer[i + 1] = 0x4f;
-    buffer[i + 2] = 0x46;
+
+    // Grow with RLE records: offset, a zero size, then a 2-byte count and the value
+    let start = Math.max(this._length, target?.length ?? 0);
+    if (start === EOF && start < length) {
+      header(EOF - 1, 2);
+      parts.push(Uint8Array.of(borrow(), 0));
+      start++;
+    }
+    while (start < length) {
+      let count = Math.min(length - start, MAX);
+      if (start + count === EOF && start + count < length) count--;
+      header(start, 0);
+      parts.push(Uint8Array.of(count >>> 8, count & 0xff, 0));
+      start += count;
+    }
+
+    parts.push(Uint8Array.of(0x45, 0x4f, 0x46));
+    const buffer = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let i = 0;
+    for (const part of parts) {
+      buffer.set(part, i);
+      i += part.length;
+    }
     return buffer;
   }
 

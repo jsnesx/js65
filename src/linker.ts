@@ -87,6 +87,10 @@ export class Linker {
     return this;
   }
 
+  romImage(): Uint8Array | undefined {
+    return this._link.romImage;
+  }
+
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
     // An ld65 config replaces the built-in segment configuration.
     // I don't think its worth trying to sort out using both for now.
@@ -1208,6 +1212,9 @@ function translateSymbol(s: Symbol, dc: number, ds: number): Symbol {
 class Link {
   data = new SparseByteArray();
   orig = new SparseByteArray();
+  romImage?: Uint8Array;
+  private baseRom?: Uint8Array;
+  private baseOffset = 0;
 
   // Maps symbol to symbol # // [symbol #, dependent chunks]
   exports = new Map<string, number>(); // readonly [number, Set<number>]>();
@@ -1323,6 +1330,61 @@ class Link {
   base(data: Uint8Array, offset = 0) {
     this.data.set(offset, data);
     this.orig.set(offset, data);
+    this.baseRom = data;
+    this.baseOffset = offset;
+  }
+
+  private mergeRomPatches() {
+    const modules = this.rawModules;
+    if (!modules.some(m => m.romPatch)) {
+      this.romImage = this.baseRom;
+      return;
+    }
+    const collector = this.errorCollector;
+    const hex = (n: number) => n.toString(16).padStart(4, '0');
+    const base = this.baseRom ?? new Uint8Array(0);
+    const length = modules.reduce((n, m) => Math.max(n, m.romPatch?.newLength ?? 0), base.length);
+    const rom = new Uint8Array(length);
+    rom.set(base);
+    // Index of the module that last wrote each byte, or -1 for base ROM bytes
+    const owner = new Int32Array(length).fill(-1);
+    const nameOf = (i: number) => modules[i].name ?? `module #${i + 1}`;
+
+    modules.forEach((module, index) => {
+      for (const {offset, data} of module.romPatch?.runs ?? []) {
+        let conflict: {start: number, end: number, prev: number} | undefined;
+        const report = () => {
+          if (!conflict) return;
+          const {start, end, prev} = conflict;
+          const where = end - start === 1 ? `$${hex(start)}`
+                                          : `$${hex(start)}-$${hex(end - 1)}`;
+          collector?.add('warning',
+              `Base ROM ${where} written by both ${nameOf(prev)} and ${nameOf(index)}; ` +
+              `using ${nameOf(index)}`,
+              module.name ? {file: module.name, line: 1, column: 0} : undefined);
+          conflict = undefined;
+        };
+        for (let i = 0; i < data.length; i++) {
+          const at = offset + i;
+          const prev = owner[at];
+          if (prev >= 0 && rom[at] !== data[i]) {
+            if (conflict && conflict.prev === prev && conflict.end === at) {
+              conflict.end++;
+            } else {
+              report();
+              conflict = {start: at, end: at + 1, prev};
+            }
+          } else {
+            report();
+          }
+          rom[at] = data[i];
+          owner[at] = index;
+        }
+        report();
+      }
+    });
+    this.data.set(this.baseOffset, rom);
+    this.romImage = rom;
   }
 
   // Flattens one module's segments/chunks/symbols into the global arrays.
@@ -1457,6 +1519,8 @@ class Link {
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
     // Catch a cross-module named/anon mix before any state is half-built.
     this.checkAnonMode();
+    // Before anything reads `data`, so free space and pattern reuse see the edits
+    this.mergeRomPatches();
     // Preserve the order that the segments are declared
     for (const name of [...this.segmentOrder, ...this.rawSegments.keys()]) {
       if (this.segmentIndex.has(name)) continue;

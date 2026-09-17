@@ -25,6 +25,7 @@ import { jsPreprocess } from './jspreprocessor.ts';
 import { Linker } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
+import { SparseByteArray } from './util.ts';
 import { applyFeatures,
          JsActionTable,
          type AssemblerOptions as AsmOptions,
@@ -525,11 +526,8 @@ export function link(
       errorCollector: collector,
     });
 
-    // Load base ROM if provided and not generating IPS
-    let data: Uint8Array | null = null;
-    if (outputFormat !== 'ips' && options?.baseRom) {
-      data = options.baseRom;
-      linker.base(data, options.baseRomOffset ?? 0);
+    if (options?.baseRom) {
+      linker.base(options.baseRom, options.baseRomOffset ?? 0);
     }
 
     for (const module of modules) {
@@ -549,9 +547,17 @@ export function link(
                         ''}more than one output file (${
                         extraOutputs.map(o => o.name).join(', ')})`);
       }
-      binaryData = out.toIpsPatch();
+      // Apply all of the JS patches and then generate the IPS
+      const patch = new SparseByteArray();
+      for (const module of modules) {
+        for (const {offset, data} of module.romPatch?.runs ?? []) patch.set(offset, data);
+      }
+      for (const [start, data] of out.chunks()) {
+        patch.set(start, data);
+      }
+      binaryData = patch.toIpsPatch(options?.baseRom, linker.romImage()?.length);
     } else {
-      if (!data) data = new Uint8Array(out.length);
+      const data = linker.romImage() ?? new Uint8Array(out.length);
       out.apply(data);
       binaryData = data;
     }

@@ -783,3 +783,62 @@ describe('joinDir', function() {
     expect(util.joinDir('/opt/inc/detail', '..')).toBe('/opt/inc');
   });
 });
+
+describe('SparseByteArray#toIpsPatch', function() {
+  /** Splits a patch back into [offset, size, rle count] records. */
+  function records(patch: Uint8Array): Array<[number, number, number?]> {
+    expect([...patch.subarray(0, 5)]).toEqual([0x50, 0x41, 0x54, 0x43, 0x48]);
+    const out: Array<[number, number, number?]> = [];
+    let i = 5;
+    for (;;) {
+      const offset = patch[i] << 16 | patch[i + 1] << 8 | patch[i + 2];
+      if (offset === 0x454f46) break;
+      const size = patch[i + 3] << 8 | patch[i + 4];
+      i += 5;
+      if (size) {
+        out.push([offset, size]);
+        i += size;
+      } else {
+        out.push([offset, 0, patch[i] << 8 | patch[i + 1]]);
+        i += 3;
+      }
+    }
+    expect(i + 3).toBe(patch.length);
+    return out;
+  }
+
+  it('splits a chunk longer than 0xffff bytes', function() {
+    const a = new SparseByteArray();
+    a.set(0x10, new Uint8Array(0x20000).fill(1));
+    expect(records(a.toIpsPatch())).toEqual([[0x10, 0xffff], [0x1000f, 0xffff], [0x2000e, 2]]);
+  });
+
+  it('never starts a record at the EOF offset', function() {
+    const a = new SparseByteArray();
+    a.set(0x454f46, 2, 3);
+    const patch = a.toIpsPatch(Object.assign(new Uint8Array(0x454f46), {[0x454f45]: 9}));
+    expect(records(patch)).toEqual([[0x454f45, 3]]);
+    expect([...patch.subarray(10, 13)]).toEqual([9, 2, 3]);
+    expect(() => a.toIpsPatch()).toThrow(/\$454f46/);
+  });
+
+  it('never splits a chunk so the next record starts at the EOF offset', function() {
+    const a = new SparseByteArray();
+    a.set(0x454f46 - 0xffff, new Uint8Array(0x10002));
+    expect(records(a.toIpsPatch())).toEqual([[0x454f46 - 0xffff, 0xfffe], [0x454f45, 4]]);
+  });
+
+  it('grows the file past the target with zero RLE records', function() {
+    const a = new SparseByteArray();
+    a.set(0, 1);
+    expect(records(a.toIpsPatch(new Uint8Array(4), 0x20004)))
+        .toEqual([[0, 1], [4, 0, 0xffff], [0x10003, 0, 0xffff], [0x20002, 0, 2]]);
+    expect(records(a.toIpsPatch(new Uint8Array(4), 4))).toEqual([[0, 1]]);
+  });
+
+  it('rejects offsets past $ffffff', function() {
+    const a = new SparseByteArray();
+    a.set(0xffffff, 1, 2);
+    expect(() => a.toIpsPatch()).toThrow(/\$ffffff/);
+  });
+});

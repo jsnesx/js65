@@ -7,7 +7,9 @@ import {bunCodec} from '../src/driver/codec/bun.ts';
 import {JS_MODULES, jsModuleMap} from '../src/jsmodule/index.ts';
 import {mapPosition, parseSourceMap, sourceContent} from '../src/jsmodule/sourcemap.ts';
 import {jsPreprocess, type JsPreprocessOptions} from '../src/jspreprocessor.ts';
-import {assemble, type FileCallbacks} from '../src/libassembler.ts';
+import {assemble, compile, deserializeObjectFile, link, serializeObjectFile,
+        type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
+import {Linker} from '../src/linker.ts';
 import {JsActionTable, type JsBlockContext} from '../src/options.ts';
 import type {SourceInfo} from '../src/error.ts';
 
@@ -612,6 +614,118 @@ describe('baserom', function() {
       message: expect.stringContaining('detached'),
       source: expect.objectContaining({file: 'bad.s', line: 2}),
     }));
+  });
+});
+
+describe('baserom merged at link time', function() {
+  const block = (body: string) => `.jsbegin\n${body}\n.jsend\n`;
+  // An output file with no segments placed, so the result is just the merged ROM
+  const src = (name: string, body: string): AssemblyInput =>
+      ({type: 'source', name, code: block(body)});
+  const build = (inputs: AssemblyInput[], baseRom?: Uint8Array,
+                 outputFormat?: 'binary' | 'ips') =>
+      compile(inputs, {allowJavascript: true, outputFormat}, undefined, baseRom);
+  const warnings = (r: {messages: {level: string, message: string}[]}) =>
+      r.messages.filter(m => m.level === 'warning').map(m => m.message);
+
+  it('shows an edit in the linked output without touching the base ROM', function() {
+    const base = new Uint8Array([1, 2, 3, 4]);
+    const r = build([src('a.s', 'baserom[2] = 9;')], base);
+    expect(r.success).toBe(true);
+    expect([...r.outputs[0].data]).toEqual([1, 2, 9, 4]);
+    expect([...base]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('lands distinct edits from two modules', function() {
+    const r = build([src('a.s', 'baserom[0] = 7;'), src('b.s', 'baserom[3] = 8;')],
+                    new Uint8Array(4));
+    expect([...r.outputs[0].data]).toEqual([7, 0, 0, 8]);
+    expect(warnings(r)).toEqual([]);
+  });
+
+  it('warns on a conflict and the later file wins', function() {
+    const r = build([src('a.s', 'baserom[1] = 7; baserom[2] = 7;'),
+                     src('b.s', 'baserom[1] = 8; baserom[2] = 8;')], new Uint8Array(4));
+    expect([...r.outputs[0].data]).toEqual([0, 8, 8, 0]);
+    expect(warnings(r)).toEqual([expect.stringMatching(/\$0001-\$0002 written by both a\.s and b\.s/)]);
+    expect(r.messages.find(m => m.level === 'warning')!.source)
+        .toMatchObject({file: 'b.s'});
+  });
+
+  it('does not warn when two modules write the same value', function() {
+    const r = build([src('a.s', 'baserom[1] = 7;'), src('b.s', 'baserom[1] = 7;')],
+                    new Uint8Array(4));
+    expect(warnings(r)).toEqual([]);
+  });
+
+  it('sizes the output to the largest newLength', function() {
+    const r = build([src('a.s', 'baserom.buffer.resize(8); baserom[7] = 1;'),
+                     src('b.s', 'baserom.buffer.resize(6); baserom[5] = 2;')],
+                    new Uint8Array([9, 9]));
+    expect([...r.outputs[0].data]).toEqual([9, 9, 0, 0, 0, 2, 0, 1]);
+  });
+
+  it('grows with no base ROM', function() {
+    const r = build([src('a.s', 'baserom.buffer.resize(3); baserom[1] = 5;')]);
+    expect([...r.outputs[0].data]).toEqual([0, 5, 0]);
+  });
+
+  it('flips only the conflict winner when inputs are reordered', function() {
+    const a = src('a.s', 'baserom[0] = 1; baserom[1] = 0xa;');
+    const b = src('b.s', 'baserom[0] = 2; baserom[2] = 0xb;');
+    expect([...build([a, b], new Uint8Array(3)).outputs[0].data]).toEqual([2, 0xa, 0xb]);
+    expect([...build([b, a], new Uint8Array(3)).outputs[0].data]).toEqual([1, 0xa, 0xb]);
+  });
+
+  it('survives the object file round trip', function() {
+    const asm = assemble([src('a.s', 'baserom[1] = 0x42;')],
+                         {allowJavascript: true, baseRom: new Uint8Array(4)});
+    const module = deserializeObjectFile(serializeObjectFile(asm.modules[0]));
+    const r = compile([{type: 'module', module}, src('b.s', 'baserom[2] = 0x43;')],
+                      {allowJavascript: true}, undefined, new Uint8Array(4));
+    expect([...r.outputs[0].data]).toEqual([0, 0x42, 0x43, 0]);
+  });
+
+  it('does not mutate module patches across repeated links', function() {
+    const asm = assemble([src('a.s', 'baserom[0] = 1;'), src('b.s', 'baserom[0] = 2;')],
+                         {allowJavascript: true, baseRom: new Uint8Array(2)});
+    const first = link([...asm.modules], {baseRom: new Uint8Array(2)});
+    const second = link([...asm.modules], {baseRom: new Uint8Array(2)});
+    expect([...second.data]).toEqual([...first.data]);
+    expect(warnings(first)).toHaveLength(1);
+    expect(warnings(second)).toEqual(warnings(first));
+    expect([...asm.modules[0].romPatch!.runs[0].data]).toEqual([1]);
+  });
+
+  it('merges inside the Linker without going through link()', function() {
+    const asm = assemble([src('a.s', 'baserom[1] = 5;')],
+                         {allowJavascript: true, baseRom: new Uint8Array(3)});
+    const base = new Uint8Array([7, 7, 7]);
+    const linker = new Linker().base(base).read(asm.modules[0]);
+    linker.link();
+    expect([...linker.romImage()!]).toEqual([7, 5, 7]);
+    expect([...base]).toEqual([7, 7, 7]);
+  });
+
+  it('writes edits into an IPS patch, with later files winning', function() {
+    const r = build([src('a.s', 'baserom[1] = 7; baserom[2] = 7;'),
+                     src('b.s', 'baserom[2] = 8;')], new Uint8Array(4), 'ips');
+    expect(r.success).toBe(true);
+    expect([...r.outputs[0].data]).toEqual([
+      0x50, 0x41, 0x54, 0x43, 0x48,
+      0, 0, 1, 0, 2, 7, 8,
+      0x45, 0x4f, 0x46]);
+  });
+
+  it('grows the file from an IPS patch with a zero RLE record', function() {
+    const r = build([src('a.s', 'baserom.buffer.resize(0x20); baserom[0] = 1;')],
+                    new Uint8Array(4), 'ips');
+    expect(r.success).toBe(true);
+    expect([...r.outputs[0].data]).toEqual([
+      0x50, 0x41, 0x54, 0x43, 0x48,
+      0, 0, 0, 0, 1, 1,
+      0, 0, 4, 0, 0, 0, 0x1c, 0,
+      0x45, 0x4f, 0x46]);
   });
 });
 
