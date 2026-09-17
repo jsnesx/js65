@@ -1,0 +1,147 @@
+name: 'Build a PGO-optimized Static Hermes toolchain'
+description: >-
+  Build the Static Hermes (shermes) compiler and its static VM libraries with
+  LTO and PGO, training on the workload the pgo-* inputs name. Falls back to an
+  LTO-only build when those inputs are absent. Outputs are cached so later runs
+  skip the build entirely.
+
+  This action is not portable, as it relies on ./.github/actions/hermes_build
+  by a path relative to the *caller's* workspace, so ... if you use this you'll
+  basically need to recreate it yourself.
+
+inputs:
+  hermes-ref:
+    description: >-
+      Hermes commit SHA, branch, or tag to build. Required (no default).
+    required: true
+  pgo-repo:
+    description: >-
+      `owner/name` of the repository to check out for PGO training.
+    required: false
+    default: ''
+  pgo-ref:
+    description: >-
+      Commit SHA of `pgo-repo` to train on.
+    required: false
+    default: ''
+  pgo-build-command:
+    description: >-
+      Arguments passed to the instrumented project inside the training checkout.
+    required: false
+    default: ''
+  pgo-source-paths:
+    description: >-
+      Source paths that when changed should cause the PGO profile to get regenerated.
+    required: false
+    default: |
+      src/**
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout Hermes
+      uses: actions/checkout@v6
+      with:
+        repository: facebook/hermes
+        ref: ${{ inputs.hermes-ref }}
+        path: hermes
+    - name: Decide whether PGO is enabled
+      id: pgo
+      shell: bash
+      env:
+        PGO_REPO: ${{ inputs.pgo-repo }}
+        PGO_REF: ${{ inputs.pgo-ref }}
+        PGO_BUILD_COMMAND: ${{ inputs.pgo-build-command }}
+      run: |
+        MISSING=()
+        [ -n "$PGO_REPO" ] || MISSING+=(pgo-repo)
+        [ -n "$PGO_REF" ] || MISSING+=(pgo-ref)
+        [ -n "$PGO_BUILD_COMMAND" ] || MISSING+=(pgo-build-command)
+        if [ ${#MISSING[@]} -eq 0 ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          # All three empty is a deliberate opt-out; a partial set is a mistake
+          # worth shouting about, since the build silently loses ~19%.
+          if [ ${#MISSING[@]} -eq 3 ]; then
+            echo "PGO not requested; building Hermes with LTO only."
+          else
+            echo "::warning title=PGO disabled::Missing ${MISSING[*]}; building Hermes without PGO. Supply all three pgo-* inputs to enable it."
+          fi
+        fi
+
+    - name: Resolve the cache key
+      id: key
+      shell: bash
+      env:
+        SUFFIX: ${{ steps.pgo.outputs.enabled == 'true' && format('-pgo-{0}-{1}', inputs.pgo-ref, hashFiles(inputs.pgo-source-paths)) || '' }}
+      run: |
+        echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
+        echo "key=shermes-$RUNNER_OS-$RUNNER_ARCH-${{ inputs.hermes-ref }}-lto-pic-v5$SUFFIX" >> "$GITHUB_OUTPUT"
+
+    - name: Probe the cache
+      id: probe
+      uses: actions/cache/restore@v5
+      with:
+        lookup-only: true
+        path: |
+          hermes/build/bin
+          hermes/build/lib
+          hermes/build/tools/shermes
+          hermes/build/jsi
+          hermes/build/external/boost
+        key: ${{ steps.key.outputs.key }}
+
+    # Both nested hermes_build calls skip their own toolchain setup, because a
+    # cache hit inside one would otherwise leave later steps without clang.
+    - name: Provide the MSVC CRT and Windows SDK (clang targets *-windows-msvc)
+      if: runner.os == 'Windows'
+      uses: vln-devsecops/actions-msvc@v1
+    - name: Load a full LLVM toolchain (macOS/Linux)
+      if: runner.os != 'Windows' && steps.probe.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/.github/actions/hermes_build/install-llvm.sh"
+
+    - name: Build instrumented shermes
+      if: steps.pgo.outputs.enabled == 'true' && steps.probe.outputs.cache-hit != 'true'
+      uses: ./.github/actions/hermes_build
+      with:
+        hermes-ref: ${{ inputs.hermes-ref }}
+        build-dir: hermes/build-pgogen
+        extra-flags: -fprofile-generate
+        cache-key-suffix: -pgogen
+        skip-checkout: 'true'
+        skip-toolchain: 'true'
+
+    - name: Checkout the PGO training workload
+      if: steps.pgo.outputs.enabled == 'true' && steps.probe.outputs.cache-hit != 'true'
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.pgo-repo }}
+        ref: ${{ inputs.pgo-ref }}
+        path: pgo-training
+    - name: Generate the PGO profile
+      if: steps.pgo.outputs.enabled == 'true' && steps.probe.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PGO_BUILD_COMMAND: ${{ inputs.pgo-build-command }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/generate-profile.sh" \
+          hermes/build-pgogen pgo-training "$GITHUB_WORKSPACE/hermes/pgo.profdata"
+    - name: Upload the PGO profile
+      if: steps.pgo.outputs.enabled == 'true' && steps.probe.outputs.cache-hit != 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: pgo-profile-${{ runner.os }}-${{ runner.arch }}
+        path: hermes/pgo.profdata
+        if-no-files-found: error
+
+    - name: Build shermes (LTO${{ steps.pgo.outputs.enabled == 'true' && ' + PGO' || '' }})
+      uses: ./.github/actions/hermes_build
+      with:
+        hermes-ref: ${{ inputs.hermes-ref }}
+        build-dir: hermes/build
+        extra-flags: ${{ steps.pgo.outputs.enabled == 'true' && format('-fprofile-use={0}/hermes/pgo.profdata -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled', github.workspace) || '' }}
+        cache-key-suffix: ${{ steps.key.outputs.suffix }}
+        skip-checkout: 'true'
+        skip-toolchain: 'true'

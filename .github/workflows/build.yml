@@ -46,7 +46,7 @@ jobs:
       - name: Stamp the version from the git tag
         run: bun run gen-version
       - name: Build Static Hermes toolchain
-        uses: ./.github/actions/hermes_compiler
+        uses: ./.github/actions/hermes_pgo
         with:
           hermes-ref: a7086fcea2dd36e3d9475bd1ec8fb2f035d911b9
           pgo-repo: NovaSquirrel/NovaTheSquirrel

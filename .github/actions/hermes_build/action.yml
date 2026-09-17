@@ -1,0 +1,83 @@
+name: 'Build Static Hermes VM'
+description: >-
+  Build the Static Hermes (shermes) compiler and its static VM libraries from
+  source with LTO. Works on Windows, macOS (arm), and Linux hosts.
+
+inputs:
+  hermes-ref:
+    description: >-
+      Hermes commit SHA, branch, or tag to build. Required (no default). Static
+      Hermes is the new default hermes branch in v1 on the `static_h` branch.
+    required: true
+  build-dir:
+    description: >-
+      Directory the VM is configured and built into, relative to the workspace.
+    required: false
+    default: hermes/build
+  extra-flags:
+    description: >-
+      Flags appended to CMAKE_{C,CXX}_FLAGS_RELEASE, e.g. -fprofile-generate.
+    required: false
+    default: ''
+  cache-key-suffix:
+    description: >-
+      Appended to the cache key. Use this if you use extra-flags alongside a regular
+      build so the caches dont conflict.
+    required: false
+    default: ''
+  skip-checkout:
+    description: >-
+      Skip the Hermes checkout. Use if you've already checked it out previously
+    required: false
+    default: 'false'
+  skip-toolchain:
+    description: >-
+      Skip the LLVM install and the Windows CRT/SDK setup.
+    required: false
+    default: 'false'
+
+outputs:
+  cache-hit:
+    description: 'true when the build dir was restored from cache'
+    value: ${{ steps.shermes-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout Hermes
+      if: inputs.skip-checkout != 'true'
+      uses: actions/checkout@v6
+      with:
+        repository: facebook/hermes
+        ref: ${{ inputs.hermes-ref }}
+        path: hermes
+    - name: Provide the MSVC CRT and Windows SDK (clang targets *-windows-msvc)
+      if: runner.os == 'Windows' && inputs.skip-toolchain != 'true'
+      uses: vln-devsecops/actions-msvc@v1
+    - name: Cache shermes build
+      id: shermes-cache
+      uses: actions/cache@v5
+      with:
+        # List of outputs that we care about for the build
+        path: |
+          ${{ inputs.build-dir }}/bin
+          ${{ inputs.build-dir }}/lib
+          ${{ inputs.build-dir }}/tools/shermes
+          ${{ inputs.build-dir }}/jsi
+          ${{ inputs.build-dir }}/external/boost
+        # runner.arch is part of the key because these are native binaries and
+        # the x64 and arm64 Linux runners both report runner.os == 'Linux'.
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v5${{ inputs.cache-key-suffix }}
+
+    - name: Load a full LLVM toolchain (macOS/Linux)
+      if: runner.os != 'Windows' && inputs.skip-toolchain != 'true'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/install-llvm.sh"
+
+    - name: Build shermes
+      if: steps.shermes-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        BUILD_DIR: ${{ inputs.build-dir }}
+        EXTRA_FLAGS: ${{ inputs.extra-flags }}
+      run: bash "$GITHUB_ACTION_PATH/build-vm.sh" "$BUILD_DIR" $EXTRA_FLAGS
