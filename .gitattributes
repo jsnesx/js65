@@ -1,0 +1,9 @@
+# hashFiles() in CI hashes file contents, so a CRLF checkout on the Windows
+# runner would compute a different cache key than Linux and macOS. The shell
+# scripts the runners execute also break outright if they carry CRLF.
+* text=auto eol=lf
+
+bun.lockb binary
+*.ico binary
+*.png binary
+*.nes binary

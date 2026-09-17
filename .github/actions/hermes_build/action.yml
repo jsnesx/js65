@@ -54,9 +54,9 @@ runs:
     - name: Provide the MSVC CRT and Windows SDK (clang targets *-windows-msvc)
       if: runner.os == 'Windows' && inputs.skip-toolchain != 'true'
       uses: vln-devsecops/actions-msvc@v1
-    - name: Cache shermes build
+    - name: Restore shermes build
       id: shermes-cache
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
       with:
         # List of outputs that we care about for the build
         path: |
@@ -81,3 +81,17 @@ runs:
         BUILD_DIR: ${{ inputs.build-dir }}
         EXTRA_FLAGS: ${{ inputs.extra-flags }}
       run: bash "$GITHUB_ACTION_PATH/build-vm.sh" "$BUILD_DIR" $EXTRA_FLAGS
+
+    # Manually save the cache as this is run in a composite action
+    # later, it causes it to upload an empty tree instead.
+    - name: Save shermes build
+      if: steps.shermes-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          ${{ inputs.build-dir }}/bin
+          ${{ inputs.build-dir }}/lib
+          ${{ inputs.build-dir }}/tools/shermes
+          ${{ inputs.build-dir }}/jsi
+          ${{ inputs.build-dir }}/external/boost
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v5${{ inputs.cache-key-suffix }}
