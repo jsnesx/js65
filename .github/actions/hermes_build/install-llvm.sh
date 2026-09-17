@@ -6,11 +6,11 @@
 set -euo pipefail
 
 if [ "$RUNNER_OS" = "macOS" ]; then
-  # Unlink the preinstalled llvm so we can safely install our own.
+  # Remove existing llvm so we don't get warnings with the newly installed llvm
   for keg in $(brew list --formula | grep -E '^llvm(@[0-9]+)?$' || true); do
-    [ "$keg" = "llvm@22" ] || brew unlink "$keg"
+    [ "$keg" = "llvm@22" ] || brew uninstall --ignore-dependencies "$keg"
   done
-  brew install llvm@22 lld@22
+  HOMEBREW_NO_ENV_HINTS=1 brew install --quiet llvm@22 lld@22
   LLVM_BIN="$(brew --prefix llvm@22)/bin"
   # Unlike Apple Clang, Homebrew clang does not imply an SDK, so the
   # macOS headers have to be pointed at explicitly.
