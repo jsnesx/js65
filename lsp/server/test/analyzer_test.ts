@@ -717,6 +717,34 @@ describe('analyzer', () => {
       expect(errors).toHaveLength(0);
     });
 
+    it('warns on a cross-module base ROM conflict, the same on every save', async () => {
+      const fs = new MemFs();
+      const edit = (v: number) =>
+          `.segment "CODE"\n  .byte ${v}\n.jsbegin\nbaserom.buffer.resize(4); baserom[2] = ${v};\n.jsend\n`;
+      fs.add('/proj/js65.json', JSON.stringify({
+        projects: [{name: 'main', sources: ['a.s', 'b.s'], linkerConfig: 'nes.cfg',
+                    allowJavascript: true}],
+      }));
+      fs.add('/proj/nes.cfg', CFG);
+      fs.add('/proj/a.s', edit(1));
+      fs.add('/proj/b.s', edit(2));
+      const analyzer = new Analyzer({workspaceRoot: '/proj', debounceMs: 0, fsImpl: fs.sync as any});
+      analyzer.onDiagnostics = () => {};
+      const p = analyzer.discoverProject('/proj/js65.json');
+      if (p) analyzer.setProject(p);
+      analyzer.open(pathToUri('/proj/a.s'), edit(1), 1);
+      await analyzer.settled();
+
+      const conflicts = async () => {
+        const linked = await analyzer.linkSaved(pathToUri('/proj/a.s'));
+        return (linked!.diagnostics.get(pathToUri('/proj/b.s')) ?? [])
+            .map(messageOf).filter(m => /Base ROM/.test(m));
+      };
+      const first = await conflicts();
+      expect(first).toEqual([expect.stringMatching(/\$0002 written by both .*a\.s and .*b\.s/)]);
+      expect(await conflicts()).toEqual(first);
+    });
+
     /** Analyzer over a single standalone file — no `js65.json`, no config. */
     async function standaloneAnalyzerFor(code: string) {
       const fs = new MemFs();

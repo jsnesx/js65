@@ -95,6 +95,10 @@ export class Analyzer {
   private project: Js65Config | undefined;
   /** Last analysis result, used by feature modules for navigation. */
   private lastResult: AnalysisResult | undefined;
+  /** The assembly pass behind lastResult, so relinking does not stack diagnostics. */
+  private assembledResult: AnalysisResult | undefined;
+  /** Each project's latest link messages since that assembly pass. */
+  private linkMessages = new Map<string, AssemblerMessage[]>();
   /** Pending debounce + cancellation state. */
   private pending: PendingRun | undefined;
   /** CancelToken of the run that has actually started. */
@@ -362,6 +366,8 @@ export class Analyzer {
 
     const result: AnalysisResult = {diagnostics, projects: projectResults, touchedUris};
     this.lastResult = result;
+    this.assembledResult = result;
+    this.linkMessages.clear();
     if (this.inFlight === token) this.inFlight = undefined;
     this.onDiagnostics?.(result);
     this.notifySettled();
@@ -500,12 +506,9 @@ export class Analyzer {
    * Skipped for projects with no memory layout to place chunks into
    */
   async linkSaved(uri: string): Promise<AnalysisResult | undefined> {
-    const result = this.lastResult;
+    const result = this.assembledResult;
     if (!result) return undefined;
     const file = toPosix(uriToPath(uri));
-    const diagnostics = new Map<string, Diagnostic[]>(
-        [...result.diagnostics].map(([k, v]) => [k, [...v]]));
-    const touchedUris = new Set(result.touchedUris);
     let linked = false;
 
     for (const analysis of result.projects.values()) {
@@ -525,11 +528,18 @@ export class Analyzer {
       }
       // anchorToProject is used here in case the error message doesn't have a source location
       // which can happen right now with things like ld65 linker cfg files.
-      bucketMessages(messages.map(m => anchorToProject(m, analysis.project)),
-                     diagnostics, touchedUris, p => pathToUri(p));
+      this.linkMessages.set(analysis.project.name,
+                            messages.map(m => anchorToProject(m, analysis.project)));
       linked = true;
     }
     if (!linked) return undefined;
+
+    const diagnostics = new Map<string, Diagnostic[]>(
+        [...result.diagnostics].map(([k, v]) => [k, [...v]]));
+    const touchedUris = new Set(result.touchedUris);
+    for (const messages of this.linkMessages.values()) {
+      bucketMessages(messages, diagnostics, touchedUris, p => pathToUri(p));
+    }
 
     const merged: AnalysisResult = {diagnostics, projects: result.projects, touchedUris};
     this.lastResult = merged;

@@ -107,7 +107,7 @@ const JSCONFIG = JSON.stringify({
     target: 'ES2022',
     module: 'ESNext',
     moduleResolution: 'Bundler',
-    lib: ['ES2022'],
+    lib: ['ES2024'],
     types: [],
   },
   include: ['*.js', '*.d.ts'],

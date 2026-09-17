@@ -92,6 +92,14 @@ declare const a: AsmModule;
 
 /** \`-D\` values */
 declare const defines: Record<string, string | number | undefined>;
+
+/**
+ * Copy of the base ROM image or empty when there is none.
+ * Writes to the base ROM are merged into the output at link time in the order that
+ * the modules are passed to the linker. Can be grown by resizing the underlying
+ * buffer with \`baserom.buffer.resize(n)\`.
+ */
+declare const baserom: Uint8Array<ArrayBuffer>;
 `;
 }
 
