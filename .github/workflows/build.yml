@@ -155,6 +155,11 @@ jobs:
           # Ninja is single-config, so there is no per-config output subdir.
           HERMES_CONFIG: ''
         run: bun run hermes-exe
+      - name: Build integration library
+        if: matrix.dotnet
+        # js65.clearscript embeds build/libassembler.js and the browser targets
+        # deploy it, so this job needs its own copy.
+        run: bun run lib
       - name: Build desktop packages
         if: matrix.dotnet
         # The Hermes engine loads build/{js65.dll|libjs65.so|libjs65.dylib} in-process; those were
