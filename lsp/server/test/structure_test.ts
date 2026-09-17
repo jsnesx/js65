@@ -167,6 +167,13 @@ describe('structure', () => {
       expect(tokens.some(t => t.line === 4)).toBe(true);
     });
 
+    it('leaves .jspostbegin bodies to the JavaScript grammar', () => {
+      const text = '.jspostbegin\nrom[0] = 1; // not an assembly comment\n.jspostend\n  rts\n';
+      const tokens = decode(computeSemanticTokens(text).data);
+      expect(tokens.some(t => t.line === 1)).toBe(false);
+      expect(tokens.some(t => t.line === 3)).toBe(true);
+    });
+
     it('emits tokens in document order', () => {
       const text = '; c1\nmain:\n  lda #$01 ; c2\n  rts\n';
       const tokens = decode(computeSemanticTokens(text).data);

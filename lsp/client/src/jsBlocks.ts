@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 /**
- * Makes the JavaScript in `.jsbegin` blocks legible to the editor's JS tooling.
+ * Makes the JavaScript in `.jsbegin` and `.jspostbegin` blocks legible to the editor's JS tooling.
  *
  * Creates a temp .js file with the predefined `a` and `defines` and all
  * the included modules and globals so that the regular javascript LSP can
@@ -15,12 +15,12 @@ import type {JsGlobals} from './jsGlobals';
 
 const GLOB_META = /[*?]/;
 
-const RE_JSBEGIN = /^\s*\.jsbegin\b/i;
-const RE_JSEND = /^\s*\.jsend\b/i;
+const RE_JSBEGIN = /^\s*\.js(post)?begin\b/i;
+const RE_JSEND = /^\s*\.js(post)?end\b/i;
 // `.jsinput <name>, "<path>"`, matching the preprocessor's own parse.
 const RE_JSINPUT = /^\s*\.jsinput\s+([A-Za-z_$][\w$]*)\s*,\s*(?:"([^"]*)"|'([^']*)')/i;
 
-/** A `.jsbegin`/`.jsend` body, as 0-based end-exclusive lines. */
+/** A `.jsbegin`/`.jsend` or `.jspostbegin`/`.jspostend` body, as 0-based end-exclusive lines. */
 export interface JsBlock {
   startLine: number;
   endLine: number;

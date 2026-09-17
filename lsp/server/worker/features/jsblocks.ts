@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 /**
- * Locating `.jsbegin`/`.jsend` bodies in raw document text.
+ * Locating `.jsbegin`/`.jsend` and `.jspostbegin`/`.jspostend` bodies in raw document text.
  *
  * The bodies are JavaScript, not assembly, so every assembler-side feature has
  * to leave them alone.
  */
 
-const RE_JSBEGIN = /^\s*\.jsbegin\b/i;
-const RE_JSEND = /^\s*\.jsend\b/i;
+const RE_JSBEGIN = /^\s*\.js(post)?begin\b/i;
+const RE_JSEND = /^\s*\.js(post)?end\b/i;
 
 /** True when a 0-based line is in a block body (the directives themselves are not). */
 export function inJsBlock(text: string, line: number): boolean {

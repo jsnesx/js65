@@ -28,6 +28,11 @@ suite('Scanning .jsbegin blocks', () => {
 		assert.deepStrictEqual(blocks, [{startLine: 1, endLine: 2}]);
 	});
 
+	test('finds a .jspostbegin block', () => {
+		const {blocks} = scanJsBlocks('.jspostbegin\nrom[0] = 1;\n.jspostend\n.jsbegin\nx\n.jsend\n');
+		assert.deepStrictEqual(blocks, [{startLine: 1, endLine: 2}, {startLine: 4, endLine: 5}]);
+	});
+
 	test('ignores a directive that merely starts with .jsbegin', () => {
 		const {blocks} = scanJsBlocks('.jsbeginish\nx\n');
 		assert.deepStrictEqual(blocks, []);

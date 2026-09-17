@@ -15,13 +15,13 @@
 	],
 	"repository": {
 		"jsblock": {
-			"comment": "jsbegin/jsend bodies are JavaScript. contentName tells it to use the embeddedLanguages listed in the package.json",
-			"begin": "(?i)^\\s*(\\.jsbegin)\\b(.*)$",
+			"comment": "jsbegin/jsend and jspostbegin/jspostend bodies are JavaScript. contentName tells it to use the embeddedLanguages listed in the package.json",
+			"begin": "(?i)^\\s*(\\.js(?:post)?begin)\\b(.*)$",
 			"beginCaptures": {
 				"1": { "name": "keyword.control.js65" },
 				"2": { "name": "comment.line.semicolon.js65" }
 			},
-			"end": "(?i)^\\s*(\\.jsend)\\b",
+			"end": "(?i)^\\s*(\\.js(?:post)?end)\\b",
 			"endCaptures": {
 				"1": { "name": "keyword.control.js65" }
 			},
@@ -72,7 +72,7 @@
 				{
 					"comment": "structural directives get keyword.control so folding regions read clearly",
 					"name": "keyword.control.js65",
-					"match": "(?i)\\.(proc|endproc|scope|endscope|macro|endmacro|mac|endmac|struct|endstruct|union|endunion|enum|endenum|repeat|endrep(eat)?|if|ifdef|ifndef|ifblank|ifnblank|ifconst|ifref|ifnref|ifp02|ifp816|else|elseif|endif|include|incbin|import|importzp|export|exportzp|global|globalzp|segment|org|reloc|pushseg|popseg|jsbegin|jsend|jsinclude|jsinput)\\b"
+					"match": "(?i)\\.(proc|endproc|scope|endscope|macro|endmacro|mac|endmac|struct|endstruct|union|endunion|enum|endenum|repeat|endrep(eat)?|if|ifdef|ifndef|ifblank|ifnblank|ifconst|ifref|ifnref|ifp02|ifp816|else|elseif|endif|include|incbin|import|importzp|export|exportzp|global|globalzp|segment|org|reloc|pushseg|popseg|jsbegin|jsend|jspostbegin|jspostend|jsinclude|jsinput)\\b"
 				},
 				{
 					"name": "keyword.other.directive.js65",
