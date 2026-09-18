@@ -105,6 +105,7 @@ jobs:
           pgo-build-command: -C src/nova.x -I ./ -o out.nes src/nova.s
           pgo-source-paths: |
             src/**
+            !src/version.ts
             integrations/hermes/**
             !integrations/hermes/hermes-build.ts
       - name: Install ICU dev libraries (Linux)
