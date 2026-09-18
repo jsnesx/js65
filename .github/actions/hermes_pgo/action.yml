@@ -98,7 +98,7 @@ runs:
       if: runner.os == 'Windows'
       uses: vln-devsecops/actions-msvc@v1
     - name: Load a full LLVM toolchain (macOS/Linux)
-      if: runner.os != 'Windows' && steps.probe.outputs.cache-hit != 'true'
+      if: runner.os != 'Windows'
       shell: bash
       run: bash "$GITHUB_WORKSPACE/.github/actions/hermes_build/install-llvm.sh"
 
