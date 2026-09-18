@@ -333,6 +333,38 @@ export class Preprocessor implements Tokens.Source {
     return this.inRawMode(() => f(this.defineExpanded));
   }
 
+  /**
+   * Really kinda jank, but we need to expand the body of the defines
+   * but also keep the unexpanded version in case this if block needs replayed.
+   * This is an `if` specific wrapper that makes it so we keep both.
+   */
+  private collectIfBody<T>(f: (source: Tokens.Source) => T,
+                           pending: {line?: Token[]}): T {
+    const source: Tokens.Source = {
+      next: () => {
+        const line = this.stream.next();
+        pending.line = line?.slice();
+        return line == null ? line : this.expandDefines(line);
+      },
+    };
+    return this.inRawMode(() => f(source));
+  }
+
+  /** Runs a `.define`/`.undefine` sitting in a live `.if` branch. */
+  private runDefineDirective(line: Token[]): boolean {
+    const front = line[0];
+    if (front?.token !== 'cs') return false;
+    if (front.str === '.define') {
+      this.parseDefine(line);
+      return true;
+    }
+    if (front.str === '.undefine') {
+      this.parseUndefine(line);
+      return true;
+    }
+    return false;
+  }
+
   /** Branch tests are evaluated live, so they need the functions back. */
   private outsideRawMode<T>(f: () => T): T {
     const saved = this.rawMode;
@@ -1132,10 +1164,16 @@ export class Preprocessor implements Tokens.Source {
     // (`.if`, `.elseif`, `.else`, `.endif`) stay lit, so switching branches
     // ends the run rather than extending it across the directive line.
     const dead = this.inactiveRegionIndex;
-    this.collectBody(source => Tokens.pullLines(source, line => {
+    const pending: {line?: Token[]} = {};
+    this.collectIfBody(source => Tokens.pullLines(source, line => {
       // Report missing endif at the site of the starting .if
       if (!line) Tokens.fail(`EOF looking for .endif`, at);
-      raw.push(line);
+      const stored = pending.line ?? line;
+      // Catch a case where a define expands to a completely empty line here
+      // We needed to expand and collect the body of this if block, but this
+      // line had nothing on it, so we skip it rather than run into issues later.
+      if (!line.length) return true;
+      raw.push(stored);
       const front = line[0];
       if (Tokens.eq(front, Tokens.ENDIF)) {
         depth--;
@@ -1180,7 +1218,10 @@ export class Preprocessor implements Tokens.Source {
       // anything else on the line
       if (deferred) return true;
       if (cond) {
-        result.push(line);
+        // Defines take effect as the body is collected, so later lines in this
+        // branch expand against them when they are replayed.
+        if (this.runDefineDirective(line)) return true;
+        result.push(stored);
         // Only this level's verdict is final. A line inside a nested `.if` is
         // re-decided when that block is unshifted and parsed in turn, so
         // calling it live here would override the inner branch that drops it.
@@ -1189,7 +1230,7 @@ export class Preprocessor implements Tokens.Source {
         dead?.skipLine(sourceOfLine(line));
       }
       return true;
-    }));
+    }), pending);
     if (deferred) {
       // Tag this depth's own markers so the late pass sends them straight
       // through instead of re-entering `parseIf`

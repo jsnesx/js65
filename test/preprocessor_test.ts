@@ -449,6 +449,57 @@ describe('Preprocessor', function() {
                   '.byte tbl'],
                  await directive('.byte 1, 2'));
     });
+
+    // A macro body is a stored template: ca65 V2.19 binds the defines it uses
+    // when the body is read, so redefining one between calls emits `07 07`
+    // rather than picking up the new value on the second call.
+    it('should bind a define in the body at definition time',
+       async function() {
+      await test(['.define VAL 7',
+                  '.macro M',
+                  '.byte VAL',
+                  '.endmacro',
+                  'M',
+                  '.undefine VAL',
+                  '.define VAL 9',
+                  'M'],
+                 await directive('.byte 7'),
+                 await directive('.byte 7'));
+    });
+
+    // A name the body introduces isn't known while the body is read, so it
+    // stays unexpanded and resolves on use. ca65 emits `03`.
+    it('should apply a define the body introduces', async function() {
+      await test(['.macro M',
+                  '.define NEW 3',
+                  '.byte NEW',
+                  '.endmacro',
+                  'M'],
+                 await directive('.byte 3'));
+    });
+
+    it('should drop an emptied line in a macro body', async function() {
+      await test(['.define EMPTY',
+                  '.macro M',
+                  'EMPTY',
+                  '.byte 1',
+                  '.endmacro',
+                  'M'],
+                 await directive('.byte 1'));
+    });
+
+    it('should drop an emptied line in a conditional in a macro body',
+       async function() {
+      await test(['.define EMPTY',
+                  '.macro M',
+                  '.if 1',
+                  'EMPTY',
+                  '.byte 1',
+                  '.endif',
+                  '.endmacro',
+                  'M'],
+                 await directive('.byte 1'));
+    });
   });
 
   describe('.repeat', function() {
@@ -497,6 +548,50 @@ describe('Preprocessor', function() {
                   'end_rep'],
                  await instruction('foo'),
                  await instruction('foo'));
+    });
+
+    // The repeated lines run back through `.if`, so an emptied line reached the
+    // conditional body scan once per iteration. ca65 V2.19 emits `01 01`.
+    it('should drop an emptied line in a repeated conditional',
+       async function() {
+      await test(['.define EMPTY',
+                  '.repeat 2',
+                  '.if 1',
+                  'EMPTY',
+                  '.byte 1',
+                  '.endif',
+                  '.endrep'],
+                 await directive('.byte 1'),
+                 await directive('.byte 1'));
+    });
+
+    it('should drop a .eol-emptied line in a repeated conditional',
+       async function() {
+      await test(['.define TERM {x @ .eol}',
+                  '.repeat 2',
+                  '.if 1',
+                  'TERM 5 @',
+                  '.byte 1',
+                  '.endif',
+                  '.endrep'],
+                 await directive('.byte 1'),
+                 await directive('.byte 1'));
+    });
+
+    // A repeat body is collected once and replayed, so like ca65 the defines it
+    // uses are bound when the block is read rather than per iteration.
+    it('should bind a define in the body when the block is read',
+       async function() {
+      await test(['.define VAL 7',
+                  '.repeat 2',
+                  '.byte VAL',
+                  '.endrep',
+                  '.undefine VAL',
+                  '.define VAL 9',
+                  '.byte VAL'],
+                 await directive('.byte 7'),
+                 await directive('.byte 7'),
+                 await directive('.byte 9'));
     });
   });
 
@@ -599,6 +694,134 @@ describe('Preprocessor', function() {
                   'end_if',
                   'z'],
                  await instruction('z'));
+    });
+
+    // A define whose production leaves nothing on the current line expands the
+    // whole line away. `pumpLine` already loops on `line.length`, but the body
+    // scan read line[0] blindly. The `{x @ .eol}` shape is the terminator of a
+    // recursive define, which is how this turns up in practice.
+    it('should drop a line a .eol define expands away', async function() {
+      await test(['.define TERM {x @ .eol}',
+                  '.if 1',
+                  'TERM 5 @',
+                  'x y',
+                  '.endif'],
+                 await instruction('x y'));
+    });
+
+    it('should drop a .eol-emptied line in a dead branch', async function() {
+      await test(['.define TERM {x @ .eol}',
+                  '.if 0',
+                  'TERM 5 @',
+                  '.endif',
+                  'z'],
+                 await instruction('z'));
+    });
+
+    it('should drop a .eol-emptied line in a nested conditional',
+       async function() {
+      await test(['.define TERM {x @ .eol}',
+                  '.if 1',
+                  '.if 1',
+                  'TERM 5 @',
+                  'x y',
+                  '.endif',
+                  '.endif'],
+                 await instruction('x y'));
+    });
+
+    // Same emptied line, reached through a deferred condition, where the body
+    // is replayed to the late pass instead of resolved here.
+    it('should drop an emptied line in a deferred conditional',
+       async function() {
+      await test(['.define EMPTY',
+                  '.segment "a"',
+                  '.import FOO',
+                  '.if .bank(FOO)',
+                  'EMPTY',
+                  'x y',
+                  '.endif'],
+                 '.segment STR[$a]',
+                 '.import FOO',
+                 '.if .bank ( FOO )',
+                 await instruction('x y'),
+                 '.endif');
+    });
+
+    // An empty production does the same thing; ca65 V2.19 assembles this one.
+    it('should drop a line an empty define expands away', async function() {
+      await test(['.define EMPTY',
+                  '.if 1',
+                  'EMPTY',
+                  'x y',
+                  '.endif'],
+                 await instruction('x y'));
+    });
+
+    it('should drop an emptied line in an .else branch', async function() {
+      await test(['.define EMPTY',
+                  '.if 0',
+                  'x y',
+                  '.else',
+                  'EMPTY',
+                  'z',
+                  '.endif'],
+                 await instruction('z'));
+    });
+
+    // The body used to be expanded as it was collected, so a define installed
+    // inside the block never reached the lines below it and the old value was
+    // substituted instead. ca65 V2.19 emits `09` for this.
+    it('should apply a define redefined inside the block', async function() {
+      await test(['.define VAL 7',
+                  '.if 1',
+                  '.undefine VAL',
+                  '.define VAL 9',
+                  '.byte VAL',
+                  '.endif'],
+                 await directive('.byte 9'));
+    });
+
+    // Same, from an empty definition: the use expanded to nothing at all and
+    // silently left `.byte` with no argument. ca65 emits `01`.
+    it('should apply a define that replaces an empty one', async function() {
+      await test(['.define NOTHING',
+                  '.if 1',
+                  '.undefine NOTHING',
+                  '.define NOTHING 1',
+                  '.byte NOTHING',
+                  '.endif'],
+                 await directive('.byte 1'));
+    });
+
+    it('should apply a define redefined in a nested block', async function() {
+      await test(['.define VAL 7',
+                  '.if 1',
+                  '.if 1',
+                  '.undefine VAL',
+                  '.define VAL 9',
+                  '.byte VAL',
+                  '.endif',
+                  '.endif'],
+                 await directive('.byte 9'));
+    });
+
+    // A deferred block is replayed to the late pass, so it has to carry the
+    // unexpanded line for the redefinition to apply there too.
+    it('should apply a define redefined in a deferred block', async function() {
+      await test(['.segment "a"',
+                  '.import FOO',
+                  '.define VAL 7',
+                  '.if .bank(FOO)',
+                  '.undefine VAL',
+                  '.define VAL 9',
+                  '.byte VAL',
+                  '.endif'],
+                 '.segment STR[$a]',
+                 '.import FOO',
+                 '.if .bank ( FOO )',
+                 await directive('.byte 9'),
+                 '.endif');
     });
 
     // Token functions sit above the gate, so a dead branch never evaluates
