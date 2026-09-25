@@ -19,13 +19,9 @@ mkdir -p "$RAW_DIR"
 EXE=""
 [ "$RUNNER_OS" = "Windows" ] && EXE=".exe"
 
-# This runs before the caller's own dependency and ICU steps, so cover both here
-# rather than depending on where the action sits in their workflow.
+# This runs before the caller's own dependency step, so cover it here rather
+# than depending on where the action sits in their workflow.
 [ -d node_modules ] || bun install
-if [ "$RUNNER_OS" = "Linux" ]; then
-  # hermesvm references system ICU and the link needs the -dev .so symlinks.
-  dpkg -s libicu-dev >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y libicu-dev)
-fi
 
 export LLVM_PROFILE_FILE="$RAW_DIR/discard/shermes-%p.profraw"
 

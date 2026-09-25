@@ -67,7 +67,7 @@ runs:
           ${{ inputs.build-dir }}/external/boost
         # runner.arch is part of the key because these are native binaries and
         # the x64 and arm64 Linux runners both report runner.os == 'Linux'.
-        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v5${{ inputs.cache-key-suffix }}
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v6${{ inputs.cache-key-suffix }}
 
     - name: Load a full LLVM toolchain (macOS/Linux)
       if: runner.os != 'Windows' && inputs.skip-toolchain != 'true'
@@ -94,4 +94,4 @@ runs:
           ${{ inputs.build-dir }}/tools/shermes
           ${{ inputs.build-dir }}/jsi
           ${{ inputs.build-dir }}/external/boost
-        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v5${{ inputs.cache-key-suffix }}
+        key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v6${{ inputs.cache-key-suffix }}

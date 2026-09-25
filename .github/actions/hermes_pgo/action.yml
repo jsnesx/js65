@@ -77,7 +77,7 @@ runs:
         SUFFIX: ${{ steps.pgo.outputs.enabled == 'true' && format('-pgo-{0}-{1}', inputs.pgo-ref, hashFiles(inputs.pgo-source-paths)) || '' }}
       run: |
         echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
-        echo "key=shermes-$RUNNER_OS-$RUNNER_ARCH-${{ inputs.hermes-ref }}-lto-pic-v5$SUFFIX" >> "$GITHUB_OUTPUT"
+        echo "key=shermes-$RUNNER_OS-$RUNNER_ARCH-${{ inputs.hermes-ref }}-lto-pic-v6$SUFFIX" >> "$GITHUB_OUTPUT"
 
     - name: Probe the cache
       id: probe

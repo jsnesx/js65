@@ -64,16 +64,11 @@ const LIBDIRS = [
 // List of platform libraries we need to include in the link for hermes
 // just found through trial error.
 const PLATFORM_LIBS = isWin
-  ? ['winmm', 'icuuc', 'icuin']
+  ? ['winmm']
   : isLinux
-    ? ['dl', 'pthread', 'icui18n', 'icuuc', 'icudata']
+    ? ['dl', 'pthread']
     : [];
 const LIBS = ['hermesvm_a', 'shermes_console_a', 'jsi', 'boost_context', ...PLATFORM_LIBS];
-
-// On macOS, hermesvm uses CoreFoundation (CFLocale/CFString/CFDateFormatter)
-// for Unicode instead of ICU, so link the framework. Frameworks aren't -l libs;
-// they need their own -framework flag.
-const MAC_FRAMEWORKS = isMac ? ['-framework', 'CoreFoundation'] : [];
 
 // Match the CRT/STL the Hermes libs were built with. On Windows the prebuilt
 // libs use the dynamic CRT (/MD); elsewhere the default STL already matches.
@@ -182,7 +177,6 @@ const link = (out: string, entryObj: string, extra: string[]) =>
     'build/hermes.unit.o', 'build/hermes_core.o', 'build/miniz.o', `build/${entryObj}`, '-o', out,
     ...LIBDIRS.map((d) => `-L${d}`),
     ...LIBS.map((l) => `-l${l}`),
-    ...MAC_FRAMEWORKS,
   ]);
 
 // The CLI executable...
