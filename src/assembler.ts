@@ -1395,8 +1395,11 @@ export class Assembler {
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
-      // Skip over any assignments as these were handled in the preprocessor?
-      // TODO: Should the preprocessor remove the tokens?
+      if (this.linkEnv) {
+        // During the latepass, we don't have a preprocesor, which normally
+        // runs the assignments, so we have to replay them in the latepass.
+        this.replayAssignment(tokens);
+      }
       return;
     }
     this._source = tokens[0].source;
@@ -1418,26 +1421,40 @@ export class Assembler {
         this.instruction(tokens);
       }
     } catch (err) {
-      // `.fatal`, cancellation and the error cap stop the whole run.
-      if (err instanceof FatalError) throw err;
-      if (err instanceof RecoverableError) {
-        // Error already recorded, continue to next line
-        return;
-      }
-      if (err instanceof Tokens.SourceError) {
-        // Thrown by Tokens.fail / Exprs.parse / scope lookup, which have no
-        // access to the collector. Record it here so there is exactly one
-        // message, then resync to the next line.
-        this.errorCollector.addFromException(err, err.source ?? this._source);
-        return;
-      }
-      // A plain Error is something not caused by the user, so treat it as fatal
-      throw Tokens.SourceError.locate(err, this._source);
+      this.recoverLine(err);
     } finally {
-      // A label opens its span above; this line is the remainder of the label's
-      // source line, so whatever it emitted is the label's size.
       if (!isLabel) this.closeLabelSpan();
     }
+  }
+
+  private replayAssignment(tokens: Token[]) {
+    try {
+      if (Tokens.eq(tokens[1], Tokens.SET)) {
+        this.setSym(tokens);
+      } else {
+        this.assignSym(tokens);
+      }
+    } catch (err) {
+      this.recoverLine(err);
+    }
+  }
+
+  private recoverLine(err: unknown) {
+    // `.fatal`, cancellation and the error cap stop the whole run.
+    if (err instanceof FatalError) throw err;
+    if (err instanceof RecoverableError) {
+      // Error already recorded, continue to next line
+      return;
+    }
+    if (err instanceof Tokens.SourceError) {
+      // Thrown by Tokens.fail / Exprs.parse / scope lookup, which have no
+      // access to the collector. Record it here so there is exactly one
+      // message, then resync to the next line.
+      this.errorCollector.addFromException(err, err.source ?? this._source);
+      return;
+    }
+    // A plain Error is something not caused by the user, so treat it as fatal
+    throw Tokens.SourceError.locate(err, this._source);
   }
 
   // Assemble from a token source. The optional signal is polled once per line so a long

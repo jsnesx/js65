@@ -118,7 +118,7 @@ export class Linker {
             [...Targets.keys()].join(', ')}`);
       }
       this._link.checkAnonMode(`--target ${this.opts.target}`);
-      target.segments.forEach( seg => this._link.addRawSegment(seg) );
+      this._link.setTargetSegments(target.segments);
     }
     return this._link.link(signal);
   }
@@ -1283,6 +1283,8 @@ class Link {
   private config?: LinkerConfig;
   /** ld65 cfg file declared segments, segments are forced free if they came from here */
   private configSegments = new Set<string>();
+  /** `--target` segments, kept so a replay can re-add them. */
+  private targetSegments: readonly Segment[] = [];
   /** Symbols the object files export, captured when the config was set. */
   private objectExports: ReadonlySet<string> = new Set();
   /** Stores information about the modules for the latepass if we need to replace data */
@@ -1463,6 +1465,9 @@ class Link {
     }
     for (const file of this.rawModules) {
       this.loadModuleInto(file);
+    }
+    for (const segment of this.targetSegments) {
+      this.addRawSegment(segment);
     }
   }
 
@@ -2531,6 +2536,11 @@ class Link {
       this.configSegments.add(segment.name);
       this.segmentOrder.push(segment.name);
     }
+  }
+
+  setTargetSegments(segments: readonly Segment[]) {
+    this.targetSegments = segments;
+    for (const segment of segments) this.addRawSegment(segment);
   }
 
   addRawSegment(segment: Segment) {

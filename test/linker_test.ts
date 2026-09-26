@@ -2635,6 +2635,24 @@ describe('late assembly pass', function() {
     expect(bytes.slice(i, i + 4)).toEqual([0x99, 0xa5, 0x00, 0x88]);
   });
 
+  it('keeps the --target segments after replaying a module', function() {
+    // The replay rebuilds `rawSegments`, which dropped ZEROPAGE's target size.
+    const other: AssemblyInput = {
+      type: 'source', name: 'other.s',
+      code: `.segment "ZEROPAGE"\n.export Target\nTarget: .res 1\n`,
+    };
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `.segment "CODE"\n.byte $99\nlda Target\n.byte $88\n`,
+    };
+    const result = compile([main, other], {target: 'nes-nrom'});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    expect(result.success).toBe(true);
+    const bytes = Array.from(result.outputs[0].data);
+    const i = bytes.indexOf(0x99);
+    expect(bytes.slice(i, i + 4)).toEqual([0x99, 0xa5, 0x00, 0x88]);
+  });
+
   it('reports an autoimported symbol nothing exports', function() {
     const result = compile([{
       type: 'source', name: 'main.s',

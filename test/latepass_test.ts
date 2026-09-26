@@ -661,3 +661,82 @@ Target:
         .toMatch(/disagreement across segments/);
   });
 });
+
+describe('assignments survive a size-query replay', function() {
+  // `zpvar` is auto-imported with no size, so `main.s` must be replayed.
+  const other: AssemblyInput = {type: 'source', name: 'other.s', code: `
+.exportzp zpvar
+.zeropage
+zpvar: .res 1
+`};
+
+  function replaySource(code: string) {
+    const result = libAssemble(
+        [{type: 'source', name: 'main.s', code}, other], {});
+    if (!result.success) throw new Error(JSON.stringify(result.messages));
+    const env = buildLinkTimeEnv(result.modules,
+        mergeModuleSegments(result.modules, {target: 'nes-nrom'}));
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(replay.replayed).toEqual([0]);
+    return replay;
+  }
+
+  const messages = (msgs: readonly {message: string}[]) => msgs.map(m => m.message);
+  const autoImports = (replay: {modules: Module[]}) =>
+      (replay.modules[0].autoImports ?? []).map(a => a.name);
+  // The immediate and the zp opcode; the operand is a link-time placeholder.
+  const codeBytes = (replay: {modules: Module[]}) =>
+      [...(replay.modules[0].chunks ?? [])
+          .find(c => c.segments.includes('CODE'))!.data].slice(0, 3);
+
+  it('resolves an enum member', function() {
+    const replay = replaySource(`
+.enum Flags
+  SWITCHED = $02
+.endenum
+.code
+.proc main
+  lda #Flags::SWITCHED
+  lda zpvar
+  rts
+.endproc
+`);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(codeBytes(replay)).toEqual([0xa9, 0x02, 0xa5]);
+  });
+
+  it('resolves a constant in a named scope', function() {
+    const replay = replaySource(`
+.scope Other
+  VALUE = $10
+.endscope
+.code
+  lda #Other::VALUE
+  lda zpvar
+`);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(codeBytes(replay)).toEqual([0xa9, 0x10, 0xa5]);
+  });
+
+  it('does not auto-import an unscoped constant', function() {
+    const replay = replaySource(`
+PLAIN = $20
+.code
+  lda #PLAIN
+  lda zpvar
+`);
+    expect(autoImports(replay)).not.toContain('PLAIN');
+    expect(codeBytes(replay)).toEqual([0xa9, 0x20, 0xa5]);
+  });
+
+  it('does not auto-import a .set variable', function() {
+    const replay = replaySource(`
+MUT .set $30
+.code
+  lda #MUT
+  lda zpvar
+`);
+    expect(autoImports(replay)).not.toContain('MUT');
+    expect(codeBytes(replay)).toEqual([0xa9, 0x30, 0xa5]);
+  });
+});
