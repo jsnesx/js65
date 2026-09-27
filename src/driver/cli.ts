@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { Cpu } from '../cpu.ts';
-import { clean, smudge } from '../smudge.ts';
+import { clean, inesPrg, smudge } from '../smudge.ts';
 import { createHash } from "sha1-uint8array";
 import { Base64 } from '../base64.ts';
 import { compile, type AssemblyInput, type Js65Options } from '../libassembler.ts';
@@ -557,8 +557,12 @@ export class Cli {
       }
     }
 
-    // TODO - read the header properly
-    const prg = (fullRom as Uint8Array).subarray(0x10, 0x40010);
+    let prg: Uint8Array;
+    try {
+      prg = inesPrg(fullRom as Uint8Array);
+    } catch (e) {
+      return this.usage(1, [e as Error]);
+    }
     await this.callbacks.fsWriteString("", args.outfile, args.op!(src!, Cpu.P02, prg));
     // if (err) this.printerrors(err);
   }

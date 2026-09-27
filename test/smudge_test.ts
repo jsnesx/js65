@@ -175,3 +175,36 @@ describe('clean', function() {
         .toEqual('<@c <var@>\n  var = [@d@] ; comment\n; a');
   });
 });
+
+describe('inesPrg', function() {
+  function rom(header: number[], length: number): Uint8Array {
+    const r = new Uint8Array(length);
+    r.set([0x4e, 0x45, 0x53, 0x1a, ...header]);
+    return r;
+  }
+  it('reads the iNES PRG size', function() {
+    const prg = lib.inesPrg(rom([2, 1], 0x10 + 0x8000 + 0x2000));
+    expect(prg.byteOffset).toBe(0x10);
+    expect(prg.length).toBe(0x8000);
+  });
+  it('skips the trainer', function() {
+    const prg = lib.inesPrg(rom([1, 0, 0x04], 0x10 + 512 + 0x4000));
+    expect(prg.byteOffset).toBe(0x10 + 512);
+    expect(prg.length).toBe(0x4000);
+  });
+  it('reads the NES 2.0 PRG size MSB', function() {
+    const prg = lib.inesPrg(rom([0x00, 0, 0, 0x08, 0, 0x01], 0x10 + 0x400000));
+    expect(prg.length).toBe(0x400000);
+  });
+  it('reads the NES 2.0 exponent-multiplier form', function() {
+    // 2^4 * (1*2+1) = 48
+    const prg = lib.inesPrg(rom([(4 << 2) | 1, 0, 0, 0x08, 0, 0x0f], 0x10 + 48));
+    expect(prg.length).toBe(48);
+  });
+  it('rejects a missing header', function() {
+    expect(() => lib.inesPrg(new Uint8Array(0x4010))).toThrow('iNES header');
+  });
+  it('rejects a truncated file', function() {
+    expect(() => lib.inesPrg(rom([2], 0x10 + 0x4000))).toThrow('too short');
+  });
+});

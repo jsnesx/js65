@@ -1324,6 +1324,7 @@ describe('CLI', function() {
     const prg = new Uint8Array(0x40000);
     prg.set([0xa9, 0x05, 0x60]);
     const rom = new Uint8Array(0x40010);
+    rom.set([0x4e, 0x45, 0x53, 0x1a, 0x10]);
     rom.set(prg, 0x10);
     const sha = Array.from(new Uint8Array(createHash().update(rom).digest()),
                            x => x.toString(16).padStart(2, '0')).join('');
@@ -1409,6 +1410,25 @@ describe('CLI', function() {
     it('reports a missing sha1 tag instead of crashing', async function() {
       const {exitCode, written} = await search(
           {'.': ['in.s']}, {}, 'lda #$05\n');
+      expect(exitCode).toBe(1);
+      expect(written).toBe('');
+    });
+
+    it('sizes PRG from the header and skips the trainer', async function() {
+      const big = new Uint8Array(0x10 + 512 + 0x80000);
+      big.set([0x4e, 0x45, 0x53, 0x1a, 0x20, 0, 0x04]);
+      big[0x10 + 512 + 0x7ffff] = 0x42;
+      const {written, exitCode} = await search(
+          {'.': ['in.s']}, {'big.nes': big}, '.byte [@7ffff@]\n',
+          ['rehydrate', '--rom', 'big.nes', '-o', 'out.s', 'in.s']);
+      expect(exitCode).toBe(0);
+      expect(written).toBe('.byte $42\n');
+    });
+
+    it('rejects a rom without an iNES header', async function() {
+      const {exitCode, written} = await search(
+          {'.': ['in.s']}, {'raw.bin': new Uint8Array(0x40010)}, '.byte [@0@]\n',
+          ['rehydrate', '--rom', 'raw.bin', '-o', 'out.s', 'in.s']);
       expect(exitCode).toBe(1);
       expect(written).toBe('');
     });

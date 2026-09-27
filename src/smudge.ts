@@ -20,6 +20,30 @@ export function clean(contents: string, cpu: Cpu, prg: Uint8Array): string {
   return new Cleaner(cpu, prg).clean(contents);
 }
 
+/** Slices the PRG ROM out of an iNES or NES 2.0 image. */
+export function inesPrg(rom: Uint8Array): Uint8Array {
+  if (rom.length < 16 || rom[0] !== 0x4e || rom[1] !== 0x45 || rom[2] !== 0x53 ||
+      rom[3] !== 0x1a) {
+    throw new Error('rom is missing the iNES header');
+  }
+  let size = rom[4] * 0x4000;
+  // check for nes2 header
+  if ((rom[7] & 0x0c) === 0x08) {
+    // if so then we need to check for the exponent form and also include the extra
+    // prg data size fields.
+    const msb = rom[9] & 0x0f;
+    size = msb === 0x0f
+        ? 2 ** (rom[4] >> 2) * ((rom[4] & 3) * 2 + 1)
+        : ((msb << 8) | rom[4]) * 0x4000;
+  }
+  // Check for the trainer and skip it.
+  const start = 16 + (rom[6] & 0x04 ? 512 : 0);
+  if (start + size > rom.length) {
+    throw new Error(`rom header claims ${size} bytes of PRG but the file is too short`);
+  }
+  return rom.subarray(start, start + size);
+}
+
 // Smudging is pretty easy: we don't need to be clever about which bytes in the
 // rom to use for obfuscating.  We just deobfuscate based on whatever we see.
 // The biggest challenge is how to handle relative jumps.  Generally the right
