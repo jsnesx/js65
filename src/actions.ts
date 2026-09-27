@@ -15,7 +15,7 @@ export function toSourceInfo(source?: ActionSource): SourceInfo | undefined {
   return { file: source.file, line: source.line, column: 0 };
 }
 
-function toValueExpr(v: number | { op: 'sym', sym: string }): Expr {
+function toValueExpr(v: number | Expr): Expr {
   return typeof v === 'number' ? { op: 'num', num: v } : v;
 }
 
@@ -46,11 +46,11 @@ export function runActions(asm: Assembler, actions: readonly AssemblyAction[],
         break;
 
       case 'hibytes':
-        asm.byte(...action.values.map(v => Exprs.hiByte(toValueExpr(v))));
+        asm.byte(...Exprs.hiBytes(...action.values.map(toValueExpr)));
         break;
 
       case 'lobytes':
-        asm.byte(...action.values.map(v => Exprs.loByte(toValueExpr(v))));
+        asm.byte(...Exprs.loBytes(...action.values.map(toValueExpr)));
         break;
 
       case 'literal':

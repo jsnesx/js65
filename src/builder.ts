@@ -4,10 +4,11 @@
 // Fluent builder API for constructing modules programmatically instead of writing source
 // text or hand-assembling an actions[] array.
 
+import type { Expr } from './expr.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput,
               Js65Options } from './libassembler.ts';
 
-type ByteWordValue = number | { op: 'sym', sym: string };
+type ByteWordValue = number | Expr;
 type ByteValue = ByteWordValue | string;
 
 /** A symbolic reference usable anywhere a byte/word literal is expected. */

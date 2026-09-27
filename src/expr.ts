@@ -75,12 +75,18 @@ function jsSource(e: Expr): {source?: Tokens.SourceInfo} {
 }
 
 /** Given an Expr, returns a new Expr for the low byte. */
-export function loByte(e: Expr) {
+export function loByte(e: Expr): Expr {
   return {op: '<', args: [e], ...jsSource(e)};
 }
 /** Given an Expr, returns a new Expr for the high byte. */
-export function hiByte(e: Expr) {
+export function hiByte(e: Expr): Expr {
   return {op: '>', args: [e], ...jsSource(e)};
+}
+export function loBytes(...es: Expr[]): Expr[] {
+  return es.map(loByte);
+}
+export function hiBytes(...es: Expr[]): Expr[] {
+  return es.map(hiByte);
 }
 
 type Rec = (expr: Expr) => Expr; // recurses into children

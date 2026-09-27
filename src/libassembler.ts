@@ -46,6 +46,7 @@ import { gzipCodec } from './driver/codec/codec.ts';
 export { Assembler, Cpu, SourceContents, Base64 };
 export type { ResolvedFile };
 export type { Expr, Module, Segment, SymbolDefine, SymbolIndex };
+export { loByte, hiByte, loBytes, hiBytes } from './expr.ts';
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
 export { AsmEngine, AsmModule, sym } from './builder.ts';
@@ -64,11 +65,11 @@ export interface ActionSource {
 export type AssemblyAction =
   | { action: 'code', code: string, name?: string, source?: ActionSource }
   | { action: 'label', label: string, source?: ActionSource }
-  | { action: 'byte', bytes: Array<number | string | { op: 'sym', sym: string }>, source?: ActionSource }
-  | { action: 'word', words: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
-  | { action: 'hibytes', values: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
-  | { action: 'lobytes', values: Array<number | { op: 'sym', sym: string }>, source?: ActionSource }
-  | { action: 'literal', values: Array<number | string | { op: 'sym', sym: string }>, source?: ActionSource }
+  | { action: 'byte', bytes: Array<number | string | Expr>, source?: ActionSource }
+  | { action: 'word', words: Array<number | Expr>, source?: ActionSource }
+  | { action: 'hibytes', values: Array<number | Expr>, source?: ActionSource }
+  | { action: 'lobytes', values: Array<number | Expr>, source?: ActionSource }
+  | { action: 'literal', values: Array<number | string | Expr>, source?: ActionSource }
   | { action: 'org', addr: number, name?: string, source?: ActionSource }
   | { action: 'segment', name: string | string[], source?: ActionSource }
   | { action: 'reloc', name?: string, source?: ActionSource }

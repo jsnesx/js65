@@ -491,30 +491,26 @@ function validateActionSource(v: unknown, path: string): ActionSource {
 }
 
 // `bytes`/`words` arrive either as a Uint8Array (a JSON reviver already decoded
-// a base64 string) or as a literal array of numbers / `{op:'sym', sym}` references.
-function validateByteList(v: unknown, path: string): Array<number | { op: 'sym'; sym: string }> {
+// a base64 string) or as a literal array of numbers / Expr objects.
+function validateByteList(v: unknown, path: string): Array<number | Expr> {
   if (v instanceof Uint8Array) return Array.from(v);
   const arr = reqArray(v, path);
   return arr.map((e, i) => {
     if (typeof e === 'number') return e;
-    if (isObject(e) && e.op === 'sym') {
-      return { op: 'sym' as const, sym: reqString(e.sym, `${path}[${i}].sym`) };
-    }
-    fail(`${path}[${i}]`, 'expected number or symbol');
+    if (isObject(e)) return validateExpr(e, `${path}[${i}]`);
+    fail(`${path}[${i}]`, 'expected number or expression');
   });
 }
 
 // Like validateByteList, but for the 'byte'/'literal' actions, whose entries can also be
 // a whole string (embedded as a string literal, run through the charmap at emit time).
-function validateByteOrStringList(v: unknown, path: string): Array<number | string | { op: 'sym'; sym: string }> {
+function validateByteOrStringList(v: unknown, path: string): Array<number | string | Expr> {
   if (v instanceof Uint8Array) return Array.from(v);
   const arr = reqArray(v, path);
   return arr.map((e, i) => {
     if (typeof e === 'number' || typeof e === 'string') return e;
-    if (isObject(e) && e.op === 'sym') {
-      return { op: 'sym' as const, sym: reqString(e.sym, `${path}[${i}].sym`) };
-    }
-    fail(`${path}[${i}]`, 'expected number, string literal, or symbol');
+    if (isObject(e)) return validateExpr(e, `${path}[${i}]`);
+    fail(`${path}[${i}]`, 'expected number, string literal, or expression');
   });
 }
 

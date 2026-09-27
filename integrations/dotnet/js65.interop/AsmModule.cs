@@ -236,7 +236,7 @@ public class AsmModule
         });
     }
 
-    public Dictionary<string, object> Symbol(string name)
+    public static Dictionary<string, object> Symbol(string name)
     {
         // kinda jank, but instead of eating the overhead for creating this token,
         // just hardcode the symbol token
@@ -244,6 +244,24 @@ public class AsmModule
         {
             { "op", "sym" },
             { "sym", name },
+        };
+    }
+
+    public static Dictionary<string, object> LoByte(Dictionary<string, object> expr)
+    {
+        return new Dictionary<string, object>
+        {
+            { "op", "<" },
+            { "args", new[] { expr } },
+        };
+    }
+
+    public static Dictionary<string, object> HiByte(Dictionary<string, object> expr)
+    {
+        return new Dictionary<string, object>
+        {
+            { "op", ">" },
+            { "args", new[] { expr } },
         };
     }
 
