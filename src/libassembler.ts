@@ -22,7 +22,7 @@ import { Assembler } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { diffRom, jsPostprocess, jsPreprocess } from './jspreprocessor.ts';
-import { Linker } from './linker.ts';
+import { Linker, type Export as LinkExport } from './linker.ts';
 import { Preprocessor } from './preprocessor.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { SparseByteArray } from './util.ts';
@@ -45,7 +45,7 @@ import { gzipCodec } from './driver/codec/codec.ts';
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
 export type { ResolvedFile };
-export type { Expr, Module, Segment, SymbolDefine, SymbolIndex };
+export type { Expr, LinkExport, Module, Segment, SymbolDefine, SymbolIndex };
 export { loByte, hiByte, loBytes, hiBytes } from './expr.ts';
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
@@ -495,6 +495,8 @@ export interface LinkResult {
   debugInfo: string;
   /** Linker map (empty unless requested or on errors) */
   mapFile: string;
+  /** Resolved exported symbols */
+  readonly exports: ReadonlyMap<string, LinkExport>;
   /** All messages (errors, warnings, info) from compilation */
   messages: AssemblerMessage[];
 }
@@ -601,6 +603,7 @@ export function link(
       extraOutputs,
       debugInfo,
       mapFile,
+      get exports() { return linker.exports(); },
       messages: allMessages
     };
   } catch (err) {
@@ -614,6 +617,7 @@ export function link(
       extraOutputs: [],
       debugInfo: '',
       mapFile: '',
+      exports: new Map(),
       messages: allMessages
     };
   }
