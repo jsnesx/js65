@@ -1330,9 +1330,11 @@ describe('CLI', function() {
 
     /** Runs `rehydrate` over a tree, returning what got written and which dirs were listed. */
     async function search(tree: Record<string, string[]>, roms: Record<string, Uint8Array>,
-                          src = `; smudge sha1 ${sha}\nlda #$05\n`) {
+                          src = `; smudge sha1 ${sha}\nlda #$05\n`,
+                          argv = ['rehydrate', '-o', 'out.s', 'in.s']) {
       const listed: string[] = [];
       let written = '';
+      let outfile = '';
       let exitCode = 0;
       const cli = new Cli({
         fsReadString: (_p, f) => {
@@ -1344,8 +1346,8 @@ describe('CLI', function() {
           if (!r) throw new Error(`no such file: ${f}`);
           return r;
         },
-        fsReadStdin: async () => new Uint8Array(0),
-        fsWriteString: async (_p, _f, data) => { written = data; },
+        fsReadStdin: async () => new TextEncoder().encode(src),
+        fsWriteString: async (_p, f, data) => { outfile = f; written = data; },
         fsWriteBytes: async () => {},
         fsListDir: (dir: string) => {
           listed.push(dir);
@@ -1355,9 +1357,27 @@ describe('CLI', function() {
         },
         exit: (code: number) => { exitCode = code; },
       });
-      await cli.run(['rehydrate', '-o', 'out.s', 'in.s']);
-      return {written, exitCode, listed};
+      await cli.run(argv);
+      return {written, outfile, exitCode, listed};
     }
+
+    it('reads the source from --stdin', async function() {
+      const {written, outfile, exitCode} = await search(
+          {'.': ['game.nes']}, {'game.nes': rom}, undefined,
+          ['rehydrate', '-o', 'out.s', '--stdin']);
+      expect(exitCode).toBe(0);
+      expect(outfile).toBe('out.s');
+      expect(written.length).toBeGreaterThan(0);
+    });
+
+    it('writes to stdout when no output is given', async function() {
+      const {written, outfile, exitCode} = await search(
+          {'.': ['in.s', 'game.nes']}, {'game.nes': rom}, undefined,
+          ['rehydrate', 'in.s']);
+      expect(exitCode).toBe(0);
+      expect(outfile).toBe(Cli.STDOUT);
+      expect(written.length).toBeGreaterThan(0);
+    });
 
     it('finds a matching rom nested under the working directory', async function() {
       const {written, exitCode} = await search(

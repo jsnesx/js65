@@ -306,7 +306,7 @@ export class Cli {
 
     if (args.mapfile) args.options.generateMapFile = true;
 
-    if (args.outfile == "--stdout") {
+    if (args.outfile == "--stdout" || (args.op && args.outfile.length === 0)) {
       args.outfile = Cli.STDOUT;
     } else if (args.outfile.length === 0) {
       const name = (args.files[0] == Cli.STDIN) ? "stdin" : args.files[0];
@@ -521,7 +521,9 @@ export class Cli {
     if (args.files.length > 1) {
       return this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
     }
-    const src = await this.callbacks.fsReadString("",args.files[0]);
+    const src = args.files[0] === Cli.STDIN
+        ? new TextDecoder().decode(await this.callbacks.fsReadStdin()).replace(/^﻿/, '')
+        : this.callbacks.fsReadString("", args.files[0]);
     // if (err) this.usage(3, [err]);
     let fullRom: Uint8Array|undefined = undefined;
     if (args.rom) {
@@ -809,10 +811,13 @@ ${[...LINT_RULES].map(([id, r]) => `                            ${id.padEnd(24)}
   This can be used to share a disassembled game's code without sharing the data.
 
 required arguments:
-  FILE                 The assembly file to dehydrate or rehydrate
+  FILE                 The assembly file to dehydrate or rehydrate, or --stdin to read it from stdin
   rehydrate|dehydrate  Convert the file to either remove all data (dehydrate) or re-add data from rom ()
   -r/--rom             ROM image to use. If not provided, js65 will search in the directory structure for
                         a rom that matches the sha-1 provided in the header of the assembly FILE
+
+optional arguments:
+  -o FILE/--output=FILE  Name of the file to write. If not provided, writes to stdout
 `);
     this.callbacks.exit(code);
   }
