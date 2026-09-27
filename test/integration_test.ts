@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {compile, compileRequest, deserializeObjectFile, searchFiles, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
+import {assemble, compile, compileRequest, deserializeObjectFile, searchFiles, type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
+import * as Exprs from '../src/expr.ts';
 
 function compileSource(source: string, filename: string = 'test.s'): Uint8Array {
   const input: AssemblyInput = { type: 'source', code: source, name: filename };
@@ -143,6 +144,59 @@ describe('End to end test cases', function() {
       const result = compileRequest(req, undefined, undefined, { aborted: true });
       expect(result.success).toBe(false);
       expect(result.messages.some(m => /cancelled/i.test(m.message))).toBe(true);
+    });
+  });
+
+  describe('refExtractor', function() {
+    it('reports labels, refs with file offsets, and assigns', function() {
+      const labels: unknown[] = [];
+      const refs: unknown[] = [];
+      const assigns: unknown[] = [];
+      const input: AssemblyInput = { type: 'source', name: 'test.s', code: `
+.segment "CODE" :bank $00 :size $4000 :mem $8000 :off $0010
+Const = $12
+.org $8000
+Start:
+  lda Const
+  jmp Start
+` };
+      const result = assemble([input], {
+        refExtractor: {
+          label(name, addr, segments) { labels.push({name, addr, segments}); },
+          ref(_expr, bytes, addr, segments, offset) { refs.push({bytes, addr, segments, offset}); },
+          assign(name, value) { assigns.push({name, value}); },
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(labels).toEqual([{name: 'Start', addr: 0x8000, segments: ['CODE']}]);
+      expect(assigns).toEqual([{name: 'Const', value: 0x12}]);
+      expect(refs).toEqual([
+        {bytes: 1, addr: 0x8001, segments: ['CODE'], offset: 0x11},
+        {bytes: 2, addr: 0x8003, segments: ['CODE'], offset: 0x13},
+      ]);
+    });
+
+    it('keeps names of already-defined symbols and does not change output', function() {
+      const code = `
+.segment "CODE" :bank $00 :size $4000 :mem $8000 :off $0000
+Const = $12
+.org $8000
+Start:
+  lda Const+1
+  bne Start
+  .dbyt Start
+  .word Later
+Later:
+`;
+      const input: AssemblyInput = { type: 'source', name: 'test.s', code };
+      const refs: string[] = [];
+      const withRefs = assemble([input], {
+        refExtractor: { ref(expr, bytes, addr) { refs.push(`${addr.toString(16)}:${bytes}:${Exprs.symbols(expr)}`); } },
+      });
+      const plain = assemble([input], {});
+      expect(withRefs.success).toBe(true);
+      expect(withRefs.modules[0].chunks).toEqual(plain.modules[0].chunks);
+      expect(refs).toEqual(['8001:1:Const', '8003:1:Start', '8004:1:Start', '8005:1:Start', '8006:2:Later']);
     });
   });
 

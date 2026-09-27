@@ -354,9 +354,13 @@ class CheapScope extends BaseScope {
   }
 }
 
+const NO_INLINE_LOOKUP: Exprs.SymbolLookup = {get: () => undefined};
+
 export interface RefExtractor {
   label?(name: string, addr: number, segments: readonly string[]): void;
-  ref?(expr: Expr, bytes: number, addr: number, segments: readonly string[]): void;
+  /** `offset` is the ROM file offset of `addr`, if its segment has one. */
+  ref?(expr: Expr, bytes: number, addr: number, segments: readonly string[],
+       offset: number | undefined): void;
   assign?(name: string, value: number): void;
 }
 
@@ -1838,9 +1842,9 @@ export class Assembler {
          kind?: SymbolKind) {
     if (typeof expr !== 'number') expr = this.resolve(expr);
     this.assignSymbol(ident, false, expr, token, isLabel, kind);
-    // TODO - no longer needed?
-    if (this.opts.refExtractor?.assign && typeof expr === 'number') {
-      this.opts.refExtractor.assign(ident, expr);
+    const num = typeof expr === 'number' ? expr : expr.op === 'num' ? expr.num : undefined;
+    if (this.opts.refExtractor?.assign && num != null) {
+      this.opts.refExtractor.assign(ident, num);
     }
   }
 
@@ -1982,6 +1986,7 @@ export class Assembler {
             }
           }
         }
+        this.mapRef(arg[1]!, expr, e => e);
       }
 
       // If the size is unknown, fall back to the operand's address size, which
@@ -2115,6 +2120,7 @@ export class Assembler {
     // Mark the subtraction as a branch for signed range checking
     const rel: Expr = {op: '-', args: [expr, nextPc], meta: {branch: true}};
     if (expr.source) rel.source = expr.source;
+    this.mapRef(expr, rel, e => ({...rel, args: [e, nextPc]}));
     this.opcode(op, arglen, rel);
   }
 
@@ -2163,9 +2169,9 @@ export class Assembler {
     if (this.opts.refExtractor?.ref && chunk.org != null) {
       const orig = this._exprMap?.get(expr) || expr;
       if (Exprs.symbols(orig).length > 0) {
-        this.opts.refExtractor.ref(orig, size,
-                                      chunk.org + chunk.data.length,
-                                      chunk.segments);
+        const addr = chunk.org + chunk.data.length;
+        this.opts.refExtractor.ref(orig, size, addr, chunk.segments,
+                                   this.orgToOffset(addr));
       }
     }
     // Append the number or placeholder
@@ -2615,8 +2621,8 @@ export class Assembler {
         this.writeNumber(chunk.data, 1, arg >> 8);
         this.writeNumber(chunk.data, 1, arg);
       } else {
-        this.append(Exprs.hiByte(arg), 1);
-        this.append(Exprs.loByte(arg), 1);
+        this.append(this.mapRef(arg, Exprs.hiByte(arg), Exprs.hiByte), 1);
+        this.append(this.mapRef(arg, Exprs.loByte(arg), Exprs.loByte), 1);
       }
     }
   }
@@ -3075,7 +3081,20 @@ export class Assembler {
     Tokens.expectEol(tokens[1]);
   }
   parseExpr(tokens: Token[], start: number): Expr {
-    return Exprs.parseOnly(tokens, start, this.symbolLookup, this.encodeChar);
+    const expr = Exprs.parseOnly(tokens, start, this.symbolLookup, this.encodeChar);
+    if (!this.opts.refExtractor?.ref) return expr;
+    // Parsing inlines known symbols, so keep a named copy for refExtractor.
+    const out = {...expr};
+    this.exprMap.set(out, Exprs.parseOnly(tokens, start, NO_INLINE_LOOKUP, this.encodeChar));
+    return out;
+  }
+
+  private mapRef(expr: Expr, wrapped: Expr, wrap: (e: Expr) => Expr): Expr {
+    const orig = this._exprMap?.get(expr);
+    if (orig) {
+      this.exprMap.set(wrapped, wrap(orig));
+    }
+    return wrapped;
   }
 
   /**

@@ -18,7 +18,7 @@
  */
 
 import { runActions, type CodeRunner } from './actions.ts';
-import { Assembler } from './assembler.ts';
+import { Assembler, type RefExtractor } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { diffRom, jsPostprocess, jsPreprocess } from './jspreprocessor.ts';
@@ -45,7 +45,7 @@ import { gzipCodec } from './driver/codec/codec.ts';
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
 export type { ResolvedFile };
-export type { Expr, LinkExport, Module, Segment, SymbolDefine, SymbolIndex };
+export type { Expr, LinkExport, Module, RefExtractor, Segment, SymbolDefine, SymbolIndex };
 export { loByte, hiByte, loBytes, hiBytes } from './expr.ts';
 
 // Builder API for using js65 with a fluent API instead of needing to understand the internals.
@@ -144,6 +144,8 @@ export interface AssemblerOptions {
   errorLimit?: number;
   /** Lint rule configuration. Lints run by default. */
   lint?: LintOptions;
+  /** Callbacks for every label, ref, and assign seen while assembling. */
+  refExtractor?: RefExtractor;
 }
 
 /**
@@ -354,6 +356,7 @@ export function assemble(
     symbolIndex: options?.symbolIndex,
     errorLimit: options?.errorLimit,
     lint: options?.lint,
+    refExtractor: options?.refExtractor,
     jsActions,
   };
   const featureMessages = applyFeatures(options?.features ?? [], baseAsmOpts, baseOpts);
