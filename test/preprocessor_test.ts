@@ -861,6 +861,72 @@ describe('Preprocessor', function() {
     }
   });
 
+  describe('multi-line .define inside .if', function() {
+    it('should emit each line once inside .if', async function() {
+      await test(['.define THREE .byte 1 .eol .byte 2 .eol .byte 3',
+            '.if 1',
+            'THREE',
+            '.endif'],
+           await directive('.byte 1'),
+           await directive('.byte 2'),
+           await directive('.byte 3'));
+    });
+
+    it('should emit each line once inside .ifdef', async function() {
+      await test(['.define _X 1',
+            '.define THREE .byte 1 .eol .byte 2 .eol .byte 3',
+            '.ifdef _X',
+            'THREE',
+            '.endif'],
+           await directive('.byte 1'),
+           await directive('.byte 2'),
+           await directive('.byte 3'));
+    });
+
+    it('should emit a define starting with .eol once inside .if',
+       async function() {
+      await test(['.define LEAD .eol .byte 4',
+                  '.if 1',
+                  'LEAD',
+                  '.endif'],
+                 await directive('.byte 4'));
+    });
+
+    it('should emit each line once in a taken .else', async function() {
+      await test(['.define TWO .byte 1 .eol .byte 2',
+                  '.if 0',
+                  'TWO',
+                  '.else',
+                  'TWO',
+                  '.endif'],
+                 await directive('.byte 1'),
+                 await directive('.byte 2'));
+    });
+
+    it('should emit each line once inside nested .if', async function() {
+      await test(['.define TWO .byte 1 .eol .byte 2',
+                  '.if 1',
+                  '.if 1',
+                  'TWO',
+                  '.endif',
+                  '.endif'],
+                 await directive('.byte 1'),
+                 await directive('.byte 2'));
+    });
+
+    it('should expand macpack common FREE once inside .if',
+       async function() {
+      expect(await testFiles(['.macpack common',
+                              '.if 1',
+                              'FREE "CODE" [$8000, $8010)',
+                              '.endif']))
+          .toEqual([await directive('.pushseg "CODE"'),
+                    await directive('.org $8000'),
+                    await directive('.free $8010 - $8000'),
+                    await directive('.popseg')]);
+    });
+  });
+
   describe('.sprintf', function() {
     async function testSprintf(fmt: string, arg: string | number | null, want: string) {
       let argStr = '';

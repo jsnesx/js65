@@ -135,6 +135,9 @@ export class Preprocessor implements Tokens.Source {
   /** Depth marker for nesting blocks that need to be expanded raw */
   private rawMode = 0;
 
+  /** If a define has .eol in it, it can cause issues when storing the raw .if block */
+  private overflowLines = 0;
+
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor,
               readonly errorCollector?: ErrorCollector,
@@ -343,8 +346,13 @@ export class Preprocessor implements Tokens.Source {
     const source: Tokens.Source = {
       next: () => {
         const line = this.stream.next();
-        pending.line = line?.slice();
-        return line == null ? line : this.expandDefines(line);
+        if (line == null) return line;
+        const raw = line.slice();
+        const before = this.overflowLines;
+        this.expandDefines(line);
+        // Replaying raw would re-emit the `.eol` lines already queued
+        pending.line = this.overflowLines === before ? raw : undefined;
+        return line;
       },
     };
     return this.inRawMode(() => f(source));
@@ -490,7 +498,10 @@ export class Preprocessor implements Tokens.Source {
         const overflow = define.expand(line, pos);
 //console.log('post-expand', line);
         if (overflow) {
-          if (overflow.length) this.stream.unshift(...overflow)
+          if (overflow.length) {
+            this.overflowLines += overflow.length;
+            this.stream.unshift(...overflow);
+          }
           return pos;
         }
       }
