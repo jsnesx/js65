@@ -1315,6 +1315,48 @@ describe('Linker', function() {
       expect(chunks(link(m))).toEqual([[0x004, [1, 2]], [0x104, [1, 2]]]);
     });
 
+    it('should give two reloc mirrors distinct orgs', function() {
+      const m = {
+        chunks: [{
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(1, 2, 3, 4),
+        }, {
+          placement: 'all' as const,
+          segments: ['A', 'B'],
+          data: Uint8Array.of(5, 6, 7, 8),
+        }],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }, {
+          name: 'B', size: 0x100, offset: 0x100, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }],
+      };
+      expect(chunks(link(m))).toEqual([
+        [0x000, [1, 2, 3, 4, 5, 6, 7, 8]],
+        [0x100, [1, 2, 3, 4, 5, 6, 7, 8]],
+      ]);
+    });
+
+    it('should report an overflowing .org chunk exactly once', function() {
+      const ec = new ErrorCollector();
+      const linker = new Linker({errorCollector: ec});
+      const m = {
+        chunks: [{segments: ['A'], org: 0x80fe, data: Uint8Array.of(1, 2, 3, 4)}],
+        segments: [{
+          name: 'A', size: 0x100, offset: 0x000, memory: 0x8000,
+          free: [[0x8000, 0x8100]],
+        }],
+      };
+      expect(() => linker.read(m).link()).toThrow();
+      expect(ec.getMessages().filter(msg => msg.level === 'error')
+          .map(msg => msg.message)).toEqual([
+        'Chunk ($4 bytes at $80fe) does not fit in segment A (size $100)',
+      ]);
+    });
+
     it('should fail a reloc mirror that does not fit every segment',
        function() {
       const m = {

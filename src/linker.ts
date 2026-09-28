@@ -388,7 +388,7 @@ export class Linker {
       } else {
         // For chunks that are output, use the resolved address instead
         const offsetInChunk: number = value - (chunk.org ?? 0);
-        const fileOffset = (chunk.offset ?? 0) + offsetInChunk;
+        const fileOffset = chunk.fileOffsetAt(offsetInChunk) ?? offsetInChunk;
         addr = fileOffset - prgBaseOffset;
         labelType = "NesPrgRom";
       }
@@ -439,7 +439,7 @@ export class Linker {
             // They'll be picked up in Pass 3 if they have output bytes
             continue;
           }
-          const fileOffset = c.offset + offsetInChunk;
+          const fileOffset = c.fileOffsetAt(offsetInChunk)!;
           addr = fileOffset - prgBaseOffset;
           labelType = "NesPrgRom";
         }
@@ -470,6 +470,7 @@ export class Linker {
       for (const [k, v] of (c.labelIndex || [])) {
         rev.set(v, k);
       }
+      const pieceStarts = new Set(c.pieces.map(p => p.start).filter(s => s > 0));
 
       // Group consecutive bytes with the same source info into ranges
       let rangeStart = -1;
@@ -519,8 +520,8 @@ export class Linker {
           }, false);
         } else {
           // Calculate the PRG ROM offset (file offset minus the PRG base offset/header)
-          const prgRomOffsetStart = c.offset! + rangeStart - prgBaseOffset;
-          const prgRomOffsetEnd = c.offset! + rangeEnd - prgBaseOffset;
+          const prgRomOffsetStart = c.fileOffsetAt(rangeStart)! - prgBaseOffset;
+          const prgRomOffsetEnd = c.fileOffsetAt(rangeEnd - 1)! + 1 - prgBaseOffset;
           // Labels from chunk labelIndex (via rev map) are real labels
           addLabel({
             type: "NesPrgRom",
@@ -543,7 +544,8 @@ export class Linker {
           srcInfo.file === rangeSrcInfo.file &&
           srcInfo.line === rangeSrcInfo.line;
 
-        if (srcInfo && sameSource && offset === rangeEnd) {
+        if (srcInfo && sameSource && offset === rangeEnd &&
+            !pieceStarts.has(offset)) {
           // Continue the range
           rangeEnd = offset + 1;
         } else {
@@ -814,6 +816,14 @@ class LinkSegment {
   get delta(): number { return this.isRam ? this.ramBase : (this.offset - this.memory); }
 }
 
+/** A contiguous run of a placed chunk's bytes within one segment. */
+interface Piece {
+  segment: LinkSegment;
+  offset: number;  // linker offset space
+  start: number;   // first chunk-relative byte
+  size: number;
+}
+
 class LinkChunk {
   readonly name: string|undefined;
   readonly size: number;
@@ -849,9 +859,7 @@ class LinkChunk {
   private _data?: Uint8Array;
 
   private _org?: number;
-  private _offset?: number;
-  private _segment?: LinkSegment;
-  private _mirrorOffsets: Array<[LinkSegment, number]> = [];
+  private _pieces: Piece[] = [];
 
   private readonly _overwrite: OverwriteMode;
 
@@ -878,18 +886,15 @@ class LinkChunk {
   }
 
   get org() { return this._org; }
-  get offset() { return this._offset; }
-  get segment() { return this._segment; }
+  get offset(): number|undefined { return this._pieces[0]?.offset; }
+  get segment(): LinkSegment|undefined { return this._pieces[0]?.segment; }
   get data() { return this._data ?? impossible('no data'); }
+  get pieces(): readonly Piece[] { return this._pieces; }
 
-  /**
-   * Every (segment, offset) this chunk's bytes live at.
-   * Regular chunks have one spot but a mirror has one per
-   * segment in the list, all sharing the same `org`.
-   */
-  placements(): Array<[LinkSegment, number]> {
-    if (this._segment == null || this._offset == null) return [];
-    return [[this._segment, this._offset], ...this._mirrorOffsets];
+  fileOffsetAt(k: number): number|undefined {
+    const p = this._pieces.find(p => k >= p.start && k < p.start + p.size) ??
+        this._pieces[0];
+    return p && p.offset + k - p.start;
   }
 
   at(): {source?: SourceInfo}|undefined {
@@ -934,6 +939,8 @@ class LinkChunk {
       }
     } while (settled !== org);
     this._org = org;
+    // Place now so the next mirror sees this one's space as taken.
+    this.mirrorPlacement();
   }
 
   fixedPlacements() {
@@ -942,8 +949,6 @@ class LinkChunk {
     // We don't call this in the ctor because it depends on all the segments
     // being loaded, but it's the first thing we do in link().
 
-    // This is called twice at the start, once for the user placed `.org` segments
-    // and then once again after we've settled an `.org` for the mirrored chunks
     if (this._org == null || !this._data) return;
     if (this.placement === 'all') return this.mirrorPlacement();
     const eligibleSegments: LinkSegment[] = [];
@@ -999,15 +1004,13 @@ class LinkChunk {
   place(org: number, segment: LinkSegment, overwrite?: OverwriteMode,
         mirrors: readonly LinkSegment[] = []) {
     this._org = org;
-    this._segment = segment;
-    this._offset = org + segment.delta;
-    this._mirrorOffsets = mirrors.map(s => [s, org + s.delta]);
+    this._pieces = [segment, ...mirrors].map(
+        s => ({segment: s, offset: org + s.delta, start: 0, size: this.size}));
 
     const data = this._data ?? impossible(`No data`);
     this._data = undefined;
-    // placements returns a list of segments + mirrors to write to
-    for (const [seg, offset] of this.placements()) {
-      this.writeSegment(org, seg, offset, data, overwrite);
+    for (const piece of this._pieces) {
+      this.writePiece(org, piece, data, overwrite);
     }
 
     // Retry the follow-ons
@@ -1016,33 +1019,37 @@ class LinkChunk {
     }
   }
 
-  /** The per-segment half of `place`: bytes, free space and overwrite checks. */
-  private writeSegment(org: number, segment: LinkSegment, offset: number,
-                       data: Uint8Array, overwrite?: OverwriteMode) {
+  /** The per-piece half of `place`: bytes, free space and overwrite checks. */
+  private writePiece(org: number, piece: Piece, chunkData: Uint8Array,
+                     overwrite?: OverwriteMode) {
+    const {segment, offset, start, size} = piece;
     for (const w of this.linker.watches) {
-      if (w >= offset && w < offset + this.size)
+      if (w >= offset && w < offset + size)
         fail("Unable to place");
     }
-    binaryInsert(this.linker.placed, x => x[0], [offset, this]);
+    binaryInsert(this.linker.placed, x => x[0], [offset, this, piece]);
 
     // For RAM segments, skip data manipulation but still track free space
     if (segment.isRam) {
-      this.linker.free.delete(offset, offset + this.size);
+      this.linker.free.delete(offset, offset + size);
       return;
     }
 
     // Copy data, leaving out any holes
     const full = this.linker.data;
+    const data = chunkData.subarray(start, start + size);
 
     if (this.subs.size) {
       full.splice(offset, data.length);
       const sparse = new SparseByteArray();
       sparse.set(0, data);
       for (const sub of this.subs) {
-        sparse.splice(sub.offset, sub.size);
+        const s = Math.max(sub.offset - start, 0);
+        const e = Math.min(sub.offset - start + sub.size, size);
+        if (e > s) sparse.splice(s, e - s);
       }
-      for (const [start, chunk] of sparse.chunks()) {
-        full.set(offset + start, chunk);
+      for (const [at, chunk] of sparse.chunks()) {
+        full.set(offset + at, chunk);
       }
     } else {
       full.set(offset, data);
@@ -1065,7 +1072,7 @@ class LinkChunk {
       }
       if (error) {
         error = `Chunk at ${segment.name}:$${
-            org.toString(16).padStart(4, '0')} (offset $${
+            (org + start).toString(16).padStart(4, '0')} (offset $${
             offset.toString(16).padStart(5, '0')} was ${error}`;
         if (!NO_THROW) throw new Error(error);
         if (!QUIET) console.error(error);
@@ -1074,7 +1081,7 @@ class LinkChunk {
     }
     // Run this before resolving the follow up chunks so it properly reserves
     // the following space even if this chunk failed to place.
-    this.linker.free.delete(offset, offset + this.size);
+    this.linker.free.delete(offset, offset + size);
   }
 
   resolveSubs(initial = false) { //: Map<number, Substitution[]> {
@@ -1157,9 +1164,10 @@ class LinkChunk {
       if (sub.expr.args!.length !== 1) throw new Error(`bad .move`);
       const child = sub.expr.args![0];
       if (child.op === 'num' && child.meta?.offset != null) {
-        const delta =
-            child.meta!.offset! - (child.meta!.rel ? 0 : child.meta!.org!);
-        const start = child.num! + delta;
+        const meta = child.meta;
+        const k = child.num! - (meta.rel ? 0 : meta.org!);
+        const target = meta.chunk != null ? this.linker.chunks[meta.chunk] : undefined;
+        const start = target?.fileOffsetAt(k) ?? meta.offset! + k;
         this.writeBytes(sub.offset, this.linker.orig.slice(start, start + sub.size));
         del = true;
       }
@@ -1172,10 +1180,14 @@ class LinkChunk {
   writeBytes(offset: number, bytes: Uint8Array) {
     if (this._data) {
       this._data.subarray(offset, offset + bytes.length).set(bytes);
-    } else if (this._offset != null) {
+    } else if (this._pieces.length) {
       // A mirror resolves its subs once but has to patch every copy.
-      for (const [, base] of this.placements()) {
-        this.linker.data.set(base + offset, bytes);
+      for (const p of this._pieces) {
+        const s = Math.max(offset, p.start);
+        const e = Math.min(offset + bytes.length, p.start + p.size);
+        if (e <= s) continue;
+        this.linker.data.set(p.offset + s - p.start,
+                             bytes.subarray(s - offset, e - offset));
       }
     } else {
       throw new Error(`Impossible`);
@@ -1295,7 +1307,7 @@ class Link {
   }> = [];
 
   watches: number[] = []; // debugging aid: offsets to watch.
-  placed: Array<[number, LinkChunk]> = [];
+  placed: Array<[number, LinkChunk, Piece]> = [];
   initialReport = '';
 
   /** Imports already reported missing, so each is named once per run. */
@@ -1615,11 +1627,8 @@ class Link {
     }
     // Set up all the initial placements of data that is at a specific org already.
     this.collect(this.chunks, chunk => chunk.fixedPlacements());
-    // Then settle a shared org for the mirrored chunks, which needs the fixed
-    // data placed first so it only considers space that is really free.
+    // Then settle and place each auto mirror, after the regular fixed data.
     this.collect(this.chunks, chunk => chunk.resolveMirrorOrg());
-    // and place all the mirrored chunks AFTER placing the regular fixed data
-    this.collect(this.chunks, chunk => chunk.fixedPlacements());
     if (DEBUG) {
       this.initialReport = `Initial:\n${this.report(true)}`;
     }
@@ -1735,11 +1744,11 @@ class Link {
       }
       // A mirror wrote its bytes into every listed segment, each of which may
       // be a different output file.
-      for (const [segment, offset] of c.placements()) {
+      for (const {segment, offset, size} of c.pieces) {
         if (segment.isRam) continue;  // RAM chunks not in output
         const base = this.fileBase(segment.out || '%O');
         this.output(segment.out).set(
-            offset - base, this.data.slice(offset, offset + c.size!));
+            offset - base, this.data.slice(offset, offset + size));
       }
     }
     if (DEBUG) console.log(this.report(true));
@@ -2579,7 +2588,9 @@ class Link {
       const value = e.num!;
       const out: Export = {value};
       if (e.meta?.offset != null && e.meta.org != null) {
-        out.offset = e.meta.offset + value - e.meta.org;
+        const k = value - e.meta.org;
+        const chunk = e.meta.chunk != null ? this.chunks[e.meta.chunk] : undefined;
+        out.offset = chunk?.fileOffsetAt(k) ?? e.meta.offset + k;
       }
       if (e.meta?.bank != null)
         out.bank = e.meta.bank;
@@ -2611,10 +2622,13 @@ class Link {
     // a segment is measured before placement gets to backfill alignment gaps.
     const used = new Map<string, number>();
     for (const chunk of this.chunks) {
-      const seg = chunk.segment;
-      if (!seg || chunk.org == null) continue;
-      const end = chunk.org + chunk.size - seg.memory;
-      used.set(seg.name, Math.max(used.get(seg.name) ?? 0, end));
+      if (chunk.org == null) continue;
+      // Mirrors are measured by their primary copy only.
+      const pieces = chunk.isMirrored ? chunk.pieces.slice(0, 1) : chunk.pieces;
+      for (const {segment: seg, start, size} of pieces) {
+        const end = chunk.org + start + size - seg.memory;
+        used.set(seg.name, Math.max(used.get(seg.name) ?? 0, end));
+      }
     }
     // Chop the name of the anon segment to 20 characters so it fits nicer in the output
     const rows = this.segmentOrder.filter(n => this.segments.has(n))
@@ -2644,9 +2658,9 @@ class Link {
       out += `Free: ${s.toString(16)}..${e.toString(16)}: ${e - s} bytes\n`;
     }
     if (verbose) {
-      for (const [s, c] of this.placed) {
+      for (const [s, c, piece] of this.placed) {
         const name = c.name ?? `Chunk ${c.index}`;
-        const end = c.offset! + c.size;
+        const end = s + piece.size;
         out += `${s.toString(16).padStart(5, '0')} .. ${
             end.toString(16).padStart(5, '0')}: ${name} (${end - s} bytes)\n`;
       }
