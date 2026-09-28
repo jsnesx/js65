@@ -32,6 +32,10 @@ From there, segments are filled in the order that they were first DECLARED (not 
 .segment "MyCoolPool" :pool {"PRG2", "PRG3", "PRG7"}
 ```
 
+A pooled segment will also spill data across a segment if they are sequential in the memory address space.
+This is useful for cases where you want to treat two sequential segments as one large segment, or if you want to allow data to continue filling from a banked segment into the fixed bank.
+Note that code blocks that are restricted to a single segment are filled before pooled segments, so if you expect data to spill across a pool, but have a different code block listed with just a single segment to be placed into the second "spill" segment, it will get placed first, and could end up at the start of the second segment where the spill should happen.
+
 Similar to a `pool`ed segment, you can also do a `mirror`ed segment.
 Instead of placing in ANY of the segments, the linker will duplicate the data into ALL segments listed.
 

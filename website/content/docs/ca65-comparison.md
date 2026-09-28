@@ -49,6 +49,51 @@ As a quick example, we can define the `CODE` and `VECTORS` segment for a NES NRO
 If you still need to have a plain `SEGMENT` that loads into a different `SEGMENT`, `js65` supports the `:load`, `:run` parameters.
 For more information, see the examples in the [`.segment`](/docs/asm-guide#segment) documentation
 
+## Segment pooling, mirroring, and spilling
+
+Alongside the new `.segment` definition directives, the `.segment` also takes a parameter list allowing the linker to use new placement rules.
+For the full documentation about the feature see the [Pool and Mirror](/docs/asm-guide#pool-and-mirror), but a quick summary is below.
+
+A pooled segment is a list of segments where relocatable data in the regions can be placed in ANY of the segments.
+The intended use case for a pooled segment is when you have code or data that will be accessed through some farcall trampoline, and you don't care which bank the data is in as long as its one of those in the provided list.
+In this example code, the user can load the data or jump to the address through loading the pointer address and also the bank value.
+
+```asm6502
+; A comma separated list of banks is shorthand for the pooled segment
+.segment "BANK1", "BANK2", "BANK3"
+; Create two chunks that can be put in ANY of the banks listed
+.reloc
+Block1: ; ... data here
+.reloc
+Block2: ; ... data here
+
+.segment "CODE"
+TableLo:
+.lobytes Block1, Block2
+TableHi:
+.hibytes Block1, Block2
+TableBank: ; pulls the :bank segment parameter byte
+.bankbytes Block1, Block2
+```
+
+Spilling lets code and data cross the segment boundaries in pooled segments when there are segments that have sequential memory addresses.
+This allows segments to be defined at a mapper defined physical size, but be treated as a larger single bank if the two banks are always used together.
+You don't need to do anything in particular to enable spilling, if two segments are listed in a pool and they have consecutive memory spaces, then spilling is enabled.
+
+The opposite of pooling which places the blocks in ANY of the segments in the list is mirroring, which places the blocks in ALL of the segments in the list.
+A mirrored list will guarantee that the data is replicated across ALL of the segments listed, useful for creating pseudo fixed banks.
+
+```asm6502
+; An ampersand seperated list of banks is shorthand for `:mirror` segments
+.segment "BANK1" & "BANK2" & "BANK3"
+.org $8000
+  ; This code/data will be copied to all three BANKs at address $8000
+.reloc
+  ; This code/data will be copied to all three BANKs
+  ; but at a common address in the free space shared by all BANKs.
+  ; If there is no free space overlap, the build will error out. 
+```
+
 ## `.free` / `.org` / `.reloc`
 
 One of the defining features of a patching assembler is allowing the linker to place your patches wherever there is free space.
