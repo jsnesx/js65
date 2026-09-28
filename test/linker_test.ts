@@ -1569,6 +1569,192 @@ describe('Linker', function() {
     });
   });
 
+  describe('sequential segment spill', function() {
+    // B2 follows B1 in CPU space but not in the file.
+    const SEGS = `
+.segment "B0" :bank $00 :size $2000 :mem $8000 :off $0000
+.segment "B1" :bank $01 :size $2000 :mem $a000 :off $2000
+.segment "B2" :bank $02 :size $2000 :mem $c000 :off $6000
+`;
+    const build = (code: string) => compile(
+        [{type: 'source', name: 'main.s', code: SEGS + code}],
+        {lineContinuations: true});
+    const bytes = (data: Uint8Array, at: number, n: number) =>
+        [...data.slice(at, at + n)];
+
+    it('should straddle an .org chunk from B1 into B2', function() {
+      const result = build(`
+.segment "B1", "B2"
+.org $bffc
+Func:
+  lda #1
+Mid:
+  sta $2000
+  rts
+.segment "B0"
+.org $8000
+  .word Func, Mid
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0x3ffc, 4)).toEqual([0xa9, 0x01, 0x8d, 0x00]);
+      expect(bytes(data, 0x6000, 2)).toEqual([0x20, 0x60]);
+      expect(bytes(data, 0, 4)).toEqual([0xfc, 0xbf, 0xfe, 0xbf]);
+    });
+
+    it('should split a jsr operand across the boundary', function() {
+      const result = build(`
+.segment "B1", "B2"
+.org $bffe
+  jsr Target
+Target:
+  rts
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0x3ffe, 2)).toEqual([0x20, 0x01]);
+      expect(bytes(data, 0x6000, 2)).toEqual([0xc0, 0x60]);
+    });
+
+    it('should give a label in the tail the head\'s bank', function() {
+      const result = build(`
+.segment "B1", "B2"
+.org $bffe
+  nop
+  nop
+Tail:
+  rts
+.segment "B0"
+.org $8000
+  .byte .bank(Tail)
+`);
+      expect(result.messages).toEqual([]);
+      expect(bytes(result.outputs[0].data, 0, 1)).toEqual([1]);
+    });
+
+    it('should report the original error when the tail does not fit',
+       function() {
+      const result = compile([{type: 'source', name: 'main.s', code: `
+.segment "B1" :bank $01 :size $2000 :mem $a000 :off $2000
+.segment "B2" :bank $02 :size $0002 :mem $c000 :off $6000
+.segment "B1", "B2"
+.org $bffe
+  .byte 1, 2, 3, 4, 5
+`}], {lineContinuations: true});
+      expect(result.success).toBe(false);
+      expect(result.messages[0].message).toBe(
+          'Chunk ($5 bytes at $bffe) does not fit in segment B1 (size $2000)');
+    });
+
+    // Five $8000 banks with `bankFree[i]` free bytes at the end of each, and
+    // FIXED with `fixedFree` free bytes at its start.
+    const pool = (bankFree: number[], fixedFree: number, body: string) => {
+      let code = '.macpack common\n';
+      bankFree.forEach((_, i) => code += `
+.segment "B${i}" :bank $0${i} :size $4000 :mem $8000 :off $${
+    (i * 0x4000).toString(16)}
+FREE "B${i}" [$8000, $c000)`);
+      code += `
+.segment "FIXED" :bank $07 :size $4000 :mem $c000 :off $1c000
+FREE "FIXED" [$c000, $10000)
+.org $${(0xc000 + fixedFree).toString(16)}
+  .res $${(0x4000 - fixedFree).toString(16)}, $ff
+`;
+      bankFree.forEach((free, i) => code += `
+.segment "B${i}"
+.org $8000
+  .res $${(0x4000 - free).toString(16)}, $ff
+`);
+      return compile([{type: 'source', name: 'main.s', code: code + `
+.reloc
+.segment "B0", "B1", "B2", "B3", "B4", "FIXED"
+${body}`}], {lineContinuations: true});
+    };
+    const bankEnd = (bank: number, n: number) => 0x4000 * bank + 0x4000 - n;
+
+    it('should spill a pool chunk from the end of a bank into FIXED',
+       function() {
+      const result = pool([2, 2, 2, 2, 2], 4, `
+Spilled:
+  .byte 1, 2, 3, 4, 5, 6
+.segment "FIXED"
+.org $fff0
+  .word Spilled
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, bankEnd(0, 2), 2)).toEqual([1, 2]);
+      expect(bytes(data, 0x1c000, 4)).toEqual([3, 4, 5, 6]);
+      expect(bytes(data, 0x1fff0, 2)).toEqual([0xfe, 0xbf]);
+    });
+
+    it('should only spill into FIXED once', function() {
+      const result = pool([2, 2, 2, 2, 2], 4, `
+  .byte 1, 2, 3, 4, 5, 6
+  .segment "B0", "B1", "B2", "B3", "B4", "FIXED"
+Second:
+  .byte 7, 8, 9, 10, 11, 12
+`);
+      expect(result.success).toBe(false);
+      expect(result.messages.map(m => m.message)).toContain(
+          'Could not find space for 6-byte chunk Second in ' +
+          'B0, B1, B2, B3, B4, FIXED');
+    });
+
+    it('should prefer a whole fit in FIXED over a spill', function() {
+      const result = pool([2, 2, 2, 2, 2], 8, `
+  .byte 1, 2, 3, 4, 5, 6
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0x1c000, 6)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(bytes(data, bankEnd(0, 2), 2)).toEqual([0, 0]);
+    });
+
+    it('should pick the spill with the smallest tail', function() {
+      const result = pool([2, 0, 0, 4, 0], 4, `
+  .byte 1, 2, 3, 4, 5, 6
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, bankEnd(3, 4), 4)).toEqual([1, 2, 3, 4]);
+      expect(bytes(data, 0x1c000, 2)).toEqual([5, 6]);
+    });
+
+    it('should align the head of a spill', function() {
+      const result = pool([6, 0, 0, 0, 0], 4, `
+  .align 4
+  .byte 1, 2, 3, 4, 5, 6, 7, 8
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, bankEnd(0, 6), 6)).toEqual([0, 0, 1, 2, 3, 4]);
+      expect(bytes(data, 0x1c000, 4)).toEqual([5, 6, 7, 8]);
+    });
+
+    it('should spill a relocatable chunk from B1 into B2', function() {
+      const result = compile([{type: 'source', name: 'main.s', code: `
+.macpack common
+${SEGS}
+FREE "B1" [$a000, $c000)
+FREE "B2" [$c000, $e000)
+.segment "B1"
+.org $a000
+  .res $1ffe, $ff
+.segment "B2"
+.org $c004
+  .res $1ffc, $ff
+.reloc
+.segment "B1", "B2"
+  .byte 1, 2, 3, 4, 5, 6
+`}], {lineContinuations: true});
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0x3ffe, 2)).toEqual([1, 2]);
+      expect(bytes(data, 0x6000, 4)).toEqual([3, 4, 5, 6]);
+    });
+  });
+
   // A `:mirror`/`:pool` declaration names a list of segments. The assembler
   // expands the ones it can see, so what reaches the linker is either an
   // already-expanded chunk or a bare name it has to resolve here.

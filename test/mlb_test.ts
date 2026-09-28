@@ -402,6 +402,29 @@ ResetVector:
       expect(resetVector?.address).toBe('6000');
     });
 
+    it('should map a label in a spilled tail to the tail\'s file offset',
+       async function() {
+      // FIXED is sequential with PRG in CPU space but far away in the file.
+      const init = `
+.segment "PRG"   :bank $00 :size $4000 :mem $8000 :off $00010
+.segment "FIXED" :bank $07 :size $4000 :mem $c000 :off $1c010
+`;
+      const source = `
+.segment "PRG", "FIXED"
+.org $bffe
+Head:
+  nop
+  nop
+Tail:
+  rts
+`;
+
+      const entries = await assembleAndGetDebugInfo(source, 'test.s', 0, init);
+
+      expect(entries.find(e => e.label === 'Head')?.address).toBe('3ffe');
+      expect(entries.find(e => e.label === 'Tail')?.address).toBe('1c000');
+    });
+
     it('should skip the iNES header even when it runs at a ROM address', async function() {
       // ld65 configs give the header segment a dummy run address, which is
       // often up in ROM space (NovaTheSquirrel's is $7f00). The addresses are

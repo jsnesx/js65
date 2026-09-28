@@ -674,6 +674,11 @@ export class FreeSpace extends IntervalSet {
     }
   }
 
+  rangeAt(x: number): readonly [number, number]|undefined {
+    const i = this._find(x);
+    return i >= 0 ? this.data[i] : undefined;
+  }
+
   /**
    * Similar to best fit, but we only care about getting the first available free space
    * that fits this data.
@@ -893,6 +898,8 @@ class LinkChunk {
 
   fileOffsetAt(k: number): number|undefined {
     const p = this._pieces.find(p => k >= p.start && k < p.start + p.size) ??
+        (k === this.size ?
+            this._pieces.find(p => p.start + p.size === k) : undefined) ??
         this._pieces[0];
     return p && p.offset + k - p.start;
   }
@@ -977,7 +984,12 @@ class LinkChunk {
     const segment = eligibleSegments[0];
     // The org is inside the segment, but check that the data it carries
     // still ends inside it.
-    if (this._org + this.size > segment.memory + segment.size) {
+    const end = segment.memory + segment.size;
+    if (this._org + this.size > end) {
+      const tail = this._org + this.size - end;
+      const next = this.segments.map(n => this.linker.segments.get(n)!)
+          .find(s => s.memory === end && s.used === 0 && s.size >= tail);
+      if (next) return this.placeSplit(this._org, segment, next, this._overwrite);
       this.linker.fail(`Chunk ($${this.size.toString(16)} bytes at $${
           this._org.toString(16)}) does not fit in ${''
           }${segmentLabel(segment)} (size $${segment.size.toString(16)})`,
@@ -1003,9 +1015,25 @@ class LinkChunk {
   // NOTE: overwrite is only passed for direct placements!
   place(org: number, segment: LinkSegment, overwrite?: OverwriteMode,
         mirrors: readonly LinkSegment[] = []) {
+    this.placePieces(org, [segment, ...mirrors].map(
+        s => ({segment: s, offset: org + s.delta, start: 0, size: this.size})),
+                     overwrite);
+  }
+
+  /** Fills the end of `head` from `org`, the rest starts `tail`. */
+  placeSplit(org: number, head: LinkSegment, tail: LinkSegment,
+             overwrite?: OverwriteMode) {
+    const n = head.memory + head.size - org;
+    this.placePieces(org, [
+      {segment: head, offset: org + head.delta, start: 0, size: n},
+      {segment: tail, offset: tail.memory + tail.delta, start: n,
+       size: this.size - n},
+    ], overwrite);
+  }
+
+  private placePieces(org: number, pieces: Piece[], overwrite?: OverwriteMode) {
     this._org = org;
-    this._pieces = [segment, ...mirrors].map(
-        s => ({segment: s, offset: org + s.delta, start: 0, size: this.size}));
+    this._pieces = pieces;
 
     const data = this._data ?? impossible(`No data`);
     this._data = undefined;
@@ -2385,6 +2413,36 @@ class Link {
     return this.overlapGroups.get(name) ?? name;
   }
 
+  private placeSpill(chunk: LinkChunk, segments: readonly LinkSegment[]): boolean {
+    const size = chunk.size;
+    const align = chunk.align ?? 1;
+    let best: {head: LinkSegment, tail: LinkSegment, start: number, n: number}|undefined;
+    // check our segment list to see if we have any viable spill locations
+    for (const a of segments) {
+      if (a.size <= 0) continue;
+      const aEnd = a.memory + a.delta + a.size;
+      // find a segment in our list which starts where this one ends
+      const b = segments.find(s => s.memory === a.memory + a.size &&
+                              s.used === 0 && s.isRam === a.isRam);
+      if (!b) continue;
+      // and that it has free space here
+      const r = this.free.rangeAt(aEnd - 1);
+      if (!r) continue;
+      const lo = Math.max(r[0], a.memory + a.delta + a.used);
+      const start = alignUp(lo - a.delta, align) + a.delta;
+      const n = aEnd - start;
+      if (n <= 0 || n >= size) continue;
+      // last check to see that the start is free for the spilled segment
+      const bStart = b.memory + b.delta;
+      const rb = this.free.rangeAt(bStart);
+      if (size - n > b.size || !rb || rb[1] < bStart + size - n) continue;
+      if (!best || n > best.n) best = {head: a, tail: b, start, n};
+    }
+    if (!best) return false;
+    chunk.placeSplit(best.start - best.head.delta, best.head, best.tail);
+    return true;
+  }
+
   placeChunk(chunk: LinkChunk) {
     if (chunk.org != null) return; // don't re-place.
     const size = chunk.size;
@@ -2452,6 +2510,7 @@ class Link {
         return;
       }
     }
+    if (this.placeSpill(chunk, segments.map(n => this.segment(n)))) return;
     if (DEBUG) console.log(`Initial:\n${this.initialReport}`);
     const name = chunk.name ? `${chunk.name} ` : '';
     const aligned = align > 1 ? `${align}-byte aligned ` : '';
