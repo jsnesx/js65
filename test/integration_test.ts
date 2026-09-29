@@ -515,6 +515,56 @@ Packed:
       expect(text).toMatch(/@test\.s:2 \$8000\s+008000\s+00800F\s+000010\s+\S+\s+\S+\s+000000/);
       expect(text).toMatch(/@test\.s:4 \$8000\s+008000\s+00800F\s+000010\s+\S+\s+\S+\s+000010/);
     });
+
+    function mapText(code: string, linkerConfig?: string,
+                     baseRom?: Uint8Array): string {
+      const input: AssemblyInput = {type: 'source', name: 'test.s', code};
+      const result = compile(
+          [input], {lineContinuations: true, generateMapFile: true,
+                    linkerConfig}, undefined, baseRom);
+      if (!result.success) throw new Error(JSON.stringify(result.messages));
+      const map = result.outputs.find(o => o.type === 'map');
+      return new TextDecoder().decode(map!.data);
+    }
+
+    it('should count placed bytes into memory area Used', function() {
+      const text = mapText(`
+.segment "CODE"
+  .byte 1, 2, 3
+.segment "DATA"
+  .byte 4, 5
+.segment "BSS"
+  .res 7
+.segment "VECTORS"
+  .word 0, 0, 0
+`, `
+MEMORY {
+  RAM: start = $0300, size = $0500, type = rw, file = "";
+  PRG: start = $8000, size = $8000, type = ro, file = %O, fill = yes;
+}
+SEGMENTS {
+  CODE:    load = PRG, type = ro;
+  DATA:    load = PRG, run = RAM, type = rw;
+  BSS:     load = RAM, type = bss;
+  VECTORS: load = PRG, type = ro, start = $FFFA;
+}
+`);
+      // PRG holds CODE, DATA's load copy and VECTORS; RAM holds BSS and DATA.
+      expect(text).toMatch(/^PRG\s+008000\s+00FFFF\s+008000\s+00000B\s/m);
+      expect(text).toMatch(/^RAM\s+000300\s+0007FF\s+000500\s+000009\s/m);
+      expect(text).toMatch(/^VECTORS\s+00FFFA\s+00FFFF\s+000006\s+000006\s/m);
+    });
+
+    it('should count only placed bytes into a patched segment', function() {
+      const text = mapText(`
+.segment "BANK0" :bank $00 :size $4000 :mem $8000 :off $00000
+.org $9000
+.free $80
+.reloc
+  .byte 1, 2, 3, 4
+`, undefined, new Uint8Array(0x4000).fill(0xff));
+      expect(text).toMatch(/^BANK0\s+008000\s+00BFFF\s+004000\s+000004\s/m);
+    });
   });
 
   describe('mirror segments (&)', function() {

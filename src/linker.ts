@@ -2675,19 +2675,28 @@ class Link {
   private segmentReport(): string {
     if (!this.segments.size) return '';
     const hex = (n: number, w = 6) => n.toString(16).toUpperCase().padStart(w, '0');
-    // How far the chunks actually placed in each segment reach. `Size` is what
-    // the segment was given, `Used` is what it needed - the two differ because
-    // a segment is measured before placement gets to backfill alignment gaps.
-    const used = new Map<string, number>();
-    for (const chunk of this.chunks) {
-      if (chunk.org == null) continue;
-      // Mirrors are measured by their primary copy only.
-      const pieces = chunk.isMirrored ? chunk.pieces.slice(0, 1) : chunk.pieces;
-      for (const {segment: seg, start, size} of pieces) {
-        const end = chunk.org + start + size - seg.memory;
-        used.set(seg.name, Math.max(used.get(seg.name) ?? 0, end));
+    // Placed bytes in link space, so deduped chunks count once.
+    const occupied = new IntervalSet();
+    for (const [offset, , piece] of this.placed) {
+      occupied.add(offset, offset + piece.size);
+      // A load != run segment takes up its run area too.
+      const area = this.segmentArea.get(piece.segment.name);
+      const run = area != null ? this.segments.get(area) : undefined;
+      if (run && run.delta !== piece.segment.delta) {
+        const at = offset - piece.segment.delta + run.delta;
+        occupied.add(at, at + piece.size);
       }
     }
+    const usedBytes = (s: LinkSegment) => {
+      const lo = s.memory + s.delta;
+      const hi = lo + s.size;
+      let total = 0;
+      for (const [start, end] of occupied.tail(lo)) {
+        if (start >= hi) break;
+        total += Math.min(end, hi) - start;
+      }
+      return total;
+    };
     // Chop the name of the anon segment to 20 characters so it fits nicer in the output
     const rows = this.segmentOrder.filter(n => this.segments.has(n))
         .map(n => [n, this.segmentLabel(n)] as const);
@@ -2703,7 +2712,7 @@ class Link {
       const offs = s.isRam ?
           '      ' : hex(s.offset - (this.fileBases.get(file) ?? 0));
       out += `${label.padEnd(width)}  ${hex(s.memory)}  ${hex(end)}  ${
-             hex(s.size)}  ${hex(used.get(name) ?? 0)}  ${
+             hex(s.size)}  ${hex(usedBytes(s))}  ${
              hex(this.segmentAlign.get(name) ?? 1, 5)}  ${offs}  ${file}\n`;
     }
     return out + '\n';
