@@ -658,7 +658,7 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/Segment DATA .* does not fit in PRG/);
   });
 
-  it('should throw when an unmapped segment holds a .org chunk with no address',
+  it('should run an unmapped segment at the address of its .org chunk',
      function() {
     const m = {
       chunks: [{
@@ -672,7 +672,7 @@ describe('Linker', function() {
         {name: 'CODE', load: 'PRG'},
       ],
     };
-    expect(() => link(m)).toThrow(/no address of its own/);
+    expect(chunks(link(m))).toEqual([[0x10, [1, 1]]]);
   });
 
   it('should throw when a .org chunk runs off the end of its segment',
@@ -2422,6 +2422,94 @@ describe('Linker with an ld65 config', function() {
       SEGMENTS { CODE: load = PRG; }`;
     const m = {chunks: [{segments: ['CODE'], data: Uint8Array.of(1)}]};
     expect(() => linkCfg(cfg, m)).toThrow(/__MAIN__ is imported .* never exported/);
+  });
+
+  it('should run a load/run segment at its .org', function() {
+    // TapeDump's RAM kernel: `.org $0140` in a segment copied to RAM.
+    const cfg = `
+      MEMORY {
+        ROM: start = $8000, size = $10, file = %O, fill = yes, fillval = $ff;
+        RUN: start = $0140, size = $40, file = "";
+      }
+      SEGMENTS {
+        CODE:   load = ROM;
+        KERNEL: load = ROM, run = RUN, define = yes;
+      }`;
+    const main: AssemblyInput = {
+      type: 'source', name: 'main.s',
+      code: `
+.segment "KERNEL"
+.org $0140
+start: lda start
+.res $0148-*, $ea
+.segment "CODE"
+  jmp start
+.segment "KERNEL"
+.byte "Hi"
+`,
+    };
+    const result = compile([main], {linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    // Verified against ld65.
+    expect(Array.from(result.outputs[0].data)).toEqual([
+      0x4c, 0x40, 0x01, 0xad, 0x40, 0x01, 0xea, 0xea,
+      0xea, 0xea, 0xea, 0x48, 0x69, 0xff, 0xff, 0xff,
+    ]);
+  });
+
+  describe('.org in a load/run segment', function() {
+    const cfg = `
+      MEMORY {
+        ROM: start = $8000, size = $10, file = %O, fill = yes;
+        RUN: start = $0200, size = $10, file = "";
+      }
+      SEGMENTS {
+        CODE:   load = ROM;
+        FIRST:  load = ROM, run = RUN, optional = yes;
+        KERNEL: load = ROM, run = RUN;
+      }`;
+    function build(code: string) {
+      const main: AssemblyInput = {type: 'source', name: 'main.s', code};
+      return compile([main], {linkerConfig: cfg, linkerConfigName: 'test.cfg'});
+    }
+    function errors(code: string) {
+      return build(code).messages
+          .filter(m => m.level === 'error').map(m => m.message);
+    }
+
+    it('should place .org chunks inside the segment run range', function() {
+      const result = build(`
+.segment "CODE"
+  .byte 1, 2
+.segment "KERNEL"
+.org $0200
+k: jmp k
+.org $0203
+  .byte 9
+`);
+      expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+      expect(Array.from(result.outputs[0].data)).toEqual([
+        1, 2, 0x4c, 0x00, 0x02, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      ]);
+    });
+
+    it('should reject an .org past the end of the segment', function() {
+      expect(errors(`
+.segment "KERNEL"
+.org $0204
+  .byte 1
+`)).toEqual([expect.stringMatching(/^Non-unique segment/)]);
+    });
+
+    it('should reject an .org below the segment run start', function() {
+      expect(errors(`
+.segment "FIRST"
+  .byte 1, 2
+.segment "KERNEL"
+.org $0200
+  .byte 3
+`)).toEqual([expect.stringMatching(/^Non-unique segment/)]);
+    });
   });
 
   it('should report a config parse error against the config file', function() {

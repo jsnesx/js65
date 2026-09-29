@@ -446,7 +446,7 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
       } else if (front.token === 'num') {
         // add number
         const num = front.num;
-        exprs.push({op: 'num', num, meta: size(num, front)});
+        exprs.push({op: 'num', num, meta: size(num)});
         val = false;
       } else if (front.token === 'str') {
         const s = front.str;
@@ -458,7 +458,7 @@ export function parse(tokens: Token[], index = 0, symbols?: SymbolLookup,
             Tokens.fail(`Character literal must be one character: '${s}'`, front);
           }
           const num = charEncoder?.(chars[0]) ?? chars[0].codePointAt(0)!;
-          exprs.push({op: 'num', num, meta: size(num, front)});
+          exprs.push({op: 'num', num, meta: size(num)});
         } else {
           exprs.push({op: 'str', str: s, meta: {size: s.length}});
         }
@@ -608,7 +608,7 @@ function plus(expr: Expr): Expr {
     }
   }
   if (!out.meta?.rel && out.meta?.size == null) {
-    out.meta = sizeMeta(foldedSize(out.num!, a, b));
+    out.meta = size(out.num!);
   }
   return carryZeropage(out, '+', [a, b]);
 }
@@ -631,18 +631,13 @@ function minus(expr: Expr): Expr {
   }
   if (a.meta?.rel) out.meta = a.meta;
   if (!out.meta?.rel && out.meta?.size == null) {
-    out.meta = sizeMeta(foldedSize(out.num!, a, b));
+    out.meta = size(out.num!);
   }
   // Preserve branch flag even for non-relative subtractions
   if (isBranch && out.op === 'num') {
     out.meta = out.meta ? {...out.meta, branch: true} : {branch: true};
   }
   return carryZeropage(out, '-', [a, b]);
-}
-
-function foldedSize(num: number, ...args: Expr[]): number {
-  return Math.max(size(num).size!,
-                  ...args.map(a => Number(a.meta?.size) || 0));
 }
 
 /** For +/- ops, we want things like ZP + 1 to also land in ZP */
@@ -792,13 +787,13 @@ function fixSize(expr: Expr): Expr {
   const xform = SIZE_TRANSFORMS.get(expr.op);
   // perf: only use the spread operator when handling an unknown num of args
   const args = expr.args!;
-  const size = !xform ? undefined :
+  const additive = expr.op === '+' || expr.op === '-';
+  const size = !xform ? byteOffsetSize(additive, args) :
       args.length === 1 ? xform(Number(args[0].meta?.size)) :
       args.length === 2 ? xform(Number(args[0].meta?.size),
                                 Number(args[1].meta?.size)) :
       xform(...args.map(e => Number(e.meta?.size)));
-  const zp = (expr.op === '+' || expr.op === '-') &&
-      isZeropage(expr.op, expr.args!);
+  const zp = additive && isZeropage(expr.op, expr.args!);
   if (size && zp) {
     expr.meta = {...expr.meta, size, zeropage: true};
   } else if (size) {
@@ -807,6 +802,18 @@ function fixSize(expr: Expr): Expr {
     expr.meta = {...expr.meta, zeropage: true};
   }
   return expr;
+}
+
+function byteOffsetSize(additive: boolean, args: Expr[]): number|undefined {
+  if (!additive || args.length !== 2 || !args.some(isByteOf)) return undefined;
+  if (!args.every(a => a.op === 'num' || isByteOf(a))) return undefined;
+  return Math.max(Number(args[0].meta?.size), Number(args[1].meta?.size)) ||
+      undefined;
+}
+
+function isByteOf(expr: Expr): boolean {
+  return expr.args?.length === 1 &&
+      (expr.op === '<' || expr.op === '>' || expr.op === '^');
 }
 
 function isAddress(expr: Expr): boolean {
@@ -840,10 +847,7 @@ function sizeMeta(width: number): Meta {
   return SIZE_METAS[width] ?? Object.freeze({size: width});
 }
 
-export function size(num: number, token?: Token): Meta {
-  if (num < 256 && token && token.token === 'num' && token.width != null) {
-    return sizeMeta(token.width);
-  }
+export function size(num: number): Meta {
   return 0 <= num && num < 256 ? SIZE_METAS[1] : SIZE_METAS[2];
 }
 

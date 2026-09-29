@@ -1971,12 +1971,11 @@ class Link {
       let size = seg.size ?? measure(chunks);
       for (const c of chunks) {
         if (c.org == null) continue;
-        if (seg.memory == null) {
-          this.fail(`Segment ${name} holds a .org chunk${
-              c.name ? ` (${c.name})` : ''} but has no address of its own. ${''
-              }.org can only be used in segments with :mem`, c.at());
+        if (seg.memory != null) {
+          size = Math.max(size, c.org + c.size - seg.memory);
+        } else if (seg.size == null) {
+          size += c.size;
         }
-        size = Math.max(size, c.org + c.size - seg.memory);
       }
       sizes.set(name, size);
     }, drop);

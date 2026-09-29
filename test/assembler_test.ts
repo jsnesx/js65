@@ -1558,9 +1558,12 @@ describe('Assembler', function() {
     });
 
     it('should complement a word within two bytes', function() {
-      expect(assemble('.word ~$0000, ~$1234, ~$7fff, ~$8000, ~$ffff\n'))
-          .toEqual([0xff, 0xff, 0xcb, 0xed, 0x00, 0x80, 0xff, 0x7f,
-                    0x00, 0x00]);
+      expect(assemble('.word ~$1234, ~$7fff, ~$8000, ~$ffff\n'))
+          .toEqual([0xcb, 0xed, 0x00, 0x80, 0xff, 0x7f, 0x00, 0x00]);
+    });
+
+    it('should size a zero-padded literal by its value', function() {
+      expect(assemble('.word ~$0000\n')).toEqual([0xff, 0x00]);
     });
 
     it('should keep a byte operand one byte wide inside a .word', function() {
@@ -2448,6 +2451,33 @@ Ptr: .res 2
       expect(codeOf(m)).toEqual([0x85, 0xff, 0x85, 0xff]);
     });
 
+    it('should keep the byte size of a lobyte across an offset', function() {
+      // TapeDump's `sta <RDADDR+1`; ca65 reads it as `(<RDADDR)+1`.
+      const m = assembleModule(`
+.segment "BSS"
+Ptr: .res 2
+.segment "CODE"
+  sta <Ptr+1
+  sta 1+<Ptr
+  sta <Ptr-1
+  sta >Ptr+$100
+`);
+      expect(codeOf(m)).toEqual([
+        0x85, 0xff, 0x85, 0xff, 0x85, 0xff, 0x8d, 0xff, 0xff,
+      ]);
+    });
+
+    it('should keep the byte size of a lobyte of a forward reference',
+       function() {
+         const m = assembleModule(`
+.segment "CODE"
+  sta <Ptr+1
+.segment "ZEROPAGE"
+Ptr: .res 2
+`);
+         expect(codeOf(m)).toEqual([0x85, 0xff]);
+       });
+
     it('should keep zeropage address size across an offset from a `.proc`',
        function() {
          const m = assembleModule(`
@@ -2603,17 +2633,33 @@ BLANK_TILE = $af
          expect(codeOf(m)).toEqual([0xad, 0xfe, 0x01, 0xad, 0x00, 0x01]);
        });
 
-    it('should keep an offset absolute when an operand needs two bytes',
-       function() {
-         const m = assembleModule(`
+    it('should size an offset by its result, not its operands', function() {
+      const m = assembleModule(`
 BIG = $1234
 .segment "CODE"
 .proc p
   lda BIG-$1200
 .endproc
 `);
-         expect(codeOf(m)).toEqual([0xad, 0x34, 0x00]);
-       });
+      expect(codeOf(m)).toEqual([0xa5, 0x34]);
+    });
+
+    it('should size a zero-padded literal by its value', function() {
+      const m = assembleModule(`
+W = $0034
+.segment "CODE"
+  lda $0034
+  lda W
+  lda W+1
+  lda $1234-$1200
+  lda $00ff+1
+  lda %0000000000000001
+`);
+      expect(codeOf(m)).toEqual([
+        0xa5, 0x34, 0xa5, 0x34, 0xa5, 0x35, 0xa5, 0x34,
+        0xad, 0x00, 0x01, 0xa5, 0x01,
+      ]);
+    });
 
     it('should size an explicitly scoped constant by its value', function() {
       const m = assembleModule(`
