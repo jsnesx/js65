@@ -34,6 +34,7 @@ const prg = Uint8Array.from([
   '9d 56 34', // 2a  sta $3456,x
   '60',       // 2d  rts
   '22 23 5c', // 2e  .text "\"#\\"
+  'de d0 00', // 31  dec a:$00d0,x
 ].join(' ').split(/ /g).map(x => parseInt(x, 16)));
 
 describe('smudge', function() {
@@ -88,6 +89,10 @@ describe('smudge', function() {
   });
   it('should handle a relative jump with no explicit args', function() {
     expect(smudge('<@7@>')).toEqual('bne *-5');
+  });
+  it('should add an absolute override to zero page values', function() {
+    expect(smudge('<@31@>')).toEqual('dec a:$00d0,x');
+    expect(smudge('<@9@>')).toEqual('jsr $001c');
   });
   it('should retain newlines', function() {
     expect(smudge('  .byte [@19@],[@1a@]\n  .byte [@1b@],[@1c@]\n'))
@@ -150,6 +155,17 @@ describe('clean', function() {
     expect(clean('stx 103,y')).toEqual('<@14 103@>');
     expect(clean('jmp (x)')).toEqual('<@16 x@>');
     expect(clean('sta (x),y')).toEqual('<@20 x@>');
+  });
+  it('should encode absolute overrides on zero page values', function() {
+    expect(clean('dec a:$00d0,x')).toEqual('<@31@>');
+    expect(clean('dec $00d0,x')).toEqual('dec $00d0,x');
+    expect(clean('foo: dec a:$00d0,x')).toEqual('foo: <@31@>');
+  });
+  it('should retain address size overrides in explicit arguments', function() {
+    expect(clean('dec a:foo,x')).toEqual('<@31 a:foo@>');
+    expect(clean('stx z:$67,y')).toEqual('<@14 z:$67@>');
+    expect(smudge('<@31 a:foo@>')).toEqual('dec a:foo,x');
+    expect(smudge('<@14 z:$67@>')).toEqual('stx z:$67,y');
   });
   it('should use successive versions of the same instruction', function() {
     expect(clean('lda #$05\nlda #$05\nlda #$05')).toEqual('<@0@>\n<@23@>\n<@0@>');

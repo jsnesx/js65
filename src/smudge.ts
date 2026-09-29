@@ -10,7 +10,7 @@
 // Comments are preserved, and some special comments are understood to direct
 // the cleaner where to look to find references.
 
-import { Cpu } from './cpu.ts';
+import { Cpu, type AddressingMode } from './cpu.ts';
 import { binarySearch } from './util.ts';
 
 export function smudge(contents: string, cpu: Cpu, prg: Uint8Array): string {
@@ -143,12 +143,21 @@ function smudgeOp(cpu: Cpu, prg: Uint8Array, addr: number, argStr?: string): str
   let arg: string|number|undefined = argStr;
   const [mnemonic, mode] = cpu.disasm(prg[addr]) || ['brk', 'imp'];
   const argLen = cpu.argLen(mode);
+  let prefix = '';
   if (!arg) {
     if (argLen > 0) arg = prg[addr + 1];
     if (argLen > 1) arg = (arg as number) | (prg[addr + 2] << 8);
+    const zpMode = ZP_MODE[mode];
+    if (zpMode && (arg as number) < 0x100 && cpu.table[mnemonic][zpMode] != null) {
+      prefix = 'a:';
+    }
   }
-  return mnemonic + (argLen ? ' ' + cpu.format(mode, arg!) : '');
+  return mnemonic + (argLen ? ' ' + prefix + cpu.format(mode, arg!) : '');
 }
+
+const ZP_MODE: {[mode in AddressingMode]?: AddressingMode} = {
+  abs: 'zpg', abx: 'zpx', aby: 'zpy',
+};
 
 function smudgeData(prg: Uint8Array, addr: number, mod: string): string {
   let value = prg[addr];
@@ -354,7 +363,7 @@ class Cleaner {
 
     // Look for a label at the front
     // TODO - consider removing the [$ ] and the repeat from this when it's no longer needed for disasm
-    if ((match = /^(?:\s*[-+]+:?|\s*[@$a-z0-9_ ]*:)+\s*/i.exec(line))) {
+    if ((match = /^(?:\s*[-+]+:?|\s*(?![@$a-z0-9_ ]*\s[azf]:)[@$a-z0-9_ ]*:)+\s*/i.exec(line))) {
       this.pushStr(match[0]);
       line = line.substring(match[0].length);
     }
@@ -460,6 +469,16 @@ function parseOp(cpu: Cpu, mnemonic: string, argStr: string): CleanChunk|undefin
 }
 
 function zpgOrAbs(plain: string, arg: string, zpg?: number, abs?: number): CleanChunk|undefined {
+  const size = /^([az]):/i.exec(arg)?.[1];
+  if (size) {
+    // Only an `a:` on a zero page value is reproduced by smudging.
+    if (size === 'a' && zpg != null && /^a:\$00[0-9a-f]{2}$/.test(arg) && abs != null) {
+      const word = parseNum(arg.substring(2))!;
+      return new CleanOpSimple(plain, [abs, word, 0]);
+    }
+    const option = /z/i.test(size) ? zpg : abs;
+    return option != null ? new CleanOpPartial(plain, [option], arg) : undefined;
+  }
   if (/^\$[0-9a-f]{2}$/.test(arg) && zpg != null) {
     return new CleanOpSimple(plain, [zpg, parseNum(arg)!]);
   } else if (/^\$[0-9a-f]{4}$/.test(arg) && abs != null) {
