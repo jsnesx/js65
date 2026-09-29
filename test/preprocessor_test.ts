@@ -806,6 +806,32 @@ describe('Preprocessor', function() {
                  await directive('.byte 9'));
     });
 
+    it('should only define in the taken nested branch', async function() {
+      for (const [inner, want] of [[1, '$f4'], [0, '$f5']]) {
+        await test(['.if 1',
+                    `.if ${inner}`,
+                    '.define X $f4',
+                    '.else',
+                    '.define X $f5',
+                    '.endif',
+                    '.endif',
+                    '.byte X'],
+                   await directive(`.byte ${want}`));
+      }
+    });
+
+    it('should skip a define in a dead nested branch', async function() {
+      await test(['.define X 1',
+                  '.if 1',
+                  '.if 0',
+                  '.undefine X',
+                  '.define X 2',
+                  '.endif',
+                  '.endif',
+                  '.byte X'],
+                 await directive('.byte 1'));
+    });
+
     // A deferred block is replayed to the late pass, so it has to carry the
     // unexpanded line for the redefinition to apply there too.
     it('should apply a define redefined in a deferred block', async function() {

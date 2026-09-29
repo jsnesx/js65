@@ -1229,14 +1229,16 @@ export class Preprocessor implements Tokens.Source {
       // anything else on the line
       if (deferred) return true;
       if (cond) {
-        // Defines take effect as the body is collected, so later lines in this
-        // branch expand against them when they are replayed.
-        if (this.runDefineDirective(line)) return true;
+        // cond is true, but we are only sure that the lines are live
+        // for the outer most if block right now. if we are dealing with nested
+        // if blocks, there may be chunks inside that aren't live.
+        if (depth === 1) {
+          if (this.runDefineDirective(line)) {
+            return true;
+          }
+          dead?.keepLine(sourceOfLine(line));
+        }
         result.push(stored);
-        // Only this level's verdict is final. A line inside a nested `.if` is
-        // re-decided when that block is unshifted and parsed in turn, so
-        // calling it live here would override the inner branch that drops it.
-        if (depth === 1) dead?.keepLine(sourceOfLine(line));
       } else {
         dead?.skipLine(sourceOfLine(line));
       }
