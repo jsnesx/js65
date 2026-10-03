@@ -2038,7 +2038,18 @@ class Link {
     // Mapped segments that other segments are lowered into.
     const backing = new Set<string>(
         unmapped.flatMap(s => [s.load, s.run].filter(n => n != null)));
-    this.collect(this.allocationOrder(order), name => {
+    // Source-declared :load segments carve their space before the area's own chunks.
+    const allocOrder = this.allocationOrder(order);
+    const inConfig = new Set(this.config?.segments.map(s => s.name));
+    const isSourceLowered = (n: string) => {
+      const s = merged.get(n);
+      return s != null && needsLowering(s) && !inConfig.has(n);
+    };
+    const loweredFirst = [
+      ...allocOrder.filter(isSourceLowered),
+      ...allocOrder.filter(n => !isSourceLowered(n)),
+    ];
+    this.collect(loweredFirst, name => {
       const seg = merged.get(name);
       if (!seg) return;
       if (!needsLowering(seg)) {
