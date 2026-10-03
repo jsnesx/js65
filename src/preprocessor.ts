@@ -112,6 +112,20 @@ const enum Layer {
   ALL = DEFINES | FUNCTIONS,
 }
 
+type CondResult = {value: boolean}|{deferred: true};
+
+/**
+ * An open conditional. `pending` has taken no arm yet, `done` has, and
+ * `deferred` passes every arm through tagged for the late pass.
+ */
+interface CondFrame {
+  /** The `.if*` token, for "missing .endif" errors */
+  at: Token;
+  state: 'live'|'pending'|'done'|'deferred';
+  /** TokenStream depth when opened, so `.exitmacro` can close it */
+  depth: number;
+}
+
 export class Preprocessor implements Tokens.Source {
   private readonly macros: Map<string, Define|Macro|string>;
   // Output lines produced by pump() but not yet consumed by next(). A single
@@ -135,8 +149,7 @@ export class Preprocessor implements Tokens.Source {
   /** Depth marker for nesting blocks that need to be expanded raw */
   private rawMode = 0;
 
-  /** If a define has .eol in it, it can cause issues when storing the raw .if block */
-  private overflowLines = 0;
+  private readonly conds: CondFrame[] = [];
 
   constructor(readonly stream: TokenStream, readonly env: Env,
               parent?: Preprocessor,
@@ -165,7 +178,7 @@ export class Preprocessor implements Tokens.Source {
         this.recover(err);
         continue;
       }
-      if (!more) return undefined; // EOF
+      if (!more && !this.outQueue.length) return undefined; // EOF
     }
   }
 
@@ -296,9 +309,134 @@ export class Preprocessor implements Tokens.Source {
 
   // Expand a single line of tokens from the front of toks.
   private readLine(): Token[]|undefined {
-    const line = this.stream.next();
-    if (line == null) return line;
-    return this.expandLine(line);
+    for (;;) {
+      const line = this.stream.next();
+      if (line == null) return this.endOfInput();
+      const n = this.conds.length;
+      if (n === 0) return this.expandLine(line);
+      const top = this.conds[n - 1];
+      if (top.state === 'deferred') return this.expandLine(line);
+      if (top.state === 'live') {
+        this.inactiveRegionIndex?.keepLine(sourceOfLine(line));
+        return this.expandLine(line);
+      }
+      this.skipDeadLine(line, top);
+    }
+  }
+
+  private endOfInput(): undefined {
+    if (!this.conds.length) return undefined;
+    const at = this.conds[0].at;
+    this.conds.length = 0;
+    Tokens.fail(`EOF looking for .endif`, at);
+  }
+
+  /** Drops a line in an untaken arm, acting only on conditionals. */
+  private skipDeadLine(line: Token[], top: CondFrame): void {
+    const dead = this.inactiveRegionIndex;
+    let front = line[0];
+    // Defines sit below the gate, so one can still open or close a block.
+    if (front?.token === 'ident' && this.macros.get(front.str) instanceof Define) {
+      this.expandDefines(line);
+      front = line[0];
+    }
+    if (!front) return;
+    if (front.token === 'cs') {
+      switch (front.str) {
+        case '.endif': {
+          this.conds.pop();
+          const parent = this.conds[this.conds.length - 1];
+          if (!parent || parent.state === 'live' || parent.state === 'deferred') {
+            dead?.flush();
+          } else {
+            dead?.skipLine(sourceOfLine(line));
+          }
+          return;
+        }
+        case '.else':
+          if (top.state !== 'pending') break;
+          dead?.flush();
+          top.state = 'live';
+          return;
+        case '.elseif':
+          if (top.state !== 'pending') break;
+          dead?.flush();
+          this.elseIf(line, top);
+          return;
+        default:
+          if (front.str.startsWith('.if')) {
+            this.conds.push({at: front, state: 'done', depth: this.stream.depth});
+          }
+      }
+    }
+    dead?.skipLine(sourceOfLine(line));
+  }
+
+  /** Evaluates an `.elseif` reached while no arm has been taken. */
+  private elseIf(line: Token[], top: CondFrame): void {
+    const cs = line[0];
+    const outcome = this.condition(() => {
+      this.expandLayers(line, Layer.ALL, 1);
+      return this.ifValue(parseOneExpr(line.slice(1), cs, this.env.encodeChar), cs);
+    }, cs);
+    if (!('deferred' in outcome)) {
+      top.state = outcome.value ? 'live' : 'pending';
+      return;
+    }
+    // The late pass needs a chain head, so stand in an untaken `.if`.
+    const source = top.at.source;
+    this.outQueue.push(
+        [{token: 'cs', str: '.if', source, deferred: true}, Tokens.numToken(0, source)],
+        tagDeferred(line));
+    top.state = 'deferred';
+  }
+
+  private ifValue(expr: Expr, cs: Token): CondResult {
+    const r = this.evaluateConstOrDefer(expr, cs);
+    return 'deferred' in r ? r : {value: !!r.value};
+  }
+
+  private openIf(line: Token[], test: () => CondResult): void {
+    const at = line[0];
+    const outcome = this.condition(test, at);
+    const depth = this.stream.depth;
+    if ('deferred' in outcome) {
+      this.conds.push({at, state: 'deferred', depth});
+      this.outQueue.push(tagDeferred(line));
+      return;
+    }
+    this.conds.push({at, state: outcome.value ? 'live' : 'pending', depth});
+  }
+
+  /** `.else`/`.elseif` reached from a live arm, or a deferred one. */
+  private nextBranch(line: Token[]): void {
+    if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
+    const top = this.conds[this.conds.length - 1];
+    if (!top) badClose('.if', line[0]);
+    if (top.state === 'deferred') {
+      this.outQueue.push(tagDeferred(line));
+      return;
+    }
+    top.state = 'done';
+  }
+
+  private closeIf(line: Token[]): void {
+    if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
+    const top = this.conds.pop();
+    if (!top) badClose('.if', line[0]);
+    if (top.state === 'deferred') {
+      this.outQueue.push(tagDeferred(line));
+      return;
+    }
+    this.inactiveRegionIndex?.flush();
+  }
+
+  private exitMacro(): void {
+    this.stream.exit();
+    const depth = this.stream.depth;
+    while (this.conds.length && this.conds[this.conds.length - 1].depth > depth) {
+      this.conds.pop();
+    }
   }
 
   ////////////////////////////////////////////////////////////////
@@ -310,7 +448,7 @@ export class Preprocessor implements Tokens.Source {
 
   private expandLine(line: Token[], pos = 0): Token[] {
     // Only expand functions when we aren't processing a function body
-    // like a macro, .if block, etc
+    // like a macro or .repeat
     const layers = this.rawMode ? Layer.DEFINES : Layer.ALL;
     return this.expandLayers(line, layers, pos);
   }
@@ -334,54 +472,6 @@ export class Preprocessor implements Tokens.Source {
 
   private collectBody<T>(f: (source: Tokens.Source) => T): T {
     return this.inRawMode(() => f(this.defineExpanded));
-  }
-
-  /**
-   * Really kinda jank, but we need to expand the body of the defines
-   * but also keep the unexpanded version in case this if block needs replayed.
-   * This is an `if` specific wrapper that makes it so we keep both.
-   */
-  private collectIfBody<T>(f: (source: Tokens.Source) => T,
-                           pending: {line?: Token[]}): T {
-    const source: Tokens.Source = {
-      next: () => {
-        const line = this.stream.next();
-        if (line == null) return line;
-        const raw = line.slice();
-        const before = this.overflowLines;
-        this.expandDefines(line);
-        // Replaying raw would re-emit the `.eol` lines already queued
-        pending.line = this.overflowLines === before ? raw : undefined;
-        return line;
-      },
-    };
-    return this.inRawMode(() => f(source));
-  }
-
-  /** Runs a `.define`/`.undefine` sitting in a live `.if` branch. */
-  private runDefineDirective(line: Token[]): boolean {
-    const front = line[0];
-    if (front?.token !== 'cs') return false;
-    if (front.str === '.define') {
-      this.parseDefine(line);
-      return true;
-    }
-    if (front.str === '.undefine') {
-      this.parseUndefine(line);
-      return true;
-    }
-    return false;
-  }
-
-  /** Branch tests are evaluated live, so they need the functions back. */
-  private outsideRawMode<T>(f: () => T): T {
-    const saved = this.rawMode;
-    this.rawMode = 0;
-    try {
-      return f();
-    } finally {
-      this.rawMode = saved;
-    }
   }
 
   private expandLayers(line: Token[], layers: Layer, pos: number): Token[] {
@@ -498,10 +588,7 @@ export class Preprocessor implements Tokens.Source {
         const overflow = define.expand(line, pos);
 //console.log('post-expand', line);
         if (overflow) {
-          if (overflow.length) {
-            this.overflowLines += overflow.length;
-            this.stream.unshift(...overflow);
-          }
+          if (overflow.length) this.stream.unshift(...overflow);
           return pos;
         }
       }
@@ -937,62 +1024,59 @@ export class Preprocessor implements Tokens.Source {
     '.define': (line) => this.parseDefine(line),
     '.delmacro': (line) => this.parseDelMacro(line),
     '.undefine': (line) => this.parseUndefine(line),
-    '.else': (line) => isDeferredMarker(line[0]) ? this.outQueue.push(line) : badClose('.if', line[0]),
-    '.elseif': (line) => isDeferredMarker(line[0]) ? this.outQueue.push(line) : badClose('.if', line[0]),
-    '.endif': (line) => isDeferredMarker(line[0]) ? this.outQueue.push(line) : badClose('.if', line[0]),
+    '.else': (line) => this.nextBranch(line),
+    '.elseif': (line) => this.nextBranch(line),
+    '.endif': (line) => this.closeIf(line),
     '.endmacro': ([cs]) => badClose('.macro', cs),
     '.endrepeat': (line) => this.parseEndRepeat(line),
-    '.exitmacro': ([, a]) => { noGarbage(a); this.stream.exit(); },
+    '.exitmacro': ([, a]) => { noGarbage(a); this.exitMacro(); },
     '.if': (line) => {
       if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
       const [cs, ...args] = line;
       const expr = parseOneExpr(args, cs, this.env.encodeChar);
-      this.parseIf(() => {
-        const r = this.evaluateConstOrDefer(expr, cs);
-        return 'deferred' in r ? r : {value: !!r.value};
-      }, line);
+      this.openIf(line, () => this.ifValue(expr, cs));
     },
     '.ifdef': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: this.parseIfDef(args, cs)}), line);
+      this.openIf(line, () => ({value: this.parseIfDef(args, cs)}));
     },
     '.ifndef': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: !this.parseIfDef(args, cs)}), line);
+      this.openIf(line, () => ({value: !this.parseIfDef(args, cs)}));
     },
-    '.ifblank': (line) => this.parseIf(() => ({value: line.length <= 1}), line),
-    '.ifnblank': (line) => this.parseIf(() => ({value: line.length > 1}), line),
+    '.ifblank': (line) => this.openIf(line, () => ({value: line.length <= 1})),
+    '.ifnblank': (line) => this.openIf(line, () => ({value: line.length > 1})),
     '.ifref': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: this.env.referencedSymbol(parseOneIdent(args, cs))}), line);
+      this.openIf(line, () => ({value: this.env.referencedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifnref': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: !this.env.referencedSymbol(parseOneIdent(args, cs))}), line);
+      this.openIf(line, () => ({value: !this.env.referencedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifsym': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: this.env.definedSymbol(parseOneIdent(args, cs))}), line);
+      this.openIf(line, () => ({value: this.env.definedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifnsym': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: !this.env.definedSymbol(parseOneIdent(args, cs))}), line);
+      this.openIf(line, () => ({value: !this.env.definedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifconst': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: this.env.constantSymbol(parseOneIdent(args, cs))}), line);
+      this.openIf(line, () => ({value: this.env.constantSymbol(parseOneIdent(args, cs))}));
     },
     '.ifnconst': (line) => {
       const [cs, ...args] = line;
-      this.parseIf(() => ({value: !this.env.constantSymbol(parseOneIdent(args, cs))}), line);
+      this.openIf(line, () => ({value: !this.env.constantSymbol(parseOneIdent(args, cs))}));
     },
     // NOTE: If support for any other CPUs is added, these will need to be un-stubbed.
-    '.ifp02': (line) => this.parseIf(() => ({value: true}), line),
-    '.ifp4510': (line) => this.parseIf(() => ({value: false}), line),
-    '.ifp816': (line) => this.parseIf(() => ({value: false}), line),
-    '.ifpc02': (line) => this.parseIf(() => ({value: false}), line),
-    '.ifpdtv': (line) => this.parseIf(() => ({value: false}), line),
-    '.ifpsc02': (line) => this.parseIf(() => ({value: false}), line),
+    '.ifp02': (line) => this.openIf(line, () => ({value: true})),
+    '.ifp4510': (line) => this.openIf(line, () => ({value: false})),
+    '.ifp816': (line) => this.openIf(line, () => ({value: false})),
+    '.ifpc02': (line) => this.openIf(line, () => ({value: false})),
+    '.ifpdtv': (line) => this.openIf(line, () => ({value: false})),
+    '.ifpsc02': (line) => this.openIf(line, () => ({value: false})),
     '.incbin': (line) => this.parseIncbin(line),
     '.include': (line) => this.parseInclude(line),
     '.macpack': (line) => this.parseMacpack(line),
@@ -1144,8 +1228,7 @@ export class Preprocessor implements Tokens.Source {
    * Process the args in a callable so that we can catch any errors
    * inside the `.if` block and recover.
    */
-  private condition(test: () => {value: boolean}|{deferred: true}, at?: Token):
-      {value: boolean}|{deferred: true} {
+  private condition(test: () => CondResult, at?: Token): CondResult {
     try {
       return test();
     } catch (err) {
@@ -1159,105 +1242,6 @@ export class Preprocessor implements Tokens.Source {
       }
       return {value: false};
     }
-  }
-
-  private parseIf(test: () => {value: boolean}|{deferred: true}, line: Token[]): void {
-    const at = line[0];
-    const raw: Token[][] = [line];
-    const markerIdx: number[] = [0];
-    const outcome = this.condition(test, at);
-    let deferred = 'deferred' in outcome;
-    let cond = deferred ? false : (outcome as {value: boolean}).value;
-    let depth = 1;
-    let done = false;
-    const result: Token[][] = [];
-    // The LSP greys out the branches this run drops. Branch markers themselves
-    // (`.if`, `.elseif`, `.else`, `.endif`) stay lit, so switching branches
-    // ends the run rather than extending it across the directive line.
-    const dead = this.inactiveRegionIndex;
-    const pending: {line?: Token[]} = {};
-    this.collectIfBody(source => Tokens.pullLines(source, line => {
-      // Report missing endif at the site of the starting .if
-      if (!line) Tokens.fail(`EOF looking for .endif`, at);
-      const stored = pending.line ?? line;
-      // Catch a case where a define expands to a completely empty line here
-      // We needed to expand and collect the body of this if block, but this
-      // line had nothing on it, so we skip it rather than run into issues later.
-      if (!line.length) return true;
-      raw.push(stored);
-      const front = line[0];
-      if (Tokens.eq(front, Tokens.ENDIF)) {
-        depth--;
-        if (!depth) {
-          markerIdx.push(raw.length - 1);
-          if (!deferred) dead?.flush();
-          return false;
-        }
-      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
-        depth++;
-      } else if (depth === 1 && !done) {
-        if (!deferred && cond && (Tokens.eq(front, Tokens.ELSE) ||
-                     Tokens.eq(front, Tokens.ELSEIF))) {
-          // if true ... else .....
-          markerIdx.push(raw.length - 1);
-          cond = false;
-          done = true;
-          return true;
-        } else if (Tokens.eq(front, Tokens.ELSEIF)) {
-          // if false ... else if .....
-          markerIdx.push(raw.length - 1);
-          if (deferred) return true; // chain already deferred so stop evaluating
-          dead?.flush();
-          const elseOutcome = this.condition(() => this.outsideRawMode(() => {
-            const r = this.evaluateConstOrDefer(
-                parseOneExpr(this.expandLine(line.slice(1)), front, this.env.encodeChar),
-                front);
-            return 'deferred' in r ? r : {value: !!r.value};
-          }), front);
-          if ('deferred' in elseOutcome) { deferred = true; return true; }
-          cond = elseOutcome.value;
-          return true;
-        } else if (Tokens.eq(front, Tokens.ELSE)) {
-          // if false ... else .....
-          markerIdx.push(raw.length - 1);
-          if (deferred) return true;
-          dead?.flush();
-          cond = true;
-          return true;
-        }
-      }
-      // anything else on the line
-      if (deferred) return true;
-      if (cond) {
-        // cond is true, but we are only sure that the lines are live
-        // for the outer most if block right now. if we are dealing with nested
-        // if blocks, there may be chunks inside that aren't live.
-        if (depth === 1) {
-          if (this.runDefineDirective(line)) {
-            return true;
-          }
-          dead?.keepLine(sourceOfLine(line));
-        }
-        result.push(stored);
-      } else {
-        dead?.skipLine(sourceOfLine(line));
-      }
-      return true;
-    }), pending);
-    if (deferred) {
-      // Tag this depth's own markers so the late pass sends them straight
-      // through instead of re-entering `parseIf`
-      for (const i of markerIdx) {
-        const [marker, ...rest] = raw[i];
-        const tagged: Tokens.StringToken = {...(marker as Tokens.StringToken), deferred: true};
-        raw[i] = [tagged, ...rest];
-      }
-      this.stream.unshift(...raw);
-      return;
-    }
-    dead?.flush();
-    // result has the expansion: unshift it
-    this.stream.unshift(...result);
   }
 
   private parseIfDef(args: Token[], cs: Token) {
@@ -1438,4 +1422,9 @@ function badClose(open: string, tok: Token): never {
 
 function isDeferredMarker(tok: Token): boolean {
   return tok.token === 'cs' && !!tok.deferred;
+}
+
+function tagDeferred(line: Token[]): Token[] {
+  line[0] = {...(line[0] as Tokens.StringToken), deferred: true};
+  return line;
 }

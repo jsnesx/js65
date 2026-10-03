@@ -861,6 +861,195 @@ describe('Preprocessor', function() {
     });
   });
 
+  describe('conditional nesting', function() {
+    // ca65 V2.19 emits `01 02 03`.
+    it('should drop the rest of a macro after .exitmacro in an .if', async function() {
+      await test(['.macro M v',
+                  '  .if v',
+                  '    .byte 1',
+                  '    .exitmacro',
+                  '  .endif',
+                  '  .byte 2',
+                  '.endmacro',
+                  'M 1',
+                  'M 0',
+                  '.byte 3'],
+                 await directive('.byte 1'),
+                 await directive('.byte 2'),
+                 await directive('.byte 3'));
+    });
+
+    // ca65 V2.19 emits `01 03 02`: .exitmacro closes every .if the macro opened.
+    it('should close nested .ifs on .exitmacro', async function() {
+      await test(['.macro M v',
+                  '  .if v',
+                  '    .if 1',
+                  '    .byte 1',
+                  '    .exitmacro',
+                  '    .endif',
+                  '    .byte 5',
+                  '  .endif',
+                  '  .byte 2',
+                  '.endmacro',
+                  'M 1',
+                  '.byte 3',
+                  'M 0'],
+                 await directive('.byte 1'),
+                 await directive('.byte 3'),
+                 await directive('.byte 2'));
+    });
+
+    // ca65 V2.19 emits `01 02 04`: only .exitmacro closes a macro's .ifs.
+    it('should close an .if opened in a macro after the macro ends', async function() {
+      await test(['.macro OPEN v',
+                  '  .if v',
+                  '  .byte 1',
+                  '.endmacro',
+                  'OPEN 1',
+                  '.byte 2',
+                  '.endif',
+                  'OPEN 0',
+                  '.byte 3',
+                  '.endif',
+                  '.byte 4'],
+                 await directive('.byte 1'),
+                 await directive('.byte 2'),
+                 await directive('.byte 4'));
+    });
+
+    // ca65 V2.19 rejects this: "Conditional assembly branch was never closed".
+    it('should close an .if opened in an include after it ends (ca65 errors)',
+       async function() {
+      expect(await testFiles(['.include "open.inc"', '.byte 2', '.endif', '.byte 3']))
+          .toEqual([await directive('.byte 1'),
+                    await directive('.byte 2'),
+                    await directive('.byte 3')]);
+    });
+
+    // ca65 V2.19 emits `01 30 12 04`.
+    it('should only run definitions in live branches', async function() {
+      expect(await testFiles(['.define VAL 1',
+                              '.if 0',
+                              '.undefine VAL',
+                              '.define VAL 2',
+                              '.define DY 2',
+                              '.macro M',
+                              '.byte $10',
+                              '.endmacro',
+                              '.include "nope.inc"',
+                              '.endif',
+                              '.if 1',
+                              '.if 0',
+                              '.undefine VAL',
+                              '.define VAL 3',
+                              '.define DZ 3',
+                              '.macro N',
+                              '.byte $11',
+                              '.endmacro',
+                              '.include "nope.inc"',
+                              '.endif',
+                              '.endif',
+                              '.byte VAL',
+                              '.ifdef DY',
+                              '.byte $20',
+                              '.endif',
+                              '.ifdef DZ',
+                              '.byte $21',
+                              '.endif',
+                              '.if 1',
+                              '.undefine VAL',
+                              '.define VAL 4',
+                              '.macro M',
+                              '.if 1',
+                              '.byte $12',
+                              '.else',
+                              '.byte $13',
+                              '.endif',
+                              '.endmacro',
+                              '.include "live.inc"',
+                              '.endif',
+                              'M',
+                              '.byte VAL']))
+          .toEqual([await directive('.byte 1'),
+                    await directive('.byte $30'),
+                    await directive('.byte $12'),
+                    await directive('.byte 4')]);
+    });
+
+    // ca65 V2.19 emits `02 03 04`.
+    it('should take the first true arm of a resolvable chain', async function() {
+      await test(['.if 0', '.byte 1', '.elseif 1', '.byte 2', '.else', '.byte 3', '.endif',
+                  '.if 0', '.byte 1', '.elseif 0', '.byte 2', '.else', '.byte 3', '.endif',
+                  '.if 1', '.byte 4', '.elseif 1', '.byte 5', '.endif'],
+                 await directive('.byte 2'),
+                 await directive('.byte 3'),
+                 await directive('.byte 4'));
+    });
+
+    // ca65 V2.19 emits `02`.
+    it('should drop an emptied line in a dead and a nested dead branch',
+       async function() {
+      await test(['.define EMPTY',
+                  '.if 0',
+                  'EMPTY',
+                  '.byte 1',
+                  '.if 1',
+                  'EMPTY',
+                  '.endif',
+                  '.endif',
+                  '.byte 2'],
+                 await directive('.byte 2'));
+    });
+
+    // `.eol` in a define is a js65 extension, so there is no ca65 reference.
+    it('should close a live branch from a .eol define', async function() {
+      await test(['.define CLOSE .byte 1 .eol .endif',
+                  '.if 1',
+                  'CLOSE',
+                  '.byte 2'],
+                 await directive('.byte 1'),
+                 await directive('.byte 2'));
+    });
+
+    it('should close a dead branch from a .eol define', async function() {
+      await test(['.define CLOSE .byte 1 .eol .endif',
+                  '.if 0',
+                  'CLOSE',
+                  '.byte 2'],
+                 await directive('.byte 2'));
+    });
+
+    it('should switch branches from a .eol define', async function() {
+      await test(['.define SWITCH .byte 1 .eol .else',
+                  '.if 0',
+                  'SWITCH',
+                  '.byte 2',
+                  '.endif',
+                  '.if 1',
+                  'SWITCH',
+                  '.byte 3',
+                  '.endif'],
+                 await directive('.byte 2'),
+                 await directive('.byte 1'));
+    });
+
+    // ca65 V2.19 emits `01 04`.
+    it('should see a define that expands to nothing as blank', async function() {
+      await test(['.define EMPTY',
+                  '.define FULL 1',
+                  '.ifblank EMPTY', '.byte 1', '.endif',
+                  '.ifnblank EMPTY', '.byte 2', '.endif',
+                  '.ifblank FULL', '.byte 3', '.endif',
+                  '.ifnblank FULL', '.byte 4', '.endif'],
+                 await directive('.byte 1'),
+                 await directive('.byte 4'));
+    });
+
+    it('should report a missing .endif at the outermost .if', async function() {
+      await testError(['.if 1', '.if 0', 'x y'], /EOF looking for \.endif/);
+    });
+  });
+
   it("should handle .ifp02", async function() {
     await test([
         '.ifp02',
@@ -1536,7 +1725,11 @@ describe('Preprocessor', function() {
 });
 
 /** The one text file and the one binary file `testFiles` knows about. */
-const TEXT_FILES: Record<string, string> = {'other.s': 'lda #5\n'};
+const TEXT_FILES: Record<string, string> = {
+  'other.s': 'lda #5\n',
+  'open.inc': '.if 1\n.byte 1\n',
+  'live.inc': '.byte $30\n',
+};
 const BINARY = util.fromByteString('0123456789');
 
 /**

@@ -130,6 +130,10 @@ export class TokenStream implements Tokens.Source {
     return searchList(this.currentDir(), [...paths, './']);
   }
 
+  get depth(): number {
+    return this.stack.length;
+  }
+
   next(): Token[]|undefined {
     while (this.stack.length) {
       const frame = this.stack[this.stack.length - 1];

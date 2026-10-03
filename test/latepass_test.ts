@@ -740,3 +740,113 @@ MUT .set $30
     expect(codeBytes(replay)).toEqual([0xa9, 0x30, 0xa5]);
   });
 });
+
+// ca65 has no link-time `.if`, so the arm choices below match ca65 on the
+// same chains with constant conditions instead.
+describe('deferred .if chains', function() {
+  const SEGMENTS = `
+.segment "CODE" :bank $00 :size $2000 :mem $8000 :off $0000
+.segment "BANK1" :bank $01 :size $2000 :mem $a000 :off $2000
+.segment "BANK1"
+Target:
+  rts
+`;
+
+  function build(body: string) {
+    const result = libAssemble([{type: 'source', name: 'main.s', code: SEGMENTS + body}],
+                               {lineContinuations: true});
+    const env = buildLinkTimeEnv(result.modules, mergeModuleSegments(result.modules));
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    return {result, replay};
+  }
+
+  const bytes = (mod: Module, seg: string) =>
+      [...(mod.chunks ?? []).filter(c => c.segments.includes(seg))
+          .flatMap(c => [...c.data])];
+
+  for (const [seg, want] of [['CODE', [2]], ['BANK1', [0x60, 3]]] as const) {
+    it(`takes the right arm when a chain defers at .elseif in ${seg}`, function() {
+      const {result, replay} = build(`
+.segment "${seg}"
+.if 0
+  .byte 1
+.elseif .bank(Target) <> .bank(*)
+  .byte 2
+.else
+  .byte 3
+.endif
+`);
+      expect(result.success).toBe(true);
+      expect(bytes(result.modules[0], seg)).toEqual(seg === 'CODE' ? [3] : [0x60, 3]);
+      expect(replay.success).toBe(true);
+      expect(bytes(replay.modules[0], seg)).toEqual([...want]);
+    });
+  }
+
+  it('does not defer an .elseif after a taken arm', function() {
+    const {result} = build(`
+.segment "CODE"
+.if 1
+  .byte 1
+.elseif .bank(Target) <> .bank(*)
+  .byte 2
+.endif
+`);
+    expect(result.success).toBe(true);
+    expect(result.modules[0].lateAssembly).toBeUndefined();
+    expect(bytes(result.modules[0], 'CODE')).toEqual([1]);
+  });
+
+  it('resolves .ifs nested in both arms of a deferred .if', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .if 0
+    .byte 1
+  .else
+    .byte 2
+  .endif
+.else
+  .if 1
+    .byte 3
+  .endif
+.endif
+`);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([3]);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([2]);
+  });
+
+  it('settles a deferred .if nested in a deferred .if', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .byte 1
+  .if .bank(Target) = 1
+    .byte 2
+  .else
+    .byte 3
+  .endif
+.endif
+.byte 4
+`);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([4]);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([1, 2, 4]);
+  });
+
+  it('runs a deferred .if inside a macro', function() {
+    const {result, replay} = build(`
+.macro PICK
+  .if .bank(Target) <> .bank(*)
+    .byte 1
+  .else
+    .byte 2
+  .endif
+  .byte 3
+.endmacro
+.segment "CODE"
+PICK
+`);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([2, 3]);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([1, 3]);
+  });
+});

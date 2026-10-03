@@ -100,6 +100,40 @@ describe('InactiveRegionIndex', function() {
     ].join('\n'))).toEqual([[5, 6]]);
   });
 
+  it('records dead branches at every level of a live nest', function() {
+    expect(regions([
+      '',
+      '.if 1',
+      '  .if 0',
+      '    lda #1',
+      '  .else',
+      '    .if 1',
+      '      lda #2',
+      '    .else',
+      '      lda #3',
+      '    .endif',
+      '  .endif',
+      '.else',
+      '  lda #4',
+      '.endif',
+    ].join('\n'))).toEqual([[4, 4], [9, 9], [13, 13]]);
+  });
+
+  it('records the arms after a taken arm', function() {
+    expect(regions([
+      '',
+      '.if 0',
+      '  lda #1',
+      '.elseif 1',
+      '  lda #2',
+      '.elseif 1',
+      '  lda #3',
+      '.else',
+      '  lda #4',
+      '.endif',
+    ].join('\n'))).toEqual([[3, 3], [7, 9]]);
+  });
+
   it('handles .ifdef against a name that was never defined', function() {
     expect(regions([
       '',
