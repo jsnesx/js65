@@ -134,7 +134,7 @@ describe('buildLinkTimeEnv', function() {
 describe('replayModules error limit', function() {
   // Every `.if` body is deferred on pass 1, so its errors only land on replay.
   function assembleWithErrorsBehindIf(count: number) {
-    const lines = ['.import cond', '.if cond'];
+    const lines = ['.import cond', '.if .addrsize(cond) = 2'];
     for (let i = 0; i < count; i++) lines.push(`  .error "boom ${i}"`);
     lines.push('.endif');
     const result = libAssemble(
@@ -925,6 +925,34 @@ Target:
         .toContain('replay needs inc.s, which the first pass did not load');
   });
 
+  it('reports a missing file once the late pass takes its arm', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .include "nope.s"
+.endif
+`);
+    expect(result.success).toBe(true);
+    expect(result.modules[0].lateAssembly!.files!.missing!.length).toBe(1);
+    expect(replay.success).toBe(false);
+    expect(replay.messages.map(m => m.message))
+        .toContainEqual(expect.stringContaining('Could not find file nope.s'));
+  });
+
+  it('ignores a missing file in an arm the late pass leaves dead', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) = .bank(*)
+  .include "nope.s"
+  .incbin "nope.bin"
+.endif
+.byte 1
+`);
+    expect(result.success).toBe(true);
+    expect(replay.success).toBe(true);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([1]);
+  });
+
   it('only assigns in the arm a deferred .if takes', function() {
     const {result, replay} = build(`
 .segment "CODE"
@@ -939,6 +967,55 @@ x .set 1
     expect(bytes(result.modules[0], 'CODE')).toEqual([3]);
     expect(replay.success).toBe(true);
     expect(bytes(replay.modules[0], 'CODE')).toEqual([2]);
+  });
+
+  it('only runs the .define in the arm each pass takes', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .define V 2
+.else
+  .define V 3
+.endif
+.byte V
+`);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([3]);
+    expect(replay.success).toBe(true);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([2]);
+  });
+
+  it('defines a .macro inside the arm the replay takes', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .macro emit
+    .byte $77
+  .endmacro
+  emit
+.endif
+`);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([]);
+    expect(replay.success).toBe(true);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([0x77]);
+  });
+
+  it('incbins a file guarded by a deferred .if', function() {
+    const binCallbacks: FileCallbacks = {
+      ...callbacks,
+      resolveBinary: (bases, f) => f === 'data.bin' ?
+          {baseIndex: bases.length - 1, content: new Uint8Array([9, 8])} : undefined,
+    };
+    const result = libAssemble([{type: 'source', name: 'main.s', code: SEGMENTS + `
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .incbin "data.bin"
+.endif
+`}], {}, binCallbacks);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([]);
+    const env = buildLinkTimeEnv(result.modules, mergeModuleSegments(result.modules));
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(replay.success).toBe(true);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([9, 8]);
   });
 
   it('starts from the features in effect before the first line', function() {

@@ -206,7 +206,7 @@ export function assembleInput(
       // Use the first name provided through a code action as the outer module name
       if (moduleName === input.name && name) moduleName = name;
       toks.enter(new Tokenizer(code, moduleName, opts, sourceContents, asm.errorCollector));
-      asm.tokens(newPreprocessor(toks), signal);
+      newPreprocessor(toks).run(signal);
     };
     runActions(asm, input.actions, runCode);
     module = asm.module();
@@ -220,7 +220,7 @@ export function assembleInput(
     // but for the dbg info later, we want to put it back
     if (staged?.usedJavascript) sourceContents?.data.set(input.name, input.code);
     toks.enter(tokenizer);
-    asm.tokens(newPreprocessor(toks), signal);
+    newPreprocessor(toks).run(signal);
     module = asm.module();
     module.name = input.name;
     const romPatch = staged?.romPatch?.();
@@ -251,8 +251,11 @@ export interface ReplayOptions {
 /** Serves `.include`/`.incbin` from what pass 1 loaded. */
 function sourceLogCallbacks(files: SourceLog|undefined): FileCallbacks {
   const lookup = <T>(map: ReadonlyMap<string, ResolvedFile<T>>|undefined,
-                     bases: readonly string[], filename: string): ResolvedFile<T> => {
-    const hit = map?.get(sourceLogKey(bases, filename));
+                     bases: readonly string[], filename: string): ResolvedFile<T>|undefined => {
+    const key = sourceLogKey(bases, filename);
+    const hit = map?.get(key);
+    // Pass 1 saw it missing, so let the stream report it at the line.
+    if (!hit && files?.missing?.includes(key)) return undefined;
     if (!hit) fail(`replay needs ${filename}, which the first pass did not load`);
     return hit;
   };

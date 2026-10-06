@@ -12,6 +12,7 @@ import {TokenStream} from './tokenstream.ts';
 import { ErrorCollector, FatalError, RecoverableError, SourceError } from './error.ts';
 import type { SourceInfo } from './error.ts';
 import type {InactiveRegionIndex, MacroIndex} from './lspindex.ts';
+import type {Assembler} from './assembler.ts';
 
 // TODO - figure out how to actually keep track of stack depth?
 //  - might need to insert a special token at the end of an expansion
@@ -53,40 +54,12 @@ const REGISTER_SIZE = 8;
 //   //options(): Tokenizer.Options;
 // }
 
-// Since the Env is most closely tied to the Assembler, we tie the
-// unique ID generation to it as well, without adding additional
-// constraints on the Assembler API.
-const ID_MAP = new WeakMap<Env, {next(): number}>();
-function idGen(env: Env): {next(): number} {
-  let id = ID_MAP.get(env);
-  if (!id) ID_MAP.set(env, id = (num => ({next: () => num++}))(0));
+// Unique IDs are per Assembler so nested preprocessors share them.
+const ID_MAP = new WeakMap<Assembler, {next(): number}>();
+function idGen(asm: Assembler): {next(): number} {
+  let id = ID_MAP.get(asm);
+  if (!id) ID_MAP.set(asm, id = (num => ({next: () => num++}))(0));
   return id;
-}
-
-interface Env {
-  // These need to come from Processor and will depend on scope...
-  definedSymbol(sym: string): boolean;
-  constantSymbol(sym: string): boolean;
-  referencedSymbol(sym: string): boolean;
-  /** Whether the name is an opcode mnemonic of the CPU being assembled for. */
-  isMnemonic(name: string): boolean;
-  /** Whether `* = addr` is accepted */
-  allowsPcAssignment(): boolean;
-  /** Whether a leading identifier is a label even without a trailing `:` */
-  allowsLabelWithoutColon(): boolean;
-  /** Whether a symbol or macro may be named after a mnemonic */
-  allowsUbiquitousIdents(): boolean;
-  /** Whether a mnemonic or 0-arg macro may start a statement with no separator */
-  allowsMultiOpsPerLine(): boolean;
-  evaluate(expr: Expr): number|undefined;
-  /** Expression a defined symbol (or `*`) stands for, without interning it. */
-  definedValue(sym: string): Expr|undefined;
-  assignSym(line: Token[]): void;
-  setSym(line: Token[]): void;
-  /** Applies the current charmap to a character literal (`'a'`). */
-  encodeChar(char: string): number|undefined;
-  // also want methods to apply shunting yard to token list?
-  //  - turn it into a json tree...?
 }
 
 // export abstract class Abstract implements Source {
@@ -112,28 +85,23 @@ const enum Layer {
   ALL = DEFINES | FUNCTIONS,
 }
 
+/** `deferred` means only the late pass can decide it. */
 type CondResult = {value: boolean}|{deferred: true};
 
 /**
  * An open conditional. `pending` has taken no arm yet, `done` has, and
- * `deferred` passes every arm through tagged for the late pass.
+ * `guessed` is pass 1 skipping to `.else` until the late pass decides.
  */
 interface CondFrame {
   /** The `.if*` token, for "missing .endif" errors */
   at: Token;
-  state: 'live'|'pending'|'done'|'deferred';
+  state: 'live'|'pending'|'done'|'guessed';
   /** TokenStream depth when opened, so `.exitmacro` can close it */
   depth: number;
 }
 
-export class Preprocessor implements Tokens.Source {
+export class Preprocessor {
   private readonly macros: Map<string, Define|Macro|string>;
-  // Output lines produced by pump() but not yet consumed by next(). A single
-  // source line can expand into several output lines (e.g. labels split off the
-  // front of an instruction), which is why its a list of lists.
-  // This replaces the AsyncGenerator which was a pain for any TS compiler project
-  // like hermes or perry
-  private outQueue: Token[][] = [];
 
   // builds up repeating tokens...
   private repeats: Array<[Token[][], number, number, string?]> = [];
@@ -151,7 +119,7 @@ export class Preprocessor implements Tokens.Source {
 
   private readonly conds: CondFrame[] = [];
 
-  constructor(readonly stream: TokenStream, readonly env: Env,
+  constructor(readonly stream: TokenStream, readonly asm: Assembler,
               parent?: Preprocessor,
               readonly errorCollector?: ErrorCollector,
               macroIndex?: MacroIndex,
@@ -167,18 +135,18 @@ export class Preprocessor implements Tokens.Source {
   }
 
 
-  next(): Token[] | undefined {
-    while (true) {
-      // Drain any output already produced for a previous source line.
-      if (this.outQueue.length) return this.outQueue.shift();
-      let more: boolean;
+  /** Preprocesses the whole stream, handing each statement to the assembler. */
+  run(signal?: { readonly aborted: boolean }): void {
+    // Checked before reading so nothing past `.end` is even tokenized.
+    while (!this.asm.ended) {
+      if (signal?.aborted) throw new FatalError('Compilation cancelled');
       try {
-        more = this.pump();
+        const line = this.readLine();
+        if (line == null) return;
+        this.pumpLine(line);
       } catch (err) {
         this.recover(err);
-        continue;
       }
-      if (!more && !this.outQueue.length) return undefined; // EOF
     }
   }
 
@@ -205,47 +173,36 @@ export class Preprocessor implements Tokens.Source {
     throw err;
   }
 
-  // Read and process the next source line, pushing zero or more output lines
-  // onto `outQueue`. Returns false at EOF, true otherwise.
-  private pump(): boolean {
-    const line = this.readLine();
-    if (line == null) return false; // EOF
-    return this.pumpLine(line);
-  }
-
-  private pumpLine(line: Token[]): boolean {
+  private pumpLine(line: Token[]): void {
     while (line.length) {
       const front = line[0];
       switch (front.token) {
         case 'ident': {
           // Possibilities: (1) label, (2) instruction/assign, (3) macro
-          // Labels get split out.  We don't distinguish assigns yet.
+          // Labels get split out.
           const callable = this.macros.get(front.str) instanceof Macro ||
-              (this.env.isMnemonic(front.str) &&
-               !this.env.allowsUbiquitousIdents());
+              (this.asm.isMnemonic(front.str) &&
+               !this.asm.allowsUbiquitousIdents());
           if (!callable && Tokens.eq(line[1], Tokens.COLON)) {
             const label = line.splice(0, 2);
             // Remember that data followed the label on its source line, since
             // that's what `.sizeof(label)` measures and the split loses it.
             if (line.length) label[0] = Tokens.labelsData(front);
-            this.outQueue.push(label);
+            this.asm.line(label);
             break;
           }
-          if (Tokens.eq(line[1], Tokens.ASSIGN) ||
-              Tokens.eq(line[1], Tokens.ASSIGN_LABEL)) {
-            this.env.assignSym(line);
-          } else if (Tokens.eq(line[1], Tokens.SET)) {
-            this.env.setSym(line);
-          } else if (!callable && this.env.allowsLabelWithoutColon()) {
+          const assigns = Tokens.eq(line[1], Tokens.ASSIGN) ||
+              Tokens.eq(line[1], Tokens.ASSIGN_LABEL) || Tokens.eq(line[1], Tokens.SET);
+          if (!assigns && !callable && this.asm.allowsLabelWithoutColon()) {
             // Same split as the `foo:` case above, but there isn't a colon,
             // so we just add one here to use the regular label code path.
             line.splice(0, 1);
             const label: Token[] =
                 [line.length ? Tokens.labelsData(front) : front, Tokens.COLON];
-            this.outQueue.push(label);
+            this.asm.line(label);
             break;
           }
-          if (this.env.allowsMultiOpsPerLine() &&
+          if (this.asm.allowsMultiOpsPerLine() &&
               this.startsStatement(front.str)) {
             const split = this.findNextStatement(line);
             if (split > 0) {
@@ -254,27 +211,27 @@ export class Preprocessor implements Tokens.Source {
               if (macro instanceof Macro) {
                 this.stream.unshift(rest);
                 this.tryExpandMacro(line);
-                return true;
+                return;
               }
-              this.outQueue.push(line);
+              this.asm.line(line);
               line = rest;
               break;
             }
           }
-          if (!this.tryExpandMacro(line)) this.outQueue.push(line);
-          return true;
+          if (!this.tryExpandMacro(line)) this.asm.line(line);
+          return;
         }
 
         case 'cs': {
           const ran = this.tryRunDirective(line);
-          if (!ran) this.outQueue.push(line);
-          return true;
+          if (!ran) this.asm.line(line);
+          return;
         }
 
         case 'op':
           // `* = $8000`, which is just another spelling of `.org $8000`.
           if (front.str === '*' && Tokens.eq(line[1], Tokens.ASSIGN)) {
-            if (!this.env.allowsPcAssignment()) {
+            if (!this.asm.allowsPcAssignment()) {
               Tokens.fail(
                   `\`*=\` requires the pc_assignment feature`, front);
             }
@@ -293,10 +250,10 @@ export class Preprocessor implements Tokens.Source {
               label.push({token: 'op', str: ':'});
               line.splice(0, 1);
             }
-            this.outQueue.push(label);
+            this.asm.line(label);
             break;
           } else if (front.str === ':') {
-            this.outQueue.push(line.splice(0, 1));
+            this.asm.line(line.splice(0, 1));
             break;
           }
           /* fallthrough */
@@ -304,7 +261,6 @@ export class Preprocessor implements Tokens.Source {
           Tokens.fail(`Unexpected: ${Tokens.nameOf(line[0])}`, line[0]);
       }
     }
-    return true;
   }
 
   // Expand a single line of tokens from the front of toks.
@@ -315,7 +271,6 @@ export class Preprocessor implements Tokens.Source {
       const n = this.conds.length;
       if (n === 0) return this.expandLine(line);
       const top = this.conds[n - 1];
-      if (top.state === 'deferred') return this.expandLine(line);
       if (top.state === 'live') {
         this.inactiveRegionIndex?.keepLine(sourceOfLine(line));
         return this.expandLine(line);
@@ -346,7 +301,7 @@ export class Preprocessor implements Tokens.Source {
         case '.endif': {
           this.conds.pop();
           const parent = this.conds[this.conds.length - 1];
-          if (!parent || parent.state === 'live' || parent.state === 'deferred') {
+          if (!parent || parent.state === 'live') {
             dead?.flush();
           } else {
             dead?.skipLine(sourceOfLine(line));
@@ -354,7 +309,7 @@ export class Preprocessor implements Tokens.Source {
           return;
         }
         case '.else':
-          if (top.state !== 'pending') break;
+          if (top.state !== 'pending' && top.state !== 'guessed') break;
           dead?.flush();
           top.state = 'live';
           return;
@@ -363,6 +318,10 @@ export class Preprocessor implements Tokens.Source {
           dead?.flush();
           this.elseIf(line, top);
           return;
+        case '.include':
+        case '.incbin':
+          this.preload(line, front.str === '.incbin');
+          break;
         default:
           if (front.str.startsWith('.if')) {
             this.conds.push({at: front, state: 'done', depth: this.stream.depth});
@@ -372,62 +331,45 @@ export class Preprocessor implements Tokens.Source {
     dead?.skipLine(sourceOfLine(line));
   }
 
+  /** Records a file a guessed arm names, since the late pass may take it. */
+  private preload(line: Token[], binary: boolean): void {
+    const path = line[1];
+    if (path?.token !== 'str' || !this.conds.some(f => f.state === 'guessed')) return;
+    this.stream.preload(path.str, binary);
+  }
+
   /** Evaluates an `.elseif` reached while no arm has been taken. */
   private elseIf(line: Token[], top: CondFrame): void {
     const cs = line[0];
     const outcome = this.condition(() => {
       this.expandLayers(line, Layer.ALL, 1);
-      return this.ifValue(parseOneExpr(line.slice(1), cs, this.env.encodeChar), cs);
+      return this.ifValue(parseOneExpr(line.slice(1), cs, this.asm.encodeChar), line);
     }, cs);
-    if (!('deferred' in outcome)) {
-      top.state = outcome.value ? 'live' : 'pending';
-      return;
-    }
-    // The late pass needs a chain head, so stand in an untaken `.if`.
-    const source = top.at.source;
-    this.outQueue.push(
-        [{token: 'cs', str: '.if', source, deferred: true}, Tokens.numToken(0, source)],
-        tagDeferred(line));
-    top.state = 'deferred';
+    top.state = armState(outcome);
   }
 
-  private ifValue(expr: Expr, cs: Token): CondResult {
-    const r = this.evaluateConstOrDefer(expr, cs);
-    return 'deferred' in r ? r : {value: !!r.value};
+  private ifValue(expr: Expr, line: Token[]): CondResult {
+    const r = this.evaluateConstOrDefer(expr, line[0]);
+    if (!('deferred' in r)) return {value: !!r.value};
+    const late = this.asm.lateCondition(line);
+    return late === undefined ? r : {value: late};
   }
 
   private openIf(line: Token[], test: () => CondResult): void {
     const at = line[0];
-    const outcome = this.condition(test, at);
-    const depth = this.stream.depth;
-    if ('deferred' in outcome) {
-      this.conds.push({at, state: 'deferred', depth});
-      this.outQueue.push(tagDeferred(line));
-      return;
-    }
-    this.conds.push({at, state: outcome.value ? 'live' : 'pending', depth});
+    const state = armState(this.condition(test, at));
+    this.conds.push({at, state, depth: this.stream.depth});
   }
 
-  /** `.else`/`.elseif` reached from a live arm, or a deferred one. */
+  /** `.else`/`.elseif` reached from a live arm. */
   private nextBranch(line: Token[]): void {
-    if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
     const top = this.conds[this.conds.length - 1];
     if (!top) badClose('.if', line[0]);
-    if (top.state === 'deferred') {
-      this.outQueue.push(tagDeferred(line));
-      return;
-    }
     top.state = 'done';
   }
 
   private closeIf(line: Token[]): void {
-    if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
-    const top = this.conds.pop();
-    if (!top) badClose('.if', line[0]);
-    if (top.state === 'deferred') {
-      this.outQueue.push(tagDeferred(line));
-      return;
-    }
+    if (!this.conds.pop()) badClose('.if', line[0]);
     this.inactiveRegionIndex?.flush();
   }
 
@@ -501,7 +443,7 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private checkNotMnemonic(name: string, at: Token): void {
-    if (this.env.isMnemonic(name) && !this.env.allowsUbiquitousIdents()) {
+    if (this.asm.isMnemonic(name) && !this.asm.allowsUbiquitousIdents()) {
       Tokens.fail(`Macro may not be named after the instruction ${name} ` +
                   `(enable it with '.feature ubiquitous_idents')`, at);
     }
@@ -509,7 +451,7 @@ export class Preprocessor implements Tokens.Source {
 
   /** Whether a name is an instruction or a `.macro`, and so can't be a scope. */
   private isCallable(name: string): boolean {
-    return this.macros.get(name) instanceof Macro || this.env.isMnemonic(name);
+    return this.macros.get(name) instanceof Macro || this.asm.isMnemonic(name);
   }
 
   /**
@@ -519,7 +461,7 @@ export class Preprocessor implements Tokens.Source {
   private startsStatement(name: string): boolean {
     const macro = this.macros.get(name);
     if (macro instanceof Macro) return !macro.params.length;
-    return this.env.isMnemonic(name);
+    return this.asm.isMnemonic(name);
   }
 
   /**
@@ -611,7 +553,7 @@ export class Preprocessor implements Tokens.Source {
     if (first.token !== 'ident') throw new Error(`impossible`);
     const macro = this.macros.get(first.str);
     if (!(macro instanceof Macro)) return false;
-    const expansion = macro.expand(line, idGen(this.env));
+    const expansion = macro.expand(line, idGen(this.asm));
     this.stream.enter();
     this.stream.unshift(...expansion); // process them all over again...
     return true;
@@ -772,7 +714,7 @@ export class Preprocessor implements Tokens.Source {
 
   private constCount(toks: Token[], cs: Token): number {
     try {
-      return this.evaluateConst(parseOneExpr(toks, cs, this.env.encodeChar), cs);
+      return this.evaluateConst(parseOneExpr(toks, cs, this.asm.encodeChar), cs);
     } catch {
       Tokens.fail(`Expected a constant token count`, cs);
     }
@@ -849,7 +791,7 @@ export class Preprocessor implements Tokens.Source {
           if (specType == 's')
             arg = Tokens.expectString(argToks[0], prevTok);
           else
-            arg = this.evaluateConst(parseOneExpr(argToks, prevTok, this.env.encodeChar));
+            arg = this.evaluateConst(parseOneExpr(argToks, prevTok, this.asm.encodeChar));
 
           sprintfArgs.push(arg);
           argIdx++;
@@ -865,7 +807,7 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private cond(cs: Token, cond: Token[], ifTrue: Token[], ifFalse: Token[]) : Token[] {
-    const v = this.evaluateConst(parseOneExpr(cond, cs, this.env.encodeChar), cs);
+    const v = this.evaluateConst(parseOneExpr(cond, cs, this.asm.encodeChar), cs);
     return v ? ifTrue : ifFalse;
   }
 
@@ -875,7 +817,7 @@ export class Preprocessor implements Tokens.Source {
 
   /** `.const(expr)` is 1 when the expression is already known, 0 otherwise. */
   private constExpr(cs: Token, arg: Token[]) : Token[] {
-    const expr = parseOneExpr(arg, cs, this.env.encodeChar);
+    const expr = parseOneExpr(arg, cs, this.asm.encodeChar);
     let known = true;
     try {
       // `*` and labels have a value here, but it's an address rather than a
@@ -901,25 +843,25 @@ export class Preprocessor implements Tokens.Source {
   private isMnemonic(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [Tokens.numToken(this.env.isMnemonic(ident) ? 1 : 0, cs.source)];
+    return [Tokens.numToken(this.asm.isMnemonic(ident) ? 1 : 0, cs.source)];
   }
 
   private definedSymbol(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [Tokens.numToken(this.env.definedSymbol(ident) ? 1 : 0, cs.source)];
+    return [Tokens.numToken(this.asm.definedSymbol(ident) ? 1 : 0, cs.source)];
   }
 
   private constantSymbol(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [Tokens.numToken(this.env.constantSymbol(ident) ? 1 : 0, cs.source)];
+    return [Tokens.numToken(this.asm.constantSymbol(ident) ? 1 : 0, cs.source)];
   }
 
   private referencedSymbol(cs: Token, arg: Token[]) : Token[] {
     const ident = Tokens.expectIdentifier(arg[0], cs);
     Tokens.expectEol(arg[1], 'a single identifier');
-    return [Tokens.numToken(this.env.referencedSymbol(ident) ? 1 : 0, cs.source)];
+    return [Tokens.numToken(this.asm.referencedSymbol(ident) ? 1 : 0, cs.source)];
   }
 
   // TODO - does .byte expand its strings into bytes here?
@@ -960,7 +902,7 @@ export class Preprocessor implements Tokens.Source {
         // Substitute the expression rather than a number.
         // Labels and `*` are chunk-relative, and it's the surrounding
         // arithmetic like `* - label` that makes them constant again.
-        const val = this.env.definedValue(ex.sym);
+        const val = this.asm.definedValue(ex.sym);
         if (val && (addresses || !isAddress(val))) return Exprs.evaluate(val);
       }
       return Exprs.evaluate(ex);
@@ -1009,7 +951,7 @@ export class Preprocessor implements Tokens.Source {
     if (ex.op === 'num' && !ex.meta?.rel) return true;
     if (ex.op === 'im' && ex.sym != null) return true;
     if (ex.meta?.rel && ex.meta?.chunk != null) return true;
-    if (ex.op === 'sym' && ex.sym != null) return this.env.definedSymbol(ex.sym);
+    if (ex.op === 'sym' && ex.sym != null) return this.asm.definedSymbol(ex.sym);
     if (!ex.args?.length) return false;
     // For bank ops, we can allow deferring since they only care about the bank list not actual bank num
     if (BANK_QUERY_OPS.has(ex.op) && ex.args.length === 1 &&
@@ -1031,10 +973,9 @@ export class Preprocessor implements Tokens.Source {
     '.endrepeat': (line) => this.parseEndRepeat(line),
     '.exitmacro': ([, a]) => { noGarbage(a); this.exitMacro(); },
     '.if': (line) => {
-      if (isDeferredMarker(line[0])) { this.outQueue.push(line); return; }
       const [cs, ...args] = line;
-      const expr = parseOneExpr(args, cs, this.env.encodeChar);
-      this.openIf(line, () => this.ifValue(expr, cs));
+      const expr = parseOneExpr(args, cs, this.asm.encodeChar);
+      this.openIf(line, () => this.ifValue(expr, line));
     },
     '.ifdef': (line) => {
       const [cs, ...args] = line;
@@ -1048,27 +989,27 @@ export class Preprocessor implements Tokens.Source {
     '.ifnblank': (line) => this.openIf(line, () => ({value: line.length > 1})),
     '.ifref': (line) => {
       const [cs, ...args] = line;
-      this.openIf(line, () => ({value: this.env.referencedSymbol(parseOneIdent(args, cs))}));
+      this.openIf(line, () => ({value: this.asm.referencedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifnref': (line) => {
       const [cs, ...args] = line;
-      this.openIf(line, () => ({value: !this.env.referencedSymbol(parseOneIdent(args, cs))}));
+      this.openIf(line, () => ({value: !this.asm.referencedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifsym': (line) => {
       const [cs, ...args] = line;
-      this.openIf(line, () => ({value: this.env.definedSymbol(parseOneIdent(args, cs))}));
+      this.openIf(line, () => ({value: this.asm.definedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifnsym': (line) => {
       const [cs, ...args] = line;
-      this.openIf(line, () => ({value: !this.env.definedSymbol(parseOneIdent(args, cs))}));
+      this.openIf(line, () => ({value: !this.asm.definedSymbol(parseOneIdent(args, cs))}));
     },
     '.ifconst': (line) => {
       const [cs, ...args] = line;
-      this.openIf(line, () => ({value: this.env.constantSymbol(parseOneIdent(args, cs))}));
+      this.openIf(line, () => ({value: this.asm.constantSymbol(parseOneIdent(args, cs))}));
     },
     '.ifnconst': (line) => {
       const [cs, ...args] = line;
-      this.openIf(line, () => ({value: !this.env.constantSymbol(parseOneIdent(args, cs))}));
+      this.openIf(line, () => ({value: !this.asm.constantSymbol(parseOneIdent(args, cs))}));
     },
     // NOTE: If support for any other CPUs is added, these will need to be un-stubbed.
     '.ifp02': (line) => this.openIf(line, () => ({value: true})),
@@ -1110,11 +1051,11 @@ export class Preprocessor implements Tokens.Source {
     Tokens.expectEol(file[1], 'a single string');
     if (rest.length > 2) Tokens.fail(`Too many arguments for .incbin`, cs);
     const [offset, length] = rest.map(
-        arg => this.evaluateConst(parseOneExpr(arg, cs, this.env.encodeChar), cs));
+        arg => this.evaluateConst(parseOneExpr(arg, cs, this.asm.encodeChar), cs));
     const bin = this.stream.incbin(path, offset ?? 0, length, cs);
     const bytestr: Token = cs.source ? {...Tokens.BYTESTR, source: cs.source}
                                      : Tokens.BYTESTR;
-    this.outQueue.push([bytestr, {token: 'str', str: bin}]);
+    this.asm.line([bytestr, {token: 'str', str: bin}]);
   }
 
   parseDefine(line: Token[]) {
@@ -1182,7 +1123,7 @@ export class Preprocessor implements Tokens.Source {
   }
 
   private parseRepeat(line: Token[]): void {
-    const [expr, end] = Exprs.parse(line, 1, undefined, this.env.encodeChar);
+    const [expr, end] = Exprs.parse(line, 1, undefined, this.asm.encodeChar);
     const at = line[1] || line[0];
     if (!expr) Tokens.fail(`Expected expression: ${Tokens.nameOf(at)}`, at);
     const times = this.evaluateConst(expr);
@@ -1246,136 +1187,8 @@ export class Preprocessor implements Tokens.Source {
 
   private parseIfDef(args: Token[], cs: Token) {
     return this.macros.has(parseOneIdent(args, cs)) ||
-      this.env.definedSymbol(parseOneIdent(args, cs));
+      this.asm.definedSymbol(parseOneIdent(args, cs));
   }
-
-      // if (front.str === '.define' || front.str === '.undefine') {
-      //   const next = line[pos + 1];
-      //   if (next?.token === 'cs') {
-      //     this.expandToken(line, pos + 1);
-      //     return pos;
-      //   } else if (next?.token === 'ident') {
-      //     return pos + 2; // skip the identifier
-      //   }
-      // } else if (front.str === '.skip') {
-      //   const rest = line.splice(pos + 2, line.length - pos - 2);
-      //   line.pop();
-      //   this.expandToken(rest, 0);
-      //   line.push(...rest);
-      //   return pos;
-      // } else {
-
-
-  // defined(name: string): boolean {
-  //   return this.macros.has(name) ||
-  //       this.parent && this.parent.defined(name) ||
-  //       false;
-  // }
-
-  // undefine(name: string) {
-  //   this.macros.delete(name);
-  // }
-
-  // // Expands a single line of tokens from the front of toks.
-  // // .define macros are expanded inline, but .macro style macros
-  // // are left as-is.  Don't expand defines in certain circumstances,
-  // // such as when trying to override.
-  // private line(toks: Deque<Token>): Deque<Token> {
-  //   // find the next end of line
-  //   const line = new Deque<Token>();
-  //   let curlies = 0;
-  //   while (toks.length) {
-  //     const tok = toks.shift();
-  //     if (Tokens.eq(Tokens.EOL, tok)) break;
-  //     if (Tokens.eq(Tokens.LC, tok)) {
-  //       curlies++;
-  //     } else if (Tokens.eq(Tokens.RC, tok)) {
-  //       if (--curlies < 0) throw new Eror(`unbalanced curly`);
-  //     }
-  //     line.push(tok);
-  //   }
-  //   if (curlies) throw new Error(`unbalanced curly`);
-  //   // now do the early expansions
-  //   for (let i = 0; i < line.length; i++) {
-  //     const tok = line.get(i)!;
-  //     if (Tokens.eq(Tokens.SKIP, tok)) {
-  //       const next = line.get(i + 1);
-  //       const count = next?.token === 'num' ? next.num : 1;
-  //       i += count;
-  //       continue;
-  //     }
-  //     if (tok.token === 'ident') {
-  //       const macro = this.macros.get(tok.str);
-  //       if (macro?.expandsEarly) {
-  //         if (!macro.expand(line, i)) fail(tok, `Could not expand ${tok.str}`);
-  //         i = -1; // start back at the beginning
-  //         continue;
-  //       }
-  //     }
-  //   }
-  //   return line;
-  // }
-
-  // * lines(rest: Deque<Token>, depth = 0): Generator<Line> {
-  //   if (depth > MAX_STACK_DEPTH) throw new Error(`max recursion depth`);
-  //   while (rest.length) {
-  //     // lines should have no define-macros in it at this point
-  //     let labels = [];
-  //     let line = this.line(rest);
-  //     while (line.length) {
-  //       // look for labels, but could be a mnemonic or macro
-  //       const front = line.front()!;
-  //       if (front.token === 'ident') {
-  //         if (Tokens.eq(Tokens.COLON, line.get(1))) {
-  //           // it's a label
-  //           labels.push(front.str);
-  //           line.splice(0, 2);
-  //           continue;
-  //         }
-  //         // check for a macro
-  //         const macro = this.macros.get(front.str);
-  //         if (macro) {
-  //           if (macro.expandsEarly) throw new Error(`early macro late`);
-  //           if (!macro.expand(line)) throw new Error(`bad expansion`);
-  //           // by recursing rather than unshifting we can support .exitmacro?
-  //           yield * this.lines(line, depth + 1);
-  //           break;
-  //         }
-  //         // it's a regular mnemonic
-  //         yield {labels, tokens: [...line]};
-  //         break;
-  //       } else if (Tokens.eq(Tokens.COLON, front)) { // special label
-  //         labels.push(':');
-  //         line.shift();
-  //         continue;
-  //       } else if (front.token === 'op') {
-  //         // other special labels
-  //         if (/^(\++|-+)$/.test(front.str)) {
-  //           labels.push(front.str);
-  //           line.shift();
-  //           if (Tokens.eq(Tokens.COLON, line.front())) line.shift();
-  //           continue;
-  //         }
-  //         // otherwise... syntax error? any other operator allowed?
-  //         throw new Error(`Syntax error: unexpected ${Tokens.nameAt(front)}`);
-  //       } else if (front.token === 'cs') {
-  //         switch (front.str) {
-  //           case '.exitmacro':
-  //             line = new Deque(); // no more expansion
-  //             break;
-  //           case '.ifdef':
-  //             // TODO - call helper method? but how? closure?
-              
-  //             break;
-  //           case '.define':
-  //             break;
-  //           case '.macro':
-  //             break;
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
 }
 
 function sourceOfLine(line: Token[]): SourceInfo | undefined {
@@ -1407,24 +1220,11 @@ function noGarbage(token: Token|undefined): void {
   if (token) Tokens.fail(`garbage at end of line: ${Tokens.nameOf(token)}`, token);
 }
 
-// function fail(t: Token, msg: string): never {
-//   const s = t.stream;
-//   if (s) {
-//     msg += `\n  at ${s.file}:${s.line}:${s.column}: Tokens.name(t)`;
-//     // TODO - expanded from?
-//   }
-//   throw new Error(msg);
-// }
-
 function badClose(open: string, tok: Token): never {
   Tokens.fail(`${Tokens.name(tok)} with no ${open}`, tok);
 }
 
-function isDeferredMarker(tok: Token): boolean {
-  return tok.token === 'cs' && !!tok.deferred;
-}
-
-function tagDeferred(line: Token[]): Token[] {
-  line[0] = {...(line[0] as Tokens.StringToken), deferred: true};
-  return line;
+function armState(outcome: CondResult): CondFrame['state'] {
+  if ('deferred' in outcome) return 'guessed';
+  return outcome.value ? 'live' : 'pending';
 }

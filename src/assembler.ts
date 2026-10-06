@@ -505,7 +505,8 @@ export class Assembler {
   private errorToken?: Token;
 
   /** Flag set by `.end` directive to kill the rest of the file processing. */
-  private ended = false;
+  private _ended = false;
+  get ended(): boolean { return this._ended; }
 
   /** Collector for errors and messages */
   readonly errorCollector = new ErrorCollector();
@@ -515,11 +516,6 @@ export class Assembler {
 
   /** Recorded for every `.if`/`.elseif` that can't be decided without a linker */
   readonly lateAssemblyCondQueries: mod.LateAssemblyCondQuery[] = [];
-
-  private _tokenSource?: Tokens.Source;
-
-  /** Open replayed deferred `.if` chains, whose assignments run in `line()`. */
-  private deferredChains = 0;
 
   /** Set by the late pass on replay; undefined (and unconsulted) on pass 1. */
   linkEnv?: LinkTimeEnv;
@@ -1409,7 +1405,7 @@ export class Assembler {
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
-      if (this.deferredChains) this.replayAssignment(tokens);
+      this.assignment(tokens);
       return;
     }
     this._source = tokens[0].source;
@@ -1437,7 +1433,7 @@ export class Assembler {
     }
   }
 
-  private replayAssignment(tokens: Token[]) {
+  private assignment(tokens: Token[]) {
     try {
       if (Tokens.eq(tokens[1], Tokens.SET)) {
         this.setLine(tokens);
@@ -1464,16 +1460,19 @@ export class Assembler {
       return;
     }
     // A plain Error is something not caused by the user, so treat it as fatal
-    throw Tokens.SourceError.locate(err, this._source);
+    const located = Tokens.SourceError.locate(err, this._source);
+    if (!(located instanceof Tokens.SourceError)) throw located;
+    const fatal = new FatalError(located.message, located.source);
+    fatal.stack = located.stack;
+    throw fatal;
   }
 
   // Assemble from a token source. The optional signal is polled once per line so a long
   // assembly can be cancelled cooperatively; an aborted signal throws, which the caller
   // (compile) turns into an ordinary failure result.
   tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }): void {
-    this._tokenSource = source;
     // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
-    while (!this.ended) {
+    while (!this._ended) {
       if (signal?.aborted) throw new FatalError('Compilation cancelled');
       const line = source.next();
       if (!line) break;
@@ -1489,12 +1488,11 @@ export class Assembler {
     this.linter?.endInstructionSequence();
     try {
       switch (Tokens.str(tokens[0])) {
-        case '.if': return this.ifDirective(tokens);
-        // The preprocessor handles these, so if we got here its cause
-        // the source is malformed
-        case '.elseif': return this.fail(`.elseif without .if`, tokens[0]);
-        case '.else': return this.fail(`.else without .if`, tokens[0]);
-        case '.endif': return this.parseNoArgs(tokens, 1);
+        case '.if':
+        case '.elseif':
+        case '.else':
+        case '.endif':
+          throw new Error(`${Tokens.str(tokens[0])} must be handled by the preprocessor`);
         case '.org': return this.org(this.parseConst(tokens, 1));
         case '.reloc': return this.parseNoArgs(tokens, 1), this.reloc();
         case '.assert': {
@@ -1549,7 +1547,7 @@ export class Assembler {
           const [size, source] = this.parseMoveArgs(tokens);
           return this.move(size, source);
         }
-        case '.end': return this.parseNoArgs(tokens, 1), void (this.ended = true);
+        case '.end': return this.parseNoArgs(tokens, 1), void (this._ended = true);
         case '.out': return this.log('info', tokens);
         case '.warning': return this.log('warn', tokens);
         case '.error': return this.log('error', tokens);
@@ -1596,62 +1594,16 @@ export class Assembler {
   }
 
   /**
-   * On pass 1 (no linkEnv), the conditional isn't const, so defer to link
-   * time. On replay, linkEnv can answer for real
+   * Decides a `.if`/`.elseif` the preprocessor could not. Undefined on pass 1,
+   * which records the query and guesses false.
    */
-  private ifDirective(tokens: Token[]) {
-    const cs = tokens[0];
-    const expr = this.parseExpr(tokens, 1);
+  lateCondition(tokens: Token[]): boolean|undefined {
+    const at = tokens[0];
     if (!this.linkEnv) {
-      this.lateAssemblyCondQueries.push({source: cs.source});
-      this.skipGuessedDeadBranch(cs);
-      return;
+      this.lateAssemblyCondQueries.push({source: at.source});
+      return undefined;
     }
-    this.deferredChains++;
-    try {
-      this.evalIfChain(cs, expr);
-    } finally {
-      this.deferredChains--;
-    }
-  }
-
-  // Used above when we cant resolve an .if branch at assembly time
-  // so we skip it and mark the branch as false for now
-  private skipGuessedDeadBranch(at: Token) {
-    let depth = 1;
-    Tokens.pullLines(this._tokenSource!, line => {
-      if (!line) this.fail(`EOF looking for .endif`, at);
-      const front = line[0];
-      if (front.token === 'cs' && Tokens.eq(front, Tokens.ENDIF)) {
-        if (--depth === 0) return false;
-      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
-        depth++;
-      } else if (depth === 1 && Tokens.eq(front, Tokens.ELSE)) {
-        return false;
-      }
-      return true;
-    });
-  }
-
-  // This is run during the late pass and everything MUST be resolved at this point
-  // or its a link time error.
-  private evalIfChain(cs: Token, expr: Expr) {
-    let cond = this.evalCond(cs, expr);
-    for (;;) {
-      const terminator = cond ? this.processBranch(cs) : this.skipBranch(cs);
-      const marker = terminator[0];
-      if (Tokens.eq(marker, Tokens.ENDIF)) return;
-      if (cond) {
-        // Live branch just ended; whatever remains in the chain is dead.
-        this.skipRestOfChain(cs);
-        return;
-      }
-      cond = Tokens.eq(marker, Tokens.ELSE) ? true :
-          this.evalCond(cs, this.parseExpr(terminator, 1));
-    }
-  }
-
-  private evalCond(at: Token, expr: Expr): boolean {
+    const expr = this.parseExpr(tokens, 1);
     const prev = this.inCondition;
     this.inCondition = true;
     let value;
@@ -1661,68 +1613,13 @@ export class Assembler {
       this.inCondition = prev;
     }
     if (value == null) {
-      if (this.linkEnv?.tolerateUnresolvedIf) {
+      if (this.linkEnv.tolerateUnresolvedIf) {
         this.toleratedIfs++;
         return false;
       }
       this.fail(`Expected a constant`, at);
     }
     return value !== 0;
-  }
-
-  // recursively run through potentially nested if statements
-  private processBranch(at: Token): Token[] {
-    let terminator: Token[];
-    Tokens.pullLines(this._tokenSource!, line => {
-      if (!line) this.fail(`EOF looking for .endif`, at);
-      const front = line[0];
-      if (front.token === 'cs' &&
-          (Tokens.eq(front, Tokens.ENDIF) || Tokens.eq(front, Tokens.ELSE) ||
-           Tokens.eq(front, Tokens.ELSEIF))) {
-        terminator = line;
-        return false;
-      }
-      this.line(line);
-      return true;
-    });
-    return terminator!;
-  }
-
-  // Discards a dead branch (tracking nested `.if` depth) until this chain's
-  // next `.elseif`/`.else`/`.endif`.
-  private skipBranch(at: Token): Token[] {
-    let depth = 1;
-    let terminator: Token[];
-    Tokens.pullLines(this._tokenSource!, line => {
-      if (!line) this.fail(`EOF looking for .endif`, at);
-      const front = line[0];
-      if (front.token === 'cs' && Tokens.eq(front, Tokens.ENDIF)) {
-        if (--depth === 0) { terminator = line; return false; }
-      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
-        depth++;
-      } else if (depth === 1 && front.token === 'cs' &&
-                 (Tokens.eq(front, Tokens.ELSE) || Tokens.eq(front, Tokens.ELSEIF))) {
-        terminator = line;
-        return false;
-      }
-      return true;
-    });
-    return terminator!;
-  }
-
-  // Discards the rest of a chain once its live branch is already known.
-  private skipRestOfChain(at: Token) {
-    let depth = 1;
-    Tokens.pullLines(this._tokenSource!, line => {
-      if (!line) this.fail(`EOF looking for .endif`, at);
-      const front = line[0];
-      if (front.token === 'cs' && Tokens.eq(front, Tokens.ENDIF)) {
-        if (--depth === 0) return false;
-      } else if (front.token === 'cs' && front.str.startsWith('.if')) {
-        depth++;
-      }
-      return true;
-    });
   }
 
   /**
@@ -1805,14 +1702,6 @@ export class Assembler {
     // if (source) symbol.expr.source = source;
     // // Add the label to the current chunk...?
     // // Record the definition, etc...?
-  }
-
-  assignSym(tokens: Token[]) {
-    if (!this.deferredChains) this.assignLine(tokens);
-  }
-
-  setSym(tokens: Token[]) {
-    if (!this.deferredChains) this.setLine(tokens);
   }
 
   private assignLine(tokens: Token[]) {

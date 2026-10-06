@@ -4352,109 +4352,54 @@ foo = $ff
     });
   });
 
-  describe('.if/.elseif/.else/.endif directives (pass 1, unreachable via the ' +
-      'preprocessor today - constructed directly to exercise the assembler path)',
+  describe('.if/.elseif/.else/.endif directives (pass 1 guesses a deferred chain false)',
       function() {
-    it('guesses false, records a condQuery, and skips the dead branch with no side effects',
-        function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.endif')],
-      ]));
-      expect(a.lateAssemblyCondQueries.length).toBe(1);
-      // Label1 lived in the guessed-dead branch, so it was never defined -
-      // exporting it would otherwise fail with "Exported symbol undefined".
-      const {lateAssembly, ...rest} = strip(a.module());
-      expect(rest).toEqual({chunks: [], segments: [], symbols: []});
-      expect(lateAssembly!.condQueries.length).toBe(1);
+    const bytes = (m: Module) => (strip(m).chunks ?? []).flatMap(c => [...c.data]);
+
+    it('records one condQuery and skips the guessed arm with no side effects', function() {
+      const m = assembleModule('.import T\n.if .bank(T) = 1\nLabel1: .byte 1\n.endif\n');
+      expect(m.lateAssembly!.condQueries.length).toBe(1);
+      expect(bytes(m)).toEqual([]);
     });
 
-    it('processes the `.else` branch since the `.if` is always guessed false',
-        function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.else')],
-        [ident('Label2'), COLON],
-        [cs('.endif')],
-      ]));
-      a.export('Label2');
-      expect(a.lateAssemblyCondQueries.length).toBe(1);
-      const {lateAssembly, ...rest} = strip(a.module());
-      expect(rest).toEqual({
-        chunks: [{overwrite: 'allow', segments: [], name: 'Label2', data: Uint8Array.of()}],
-        segments: [],
-        symbols: [{export: 'Label2', expr: off(0)}],
-      });
-      expect(lateAssembly!.condQueries.length).toBe(1);
+    it('takes the `.else` arm', function() {
+      const m = assembleModule(
+          '.import T\n.if .bank(T) = 1\n.byte 1\n.else\n.byte 2\n.endif\n');
+      expect(bytes(m)).toEqual([2]);
     });
 
-    it('keeps guessing false through an `.elseif` chain down to the final `.else`',
-        function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.elseif'), num(2)],
-        [ident('Label2'), COLON],
-        [cs('.else')],
-        [ident('Label3'), COLON],
-        [cs('.endif')],
-      ]));
-      a.export('Label3');
-      // Both the `.if` and the `.elseif` defer, but only one query is recorded -
-      // the whole chain is a single "not decided" unit at pass 1.
-      expect(a.lateAssemblyCondQueries.length).toBe(1);
-      const {lateAssembly, ...rest} = strip(a.module());
-      expect(rest).toEqual({
-        chunks: [{overwrite: 'allow', segments: [], name: 'Label3', data: Uint8Array.of()}],
-        segments: [],
-        symbols: [{export: 'Label3', expr: off(0)}],
-      });
-      expect(lateAssembly!.condQueries.length).toBe(1);
+    it('records one query for a whole `.elseif` chain and takes the `.else`', function() {
+      const m = assembleModule('.import T\n.if .bank(T) = 1\n.byte 1\n' +
+          '.elseif .bank(T) = 2\n.byte 2\n.else\n.byte 3\n.endif\n');
+      expect(m.lateAssembly!.condQueries.length).toBe(1);
+      expect(bytes(m)).toEqual([3]);
     });
 
     it('drops the whole chain when no `.else` is present', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.elseif'), num(2)],
-        [ident('Label2'), COLON],
-        [cs('.endif')],
-      ]));
-      expect(a.lateAssemblyCondQueries.length).toBe(1);
-      const m = strip(a.module());
-      const {lateAssembly, ...rest} = m;
-      expect(rest).toEqual({chunks: [], segments: [], symbols: []});
-      expect(lateAssembly!.condQueries.length).toBe(1);
+      const m = assembleModule('.import T\n.if .bank(T) = 1\n.byte 1\n' +
+          '.elseif .bank(T) = 2\n.byte 2\n.endif\n');
+      expect(bytes(m)).toEqual([]);
     });
 
-    it('a stray `.elseif`/`.else`/`.endif` with no open `.if` fails clearly',
-        function() {
-      // `directive()` records via `this.fail`, which reports through the error
-      // collector rather than throwing out of `line()` - same recovery path
-      // every other directive error uses.
+    it('rejects a conditional handed straight to the assembler', function() {
       const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([[cs('.elseif'), num(1)]]));
-      expect(a.getMessages().map(m => m.message)).toEqual(['.elseif without .if']);
+      expect(() => a.tokens(tokenSource([[cs('.if'), num(1)]])))
+          .toThrow(/must be handled by the preprocessor/);
+    });
+  });
 
-      const b = new Assembler(Cpu.P02);
-      b.tokens(tokenSource([[cs('.else')]]));
-      expect(b.getMessages().map(m => m.message)).toEqual(['.else without .if']);
+  // ca65 rejects both lines as trailing garbage; js65 accepts them.
+  describe('a label and an assignment on one line', function() {
+    it('defines the label before running the .set', function() {
+      const m = assembleModule('.byte 1\nfoo: bar .set foo - 1\n.byte bar\n');
+      expect(m.chunks![0].subs![0].expr)
+          .toEqual(expect.objectContaining({op: 'num', num: 0, meta: {rel: true, chunk: 0}}));
     });
 
-    it('fails with EOF looking for .endif when the stream runs out mid-branch',
-        function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-      ]));
-      expect(a.getMessages().map(m => m.message)).toEqual(['EOF looking for .endif']);
+    it('defines the label before running the =', function() {
+      const m = assembleModule('.byte 1\nfoo: bar = foo\n.word bar\n');
+      expect(m.chunks![0].subs![0].expr)
+          .toEqual(expect.objectContaining({op: 'num', num: 1, meta: {rel: true, chunk: 0}}));
     });
   });
 
@@ -4839,13 +4784,7 @@ a_after:
 
     it('carries a block for a module with only a deferred `.if` (no size queries)',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.endif')],
-      ]));
-      const m = a.module();
+      const m = assembleModule('.import T\n.if .bank(T) = 1\nLabel1:\n.endif\n');
       expect(m.lateAssembly).toBeDefined();
       expect(m.lateAssembly!.sizeQueries.length).toBe(0);
       expect(m.lateAssembly!.condQueries.length).toBe(1);

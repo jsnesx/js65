@@ -411,10 +411,15 @@ function reqBase64(v: unknown, path: string): Uint8Array {
 
 function validateSourceLog(v: unknown, path: string): SourceLog {
   if (!isObject(v)) fail(path, 'expected object');
-  return {
+  const log: SourceLog = {
     text: validateFileMap(v.text, `${path}.text`, reqString),
     binary: validateFileMap(v.binary, `${path}.binary`, reqBase64),
   };
+  if (v.missing !== undefined) {
+    log.missing = reqArray(v.missing, `${path}.missing`)
+        .map((k, i) => reqString(k, `${path}.missing[${i}]`));
+  }
+  return log;
 }
 
 function validateDefines(v: unknown, path: string): SymbolDefine[] {

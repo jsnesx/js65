@@ -3,7 +3,6 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Base64} from '../src/base64.ts';
-import type {Expr} from '../src/expr.ts';
 import {Preprocessor} from '../src/preprocessor.ts';
 import * as Tokens from '../src/token.ts';
 import {TokenStream} from '../src/tokenstream.ts';
@@ -20,22 +19,17 @@ describe('Preprocessor', function() {
     const code = lines.join('\n');
     const toks = new TokenStream();
     toks.enter(new Tokenizer(code, 'input.s'));
-    const out: string[] = [];
-    const env = new Assembler();
-    const preprocessor = new Preprocessor(toks, env);
-    for (let line = await preprocessor.next(); line; line = await preprocessor.next()) {
-      out.push(line.map(Tokens.name).join(' '));
-    }
-    expect(out).toEqual(want);
+    const asm = new Recorder();
+    new Preprocessor(toks, asm).run();
+    expect(asm.names()).toEqual(want);
   }
 
   async function testError(lines: string[], msg: RegExp) {
     const code = lines.join('\n');
     const toks = new TokenStream();
     toks.enter(new Tokenizer(code, 'input.s'));
-    const preprocessor = new Preprocessor(toks, new Assembler());
-    await expect((async () => { while (await preprocessor.next()); })())
-        .rejects.toThrow(msg);
+    const preprocessor = new Preprocessor(toks, new Recorder());
+    expect(() => preprocessor.run()).toThrow(msg);
   }
 
   describe('pass-through', function() {
@@ -732,20 +726,19 @@ describe('Preprocessor', function() {
 
     // Same emptied line, reached through a deferred condition, where the body
     // is replayed to the late pass instead of resolved here.
-    it('should drop an emptied line in a deferred conditional',
+    it('should drop an emptied line in the guessed arm of a deferred conditional',
        async function() {
       await test(['.define EMPTY',
                   '.segment "a"',
                   '.import FOO',
                   '.if .bank(FOO)',
+                  '.else',
                   'EMPTY',
                   'x y',
                   '.endif'],
                  '.segment STR[$a]',
                  '.import FOO',
-                 '.if .bank ( FOO )',
-                 await instruction('x y'),
-                 '.endif');
+                 await instruction('x y'));
     });
 
     // An empty production does the same thing; ca65 V2.19 assembles this one.
@@ -834,20 +827,20 @@ describe('Preprocessor', function() {
 
     // A deferred block is replayed to the late pass, so it has to carry the
     // unexpanded line for the redefinition to apply there too.
-    it('should apply a define redefined in a deferred block', async function() {
+    it('should apply a define redefined in the guessed arm of a deferred block',
+       async function() {
       await test(['.segment "a"',
                   '.import FOO',
                   '.define VAL 7',
                   '.if .bank(FOO)',
+                  '.else',
                   '.undefine VAL',
                   '.define VAL 9',
                   '.byte VAL',
                   '.endif'],
                  '.segment STR[$a]',
                  '.import FOO',
-                 '.if .bank ( FOO )',
-                 await directive('.byte 9'),
-                 '.endif');
+                 await directive('.byte 9'));
     });
 
     // Token functions sit above the gate, so a dead branch never evaluates
@@ -1307,9 +1300,10 @@ describe('Preprocessor', function() {
       const before = Math.floor(Date.now() / 1000);
       const toks = new TokenStream();
       toks.enter(new Tokenizer('a .time', 'input.s'));
-      const line = await new Preprocessor(toks, new Assembler()).next();
+      const asm = new Recorder();
+      new Preprocessor(toks, asm).run();
       const after = Math.floor(Date.now() / 1000);
-      const tok = line![1];
+      const tok = asm.lines[0][1];
       expect(tok.token).toBe('num');
       expect((tok as Tokens.NumberToken).num).toBeGreaterThanOrEqual(before);
       expect((tok as Tokens.NumberToken).num).toBeLessThanOrEqual(after);
@@ -1582,142 +1576,66 @@ describe('Preprocessor', function() {
 
   // TODO - tests for .if, make sure it evaluates numbers, etc...
 
-  describe('deferred marker pass-through', function() {
-    // No source syntax produces a `deferred` marker yet - hand-build the
-    // token stream directly, standing in for a future deferred `.if` block.
-    function tokenSource(lines: Tokens.Token[][]): Tokens.Source {
-      let i = 0;
-      return {next: () => lines[i++]};
-    }
-    const marker = (str: string, deferred: boolean): Tokens.Token =>
-        deferred ? {token: 'cs', str, deferred} : {token: 'cs', str};
-
-    function run(line: Tokens.Token[]): Tokens.Token[]|undefined {
-      const toks = new TokenStream();
-      toks.enter(tokenSource([line]));
-      return new Preprocessor(toks, new Assembler()).next();
-    }
-
-    for (const m of ['.if', '.elseif', '.else', '.endif']) {
-      it(`passes a tagged ${m} straight through without dispatching it`, function() {
-        const out = run([marker(m, true)]);
-        expect(out?.map(Tokens.name).join(' ')).toEqual(m);
-      });
-    }
-
-    it('still errors on an untagged stray .elseif', function() {
-      expect(() => run([marker('.elseif', false)])).toThrow(/with no \.if/);
-    });
-  });
-
   describe('deferred .if', function() {
-    // A minimal `Env` stub, standing in for the assembler so a `.bank(X)`
-    // condition can be made to depend on an import or a chunk-relative
-    // label without driving a real `Assembler`/linker.
-    class StubEnv {
-      readonly imports = new Set<string>();
-      readonly locals = new Map<string, Expr>();
-      definedSymbol(sym: string): boolean {
-        return this.imports.has(sym) || this.locals.has(sym);
-      }
-      constantSymbol(): boolean { return false; }
-      referencedSymbol(): boolean { return false; }
-      isMnemonic(): boolean { return false; }
-      allowsPcAssignment(): boolean { return false; }
-      allowsLabelWithoutColon(): boolean { return false; }
-      allowsUbiquitousIdents(): boolean { return false; }
-      allowsMultiOpsPerLine(): boolean { return false; }
-      evaluate(expr: Expr): number|undefined {
-        return expr.op === 'num' && !expr.meta?.rel ? expr.num : undefined;
-      }
-      definedValue(sym: string): Expr|undefined {
-        // An import has no compile-time value yet, matching the real
-        // Assembler mid-file, before `closeScopes()` resolves it.
-        return this.imports.has(sym) ? undefined : this.locals.get(sym);
-      }
-      assignSym(): void {}
-      setSym(): void {}
-      encodeChar(): number|undefined { return undefined; }
-    }
-
-    function run(env: StubEnv, lines: string[]): string[] {
+    // `setup` goes straight to the assembler, so it never reaches the output.
+    function run(setup: string[], lines: string[]): string[] {
+      const asm = new Recorder();
+      const pre = new TokenStream();
+      pre.enter(new Tokenizer(setup.join('\n'), 'setup.s'));
+      for (let line = pre.next(); line; line = pre.next()) asm.line(line);
+      asm.lines.length = 0;
       const toks = new TokenStream();
       toks.enter(new Tokenizer(lines.join('\n'), 'input.s'));
-      const pre = new Preprocessor(toks, env);
-      const out: string[] = [];
-      for (let line = pre.next(); line; line = pre.next()) {
-        out.push(line.map(Tokens.name).join(' '));
-      }
-      return out;
+      new Preprocessor(toks, asm).run();
+      return asm.names();
     }
 
-    it('defers on an unresolved import, keeping both branches verbatim', async function() {
-      const env = new StubEnv();
-      env.imports.add('anImport');
-      const out = run(env, [
+    it('guesses false on an unresolved import, taking the .else', async function() {
+      const out = run(['.import anImport'], [
           '.if .bank(anImport) <> 0', 'x y', '.else', 'a b', '.endif', 'z']);
-      expect(out).toEqual([
-          await directive('.if .bank(anImport) <> 0'),
-          await instruction('x y'),
-          await directive('.else'),
-          await instruction('a b'),
-          await directive('.endif'),
-          await instruction('z')]);
+      expect(out).toEqual([await instruction('a b'), await instruction('z')]);
     });
 
-    it('defers on a chunk-relative local label, keeping both branches verbatim',
-       async function() {
-      const env = new StubEnv();
-      env.locals.set('localLabel', {op: 'num', num: 0, meta: {rel: true, chunk: 0}});
-      const out = run(env, [
+    it('guesses false on a chunk-relative local label', async function() {
+      const out = run(['localLabel:'], [
           '.if .bank(localLabel) = 3', 'x y', '.else', 'a b', '.endif', 'z']);
-      expect(out).toEqual([
-          await directive('.if .bank(localLabel) = 3'),
-          await instruction('x y'),
-          await directive('.else'),
-          await instruction('a b'),
-          await directive('.endif'),
-          await instruction('z')]);
+      expect(out).toEqual([await instruction('a b'), await instruction('z')]);
     });
 
     it('leaves an already-resolvable .if byte-identical to today', async function() {
-      const out = run(new StubEnv(), ['.if 1', 'x y', '.else', 'a b', '.endif', 'z']);
+      const out = run([], ['.if 1', 'x y', '.else', 'a b', '.endif', 'z']);
       expect(out).toEqual([await instruction('x y'), await instruction('z')]);
     });
 
-    it('still expands a .define from both branches once deferred (documented wart)',
-       async function() {
-      const env = new StubEnv();
-      env.imports.add('anImport');
-      const out = run(env, [
+    it('only runs the .define in the arm pass 1 takes', async function() {
+      const out = run(['.import anImport'], [
           '.if .bank(anImport) <> 0', '.define A 1', '.else', '.define B 2', '.endif',
           'lda #A', 'lda #B']);
-      expect(out).toEqual([
-          await directive('.if .bank(anImport) <> 0'),
-          await directive('.else'),
-          await directive('.endif'),
-          await instruction('lda #1'),
-          await instruction('lda #2')]);
+      expect(out).toEqual([await instruction('lda #A'), await instruction('lda #2')]);
     });
 
-    it('still resolves a resolvable .if nested inside a deferred block', async function() {
-      const env = new StubEnv();
-      env.imports.add('anImport');
-      const out = run(env, [
-          '.if .bank(anImport) <> 0',
+    it('still resolves a resolvable .if nested inside the guessed arm', async function() {
+      const out = run(['.import anImport'], [
+          '.if .bank(anImport) <> 0', 'c d', '.else',
           '.if 1', 'x y', '.else', 'a b', '.endif',
-          '.else', 'c d', '.endif', 'z']);
-      expect(out).toEqual([
-          await directive('.if .bank(anImport) <> 0'),
-          await instruction('x y'),
-          await directive('.else'),
-          await instruction('c d'),
-          await directive('.endif'),
-          await instruction('z')]);
+          '.endif', 'z']);
+      expect(out).toEqual([await instruction('x y'), await instruction('z')]);
+    });
+
+    it('skips an .elseif after a guessed .if without evaluating it', async function() {
+      const out = run(['.import anImport'], [
+          '.if .bank(anImport) <> 0', 'a b', '.elseif 1', 'c d', '.else', 'x y', '.endif']);
+      expect(out).toEqual([await instruction('x y')]);
+    });
+
+    it('guesses false on a chain that defers at its .elseif', async function() {
+      const out = run(['.import anImport'], [
+          '.if 0', 'a b', '.elseif .bank(anImport) <> 0', 'c d', '.else', 'x y', '.endif']);
+      expect(out).toEqual([await instruction('x y')]);
     });
 
     it('still errors immediately on a genuinely undefined symbol', function() {
-      expect(() => run(new StubEnv(), ['.if undefinedSym <> 0', 'x y', '.endif']))
+      expect(() => run([], ['.if undefinedSym <> 0', 'x y', '.endif']))
           .toThrow(/Expected a constant/);
     });
   });
@@ -1751,12 +1669,21 @@ async function testFiles(lines: string[], reads: string[] = []): Promise<string[
   });
   const toks = new TokenStream(readText, readBinary);
   toks.enter(new Tokenizer(lines.join('\n'), 'input.s'));
-  const pre = new Preprocessor(toks, new Assembler());
-  const out: string[] = [];
-  for (let line = pre.next(); line; line = pre.next()) {
-    out.push(line.map(Tokens.name).join(' '));
+  const asm = new Recorder();
+  new Preprocessor(toks, asm).run();
+  return asm.names();
+}
+
+/** Records every statement the preprocessor hands the assembler. */
+class Recorder extends Assembler {
+  readonly lines: Tokens.Token[][] = [];
+  override line(tokens: Tokens.Token[]) {
+    this.lines.push([...tokens]);
+    super.line(tokens);
   }
-  return out;
+  names(): string[] {
+    return this.lines.map(line => line.map(Tokens.name).join(' '));
+  }
 }
 
 function instruction(line: string) { return parseLine(line); }

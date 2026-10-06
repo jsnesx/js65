@@ -85,10 +85,12 @@ export class SourceContents {
 export interface SourceLog {
   text: Map<string, ResolvedFile<string>>;
   binary: Map<string, ResolvedFile<Uint8Array>>;
+  /** Keys a guessed arm named that no include directory had. */
+  missing?: string[];
 }
 
 export function newSourceLog(): SourceLog {
-  return {text: new Map(), binary: new Map()};
+  return {text: new Map(), binary: new Map(), missing: []};
 }
 
 export function sourceLogKey(bases: readonly string[], filename: string): string {
@@ -204,6 +206,27 @@ export class TokenStream implements Tokens.Source {
                                {baseIndex: bases.indexOf(loaded.base), content: bytes});
     const end = length !== undefined ? offset + length : undefined;
     return new Base64().encode(bytes.slice(offset, end));
+  }
+
+  /** Records a file in the source log without reading it in. */
+  preload(path: string, binary: boolean): void {
+    const log = this.sourceLog;
+    if (!log) return;
+    const bases = binary ? this.binIncludeSearch() : this.includeSearch();
+    const key = sourceLogKey(bases, path);
+    const found = binary ? this.resolveFileBinary?.(bases, path) :
+        this.resolveFile?.(bases, path);
+    if (!found) {
+      if (!log.missing?.includes(key)) (log.missing ??= []).push(key);
+      return;
+    }
+    if (!binary) {
+      log.text.set(key, found as ResolvedFile<string>);
+      return;
+    }
+    const content = typeof found.content === 'string' ?
+        new Base64().decode(found.content) : found.content;
+    log.binary.set(key, {baseIndex: found.baseIndex, content});
   }
 
   unshift(...lines: Token[][]) {

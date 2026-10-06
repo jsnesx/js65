@@ -44,8 +44,6 @@ export interface StringToken {
    * the assembler can attribute that line's data to the label for `.sizeof`.
    */
   labelsData?: boolean;
-  /** Marks when an .if/.elseif/etc statement is delayed till the latepass */
-  deferred?: boolean;
 }
 export interface NumberToken {
   token: NumberTok;
@@ -446,9 +444,8 @@ export function sourceInfo(file: string, line: number, column: number,
 }
 
 export function strToken(token: StringTok, str: string, source?: SourceInfo,
-                         rawStr?: string, char?: boolean, labelsData?: boolean,
-                         deferred?: boolean): StringToken {
-  return {token, str, rawStr, char, source, labelsData, deferred};
+                         rawStr?: string, char?: boolean, labelsData?: boolean): StringToken {
+  return {token, str, rawStr, char, source, labelsData};
 }
 
 export function numToken(num: number, source?: SourceInfo, width?: number,
@@ -465,8 +462,7 @@ export function nullToken(token: NullTok, source?: SourceInfo): NullaryToken {
 }
 
 export function labelsData(tok: StringToken): StringToken {
-  return strToken(tok.token, tok.str, tok.source, tok.rawStr, tok.char, true,
-                  tok.deferred);
+  return strToken(tok.token, tok.str, tok.source, tok.rawStr, tok.char, true);
 }
 
 /**
@@ -487,7 +483,7 @@ export function reparentSource(tok: Token, callSource?: SourceInfo): Token {
       return numToken(tok.num, source, tok.width, tok.radix);
     case 'ident': case 'op': case 'cs': case 'str':
       return strToken(tok.token, tok.str, source, tok.rawStr, tok.char,
-                      tok.labelsData, tok.deferred);
+                      tok.labelsData);
     default:
       return nullToken(tok.token, source);
   }

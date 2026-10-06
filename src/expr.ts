@@ -327,7 +327,7 @@ export function identifier(expr: Expr): string {
 // }
 
 /**
- * Pull in the charEncoder from the current Env context if the user has created
+ * Pull in the charEncoder from the current Assembler if the user has created
  * any charmapped values. This way we can do things like `.if 'a'` where `'a'` was
  * charmapped to some value like `1` or `0` for instance
  */

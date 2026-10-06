@@ -60,8 +60,7 @@ export class Linker {
     const asm = new Assembler(Cpu.P02);
     const toks = new TokenStream(undefined, undefined, opts);
     toks.enter(source);
-    const pre = new Preprocessor(toks, asm);
-    asm.tokens(pre);
+    new Preprocessor(toks, asm).run();
     const linker = new Linker();
     //linker.base(this.prg, 0);
     linker.read(asm.module());
