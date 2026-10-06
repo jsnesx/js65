@@ -13,6 +13,7 @@
 
 import { spawnSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
+import { dirname, resolve } from 'path';
 
 const isWin = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
@@ -23,7 +24,14 @@ const env = (k: string, d: string) => process.env[k] ?? d;
 // --- locations -----------------------------------------------------------
 // HERMES_SRC defaults to a sibling checkout; everything else derives from it.
 const HERMES_SRC = env('HERMES_SRC', '../hermes');
-const HERMES_BUILD = env('HERMES_BUILD', `${HERMES_SRC}/build`);
+const STOCK_BUILD = env('HERMES_BUILD', `${HERMES_SRC}/build`);
+// --pgo links against the profile-use tree that bench/hermespgo.ts builds.
+const PGO = process.argv.includes('--pgo');
+const HERMES_BUILD = PGO ? resolve(dirname(STOCK_BUILD), 'build-pgouse') : STOCK_BUILD;
+if (PGO && !existsSync(HERMES_BUILD)) {
+  process.stderr.write(`no PGO Hermes tree at ${HERMES_BUILD}; run \`bun run hermes-pgo\` first.\n`);
+  process.exit(2);
+}
 // Multi-config generators (MSVC) nest outputs under a per-config dir; single
 // config generators (Ninja/Make) don't. Defaults: Release on Windows, none
 // elsewhere. Override with HERMES_CONFIG (set it empty for a Ninja build).
