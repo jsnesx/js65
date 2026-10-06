@@ -53,6 +53,10 @@ export class MacroIndex {
     return this.entries.values();
   }
 
+  adopt(other: MacroIndex): void {
+    for (const [name, entry] of other.entries) this.entries.set(name, entry);
+  }
+
   get size(): number { return this.entries.size; }
 }
 
@@ -264,6 +268,18 @@ export class InactiveRegionIndex {
       }
     }
     return coalesce(file, [...dead].sort((a, b) => a - b));
+  }
+
+  /** Replaces this index's view of every file `other` read. */
+  adopt(other: InactiveRegionIndex): void {
+    other.flush();
+    this.flush();
+    const files = new Set([...other.live.keys(), ...other.regions.map(r => r.file)]);
+    const kept = this.regions.filter(r => !files.has(r.file));
+    this.regions.length = 0;
+    this.regions.push(...kept, ...other.regions);
+    for (const file of files) this.live.delete(file);
+    for (const [file, lines] of other.live) this.live.set(file, new Set(lines));
   }
 
   get size(): number { return this.all().length; }

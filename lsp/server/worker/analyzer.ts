@@ -9,7 +9,7 @@ import {assemble, link, searchFiles, type AssemblyInput, type AssemblerOptions, 
 import type {AssemblerMessage, SourceInfo} from '../../../src/error.ts';
 import {InactiveRegionIndex, MacroIndex, SymbolIndex} from '../../../src/lspindex.ts';
 import type {Module, Segment} from '../../../src/module.ts';
-import {buildLinkTimeEnv, mergeModuleSegments, replayModules} from '../../../src/latepass.ts';
+import {buildLinkTimeEnv, mergeModuleSegments, replayModules} from '../../../src/assemblypass.ts';
 import {joinDir} from '../../../src/util.ts';
 import type {Diagnostic} from 'vscode-languageserver-protocol';
 
@@ -440,8 +440,8 @@ export class Analyzer {
     // Before the standalone downgrade, since replay's import branch resolves
     // names the regex would otherwise downgrade.
     if (this.opts.latePass !== false && modules.length) {
-      const late = this.runLatePass(project, modules, moduleMessages, index,
-                                    token.signal);
+      const late = this.runLatePass(project, modules, moduleMessages,
+                                    {index, macros, inactiveRegions}, token.signal);
       if (late) {
         messages = late.messages;
         modules = late.modules;
@@ -471,7 +471,7 @@ export class Analyzer {
       project: Js65Project,
       modules: readonly Module[],
       moduleMessages: readonly (readonly AssemblerMessage[])[],
-      index: SymbolIndex,
+      indexes: {index: SymbolIndex, macros: MacroIndex, inactiveRegions: InactiveRegionIndex},
       signal: CancelSignal,
   ): {messages: AssemblerMessage[], modules: readonly Module[]} | undefined {
     if (!modules.some(m => m.lateAssembly)) return undefined;
@@ -479,13 +479,19 @@ export class Analyzer {
       const segments = mergeModuleSegments(modules, project);
       const linkEnv = buildLinkTimeEnv(modules, segments);
       const replayIndex = new SymbolIndex();
+      const replayMacros = new MacroIndex();
+      const replayRegions = new InactiveRegionIndex();
       const replayed = replayModules([...modules], moduleMessages, linkEnv, signal, {
         symbolIndex: replayIndex,
+        macroIndex: replayMacros,
+        inactiveRegionIndex: replayRegions,
         errorLimit: this.opts.errorLimit ?? DEFAULT_LSP_ERROR_LIMIT,
       });
       if (replayed.replayed.length) {
-        index.dropFiles(replayIndex.rootScopeFiles());
-        index.adopt(replayIndex);
+        indexes.index.dropFiles(replayIndex.rootScopeFiles());
+        indexes.index.adopt(replayIndex);
+        indexes.macros.adopt(replayMacros);
+        indexes.inactiveRegions.adopt(replayRegions);
       }
       return {messages: replayed.messages, modules: replayed.modules};
     } catch (err) {

@@ -14,7 +14,7 @@ import { Linter, type RtsAnchor } from './lint.ts';
 import type { SymbolKind } from './lspindex.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from './options.ts';
-import type { LinkTimeEnv } from './latepass.ts';
+import type { LinkTimeEnv } from './assemblypass.ts';
 import { runActions } from './actions.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 import { createHash } from 'sha1-uint8array';
@@ -364,6 +364,13 @@ export interface RefExtractor {
   assign?(name: string, value: number): void;
 }
 
+/** What the late pass knows that pass 1 did not. */
+export interface LateContext {
+  linkEnv?: LinkTimeEnv;
+  globalKinds?: Record<string, 'import'|'export'>;
+  autoImportNames?: ReadonlySet<string>;
+}
+
 export class Assembler {
 
   /** The currently-open segment(s). */
@@ -509,10 +516,10 @@ export class Assembler {
   /** Recorded for every `.if`/`.elseif` that can't be decided without a linker */
   readonly lateAssemblyCondQueries: mod.LateAssemblyCondQuery[] = [];
 
-  /** Replayed tokenstream in the latepass. */
-  private readonly lateAssemblyStream: Token[][] = [];
-
   private _tokenSource?: Tokens.Source;
+
+  /** Open replayed deferred `.if` chains, whose assignments run in `line()`. */
+  private deferredChains = 0;
 
   /** Set by the late pass on replay; undefined (and unconsulted) on pass 1. */
   linkEnv?: LinkTimeEnv;
@@ -547,7 +554,11 @@ export class Assembler {
   /** Returns an early error in assembling if you mix segment modes */
   private _segmentMode?: 'named'|'anon';
 
-  constructor(readonly cpu = Cpu.P02, readonly opts: AssemblerOptions = {}) {
+  constructor(readonly cpu = Cpu.P02, readonly opts: AssemblerOptions = {},
+              late?: LateContext) {
+    this.linkEnv = late?.linkEnv;
+    this.globalKinds = late?.globalKinds;
+    this.autoImportNames = late?.autoImportNames;
     if (opts.collectReferences) {
       this.currentScope.collectRefs = true;
       this.cheapLocals.collectRefs = true;
@@ -1360,8 +1371,7 @@ export class Assembler {
     const lateAssembly: mod.LateAssembly | undefined =
         this.lateAssemblyQueries.length || this.lateAssemblyCondQueries.length ?
         {sizeQueries: this.lateAssemblyQueries, condQueries: this.lateAssemblyCondQueries,
-         globalKinds: Object.fromEntries(this.resolvedGlobalKinds),
-         stream: this.lateAssemblyStream, opts: this.opts} :
+         globalKinds: Object.fromEntries(this.resolvedGlobalKinds), opts: this.opts} :
         undefined;
 
     const autoImports = this.autoImported.length ? this.autoImported : undefined;
@@ -1399,11 +1409,7 @@ export class Assembler {
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
-      if (this.linkEnv) {
-        // During the latepass, we don't have a preprocesor, which normally
-        // runs the assignments, so we have to replay them in the latepass.
-        this.replayAssignment(tokens);
-      }
+      if (this.deferredChains) this.replayAssignment(tokens);
       return;
     }
     this._source = tokens[0].source;
@@ -1434,9 +1440,9 @@ export class Assembler {
   private replayAssignment(tokens: Token[]) {
     try {
       if (Tokens.eq(tokens[1], Tokens.SET)) {
-        this.setSym(tokens);
+        this.setLine(tokens);
       } else {
-        this.assignSym(tokens);
+        this.assignLine(tokens);
       }
     } catch (err) {
       this.recoverLine(err);
@@ -1465,19 +1471,11 @@ export class Assembler {
   // assembly can be cancelled cooperatively; an aborted signal throws, which the caller
   // (compile) turns into an ordinary failure result.
   tokens(source: Tokens.Source, signal?: { readonly aborted: boolean }): void {
-    // Wrapper for pulling the next line of tokens and keeping them for the late pass
-    const recording: Tokens.Source = {
-      next: () => {
-        const line = source.next();
-        if (line) this.lateAssemblyStream.push(line);
-        return line;
-      },
-    };
-    this._tokenSource = recording;
+    this._tokenSource = source;
     // The `ended` check comes before `next()` so that nothing past `.end` is even tokenized.
     while (!this.ended) {
       if (signal?.aborted) throw new FatalError('Compilation cancelled');
-      const line = recording.next();
+      const line = source.next();
       if (!line) break;
       this.line(line);
     }
@@ -1609,7 +1607,12 @@ export class Assembler {
       this.skipGuessedDeadBranch(cs);
       return;
     }
-    this.evalIfChain(cs, expr);
+    this.deferredChains++;
+    try {
+      this.evalIfChain(cs, expr);
+    } finally {
+      this.deferredChains--;
+    }
   }
 
   // Used above when we cant resolve an .if branch at assembly time
@@ -1805,6 +1808,14 @@ export class Assembler {
   }
 
   assignSym(tokens: Token[]) {
+    if (!this.deferredChains) this.assignLine(tokens);
+  }
+
+  setSym(tokens: Token[]) {
+    if (!this.deferredChains) this.setLine(tokens);
+  }
+
+  private assignLine(tokens: Token[]) {
     // Set source location before processing the assignment, so anything that
     // fails below is reported against this line.
     if (tokens[0].source) {
@@ -1829,7 +1840,7 @@ export class Assembler {
     this.enumMember(name, val, tokens[0]);
   }
 
-  setSym(tokens: Token[]) {
+  private setLine(tokens: Token[]) {
     // Set source location before processing the assignment, so anything that
     // fails below is reported against this line.
     if (tokens[0].source) {

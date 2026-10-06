@@ -1,16 +1,25 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
+import { runActions, type CodeRunner } from './actions.ts';
 import { Assembler } from './assembler.ts';
 import { Cpu } from './cpu.ts';
 import { ErrorCollector, fail, type AssemblerMessage } from './error.ts';
 import type { Expr } from './expr.ts';
+import type { JsPreprocessResult } from './jspreprocessor.ts';
+import { LintPragmas } from './lint.ts';
 import { lowerLinkerConfig, parseLinkerConfig } from './linkerconfig.ts';
-import { SymbolIndex } from './lspindex.ts';
-import { Segment, type Module } from './module.ts';
+import { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
+import { Segment, type LateAssemblyInput, type Module } from './module.ts';
+import { JsActionTable, type AssemblerOptions, type SymbolDefine,
+         type TokenizerOptions } from './options.ts';
 import { Targets } from './preamble.ts';
+import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
-import type { CancelSignal } from './libassembler.ts';
+import { Tokenizer } from './tokenizer.ts';
+import { newSourceLog, sourceLogKey, TokenStream, type ResolvedFile, type SourceContents,
+         type SourceLog } from './tokenstream.ts';
+import type { CancelSignal, FileCallbacks } from './libassembler.ts';
 
 export interface LinkTimeEnv {
   /** 1 for zeropage, 2 for absolute, undefined if unknown. */
@@ -131,14 +140,145 @@ export function mergeModuleSegments(
   return byName;
 }
 
+/** What one input is assembled with, beyond the assembler's own options. */
+export interface InputSetup {
+  defines?: SymbolDefine[];
+  macroIndex?: MacroIndex;
+  inactiveRegionIndex?: InactiveRegionIndex;
+  /** Runs `jsPreprocess`. Replay leaves it out, since its code is already staged. */
+  stage?: (code: string, name: string) => JsPreprocessResult;
+}
+
+function applyDefines(asm: Assembler, pre: Preprocessor,
+                      defines: readonly SymbolDefine[] | undefined,
+                      opts: TokenizerOptions) {
+  for (const {name, value} of defines ?? []) {
+    const toks = new Tokenizer(value, '<command line>', opts).next() ?? [];
+    // Drop the trailing EOL the tokenizer appends so a lone number is length 1.
+    const body = toks.length && Tokens.eq(toks[toks.length - 1], Tokens.EOL)
+        ? toks.slice(0, -1) : toks;
+    if (body.length === 1 && body[0].token === 'num') {
+      asm.commandLineSet(name, body[0].num);
+      continue;
+    }
+    if (!body.length) {
+      // `-D FOO=` with an empty value expands to nothing like CPP would do
+      pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}]);
+      continue;
+    }
+    pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}, ...body]);
+  }
+}
+
+/** Snapshot taken before `.feature` lines start changing the live options. */
+function initialOpts(opts: AssemblerOptions): AssemblerOptions {
+  const tok = opts.tokenizerOptions;
+  return {...opts, tokenizerOptions: tok && {...tok}};
+}
+
+/** Assembles one input into `asm`, for pass 1 and the late pass. */
+export function assembleInput(
+  asm: Assembler,
+  input: LateAssemblyInput,
+  setup: InputSetup,
+  callbacks?: FileCallbacks,
+  sourceContents?: SourceContents,
+  signal?: { readonly aborted: boolean },
+): Module {
+  const opts = asm.opts.tokenizerOptions ?? {};
+  const lateOpts = initialOpts(asm.opts);
+  const files = newSourceLog();
+  const newStream = () => new TokenStream(
+      callbacks?.resolveText, callbacks?.resolveBinary, opts, sourceContents,
+      asm.errorCollector, files);
+  const newPreprocessor = (toks: TokenStream) => {
+    const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
+                                 setup.macroIndex, setup.inactiveRegionIndex);
+    applyDefines(asm, pre, setup.defines, opts);
+    return pre;
+  };
+
+  let module: Module;
+  if (input.type === 'actions') {
+    let moduleName = input.name;
+    const runCode: CodeRunner = (asm, code, name) => {
+      const toks = newStream();
+      // Use the first name provided through a code action as the outer module name
+      if (moduleName === input.name && name) moduleName = name;
+      toks.enter(new Tokenizer(code, moduleName, opts, sourceContents, asm.errorCollector));
+      asm.tokens(newPreprocessor(toks), signal);
+    };
+    runActions(asm, input.actions, runCode);
+    module = asm.module();
+    module.name = moduleName;
+  } else {
+    const toks = newStream();
+    const staged = setup.stage?.(input.code, input.name);
+    const code = staged ? staged.code : input.code;
+    const tokenizer = new Tokenizer(code, input.name, opts, sourceContents, asm.errorCollector);
+    // The tokenizer wiped out any of the .js* directives
+    // but for the dbg info later, we want to put it back
+    if (staged?.usedJavascript) sourceContents?.data.set(input.name, input.code);
+    toks.enter(tokenizer);
+    asm.tokens(newPreprocessor(toks), signal);
+    module = asm.module();
+    module.name = input.name;
+    const romPatch = staged?.romPatch?.();
+    if (romPatch) module.romPatch = romPatch;
+    if (staged?.jsPost) module.jsPost = staged.jsPost;
+    input = {type: 'source', code, name: input.name};
+  }
+
+  const late = module.lateAssembly;
+  if (late) {
+    late.opts = lateOpts;
+    late.input = input;
+    late.files = files;
+    if (setup.defines?.length) late.defines = setup.defines;
+  }
+  return module;
+}
+
 /** Overrides for a replay, on top of the options the module recorded. */
 export interface ReplayOptions {
   /** Index to collect the replayed scopes and symbols into. */
   symbolIndex?: SymbolIndex;
+  macroIndex?: MacroIndex;
+  inactiveRegionIndex?: InactiveRegionIndex;
   errorLimit?: number;
 }
 
-/** Result of re-assembling a module from its recorded `lateAssembly` stream. */
+/** Serves `.include`/`.incbin` from what pass 1 loaded. */
+function sourceLogCallbacks(files: SourceLog|undefined): FileCallbacks {
+  const lookup = <T>(map: ReadonlyMap<string, ResolvedFile<T>>|undefined,
+                     bases: readonly string[], filename: string): ResolvedFile<T> => {
+    const hit = map?.get(sourceLogKey(bases, filename));
+    if (!hit) fail(`replay needs ${filename}, which the first pass did not load`);
+    return hit;
+  };
+  return {
+    resolveText: (bases, filename) => lookup(files?.text, bases, filename),
+    resolveBinary: (bases, filename) => lookup(files?.binary, bases, filename),
+  };
+}
+
+/** Per-scan copy, since `.feature` edits it. Rebuilds classes a `.o` loses. */
+function replayOpts(opts: AssemblerOptions): AssemblerOptions {
+  const tok = opts.tokenizerOptions ?? {};
+  const jsActions = (t?: JsActionTable) => t instanceof JsActionTable ? t : undefined;
+  return {
+    ...opts,
+    jsActions: jsActions(opts.jsActions),
+    tokenizerOptions: {
+      ...tok,
+      jsActions: jsActions(tok.jsActions),
+      lintPragmas: tok.lintPragmas instanceof LintPragmas ? tok.lintPragmas :
+          tok.lintPragmas && new LintPragmas(),
+    },
+  };
+}
+
+/** Result of re-assembling a module from its recorded `lateAssembly` input. */
 export interface ReplayResult {
   /** Whether replay succeeded (no errors) */
   success: boolean;
@@ -191,41 +331,49 @@ export function replayModule(
   if (!lateAssembly) {
     throw new Error(`replayModule: ${module.name ?? 'module'} has no lateAssembly block`);
   }
-  const {stream} = lateAssembly;
-  const {symbolIndex, errorLimit} = options ?? {};
+  const {input, files, defines} = lateAssembly;
+  if (!input) {
+    throw new Error(`replayModule: ${module.name ?? 'module'} has no recorded input`);
+  }
+  const {symbolIndex, macroIndex, inactiveRegionIndex, errorLimit} = options ?? {};
   const baseOpts = errorLimit != null ?
       {...lateAssembly.opts, errorLimit} : lateAssembly.opts;
   const autoImportNames = new Set((module.autoImports ?? []).map(a => a.name));
+  const callbacks = sourceLogCallbacks(files);
   let scans = 0;
   // Only the last scan is real, so each collects into its own index and the
   // winner is adopted. `lateAssembly.opts` holds the pass-1 index by reference,
   // so leaving it in place would re-enter the live one on every scan.
   let scanIndex: SymbolIndex|undefined;
+  let scanMacros: MacroIndex|undefined;
+  let scanRegions: InactiveRegionIndex|undefined;
   const run = (localForwardRefs: ReadonlyMap<string, readonly string[]>|undefined,
                tolerant: boolean) => {
     scans++;
     scanIndex = symbolIndex && new SymbolIndex();
-    const opts = symbolIndex ? {...baseOpts, symbolIndex: scanIndex} : baseOpts;
-    const asm = new Assembler(Cpu.P02, opts);
-    asm.linkEnv = linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant};
-    asm.globalKinds = lateAssembly.globalKinds;
-    asm.autoImportNames = autoImportNames;
-    let i = 0;
-    const source: Tokens.Source = {next: () => i < stream.length ? stream[i++] : undefined};
-    asm.tokens(source, signal);
-    return asm;
+    scanMacros = macroIndex && new MacroIndex();
+    scanRegions = inactiveRegionIndex && new InactiveRegionIndex();
+    const opts = replayOpts(symbolIndex ? {...baseOpts, symbolIndex: scanIndex} : baseOpts);
+    const asm = new Assembler(Cpu.P02, opts, {
+      linkEnv: linkEnv && {...linkEnv, localForwardRefs, tolerateUnresolvedIf: tolerant},
+      globalKinds: lateAssembly.globalKinds,
+      autoImportNames,
+    });
+    const scanned = assembleInput(
+        asm, input, {defines, macroIndex: scanMacros, inactiveRegionIndex: scanRegions},
+        callbacks, undefined, signal);
+    return {asm, scanned};
   };
 
   let asm: Assembler;
   // Each scan should resolve at least one conditional so we run it multiple times to
   // resolve each of the conditionals until its stable
-  let replayed: Module|undefined;
+  let replayed: Module;
   if (lateAssembly.condQueries.length) {
     let known: ReadonlyMap<string, readonly string[]> = new Map();
     const everQueried = new Set<string>();
     for (let iter = 0; ; iter++) {
-      const scan = run(known, true);
-      const scanned = scan.module();
+      const {asm: scan, scanned} = run(known, true);
       const next = scan.collectLocalSegments();
       for (const name of scan.localRefQueries)
         everQueried.add(name);
@@ -237,7 +385,7 @@ export function replayModule(
         } else {
           // If the segments haven't changed but we are still processing unresolvable
           // conditionals, then lets get it to error out with this pass.
-          asm = run(next, false);
+          ({asm, scanned: replayed} = run(next, false));
         }
         break;
       }
@@ -248,12 +396,16 @@ export function replayModule(
     }
   } else {
     // Regular case for running the late pass with no special conditionals
-    asm = run(undefined, false);
+    ({asm, scanned: replayed} = run(undefined, false));
   }
 
-  replayed ??= asm.module();
   replayed.name = module.name;
+  // Staged at pass 1 and link-independent; replay runs without a stage.
+  if (module.romPatch) replayed.romPatch = module.romPatch;
+  if (module.jsPost) replayed.jsPost = module.jsPost;
   if (symbolIndex && scanIndex) symbolIndex.adopt(scanIndex);
+  if (macroIndex && scanMacros) macroIndex.adopt(scanMacros);
+  if (inactiveRegionIndex && scanRegions) inactiveRegionIndex.adopt(scanRegions);
   const messages = asm.getMessages();
   const hasErrors = messages.some(m => m.level === 'error');
   return {success: !hasErrors, module: replayed, messages: [...messages], scans};

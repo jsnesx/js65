@@ -1,12 +1,16 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {describe, it, expect} from 'bun:test';
+import {describe, it, expect, beforeAll, afterAll} from 'bun:test';
 import {Assembler} from '../src/assembler.ts';
 import {Cpu} from '../src/cpu.ts';
-import {buildLinkTimeEnv, mergeModuleSegments, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
-import {assemble as libAssemble, type AssemblyInput} from '../src/libassembler.ts';
+import {setJsEngine} from '../src/driver/js/engine.ts';
+import {functionEngine} from '../src/driver/js/function.ts';
+import {buildLinkTimeEnv, mergeModuleSegments, replayModules, type LinkTimeEnv} from '../src/assemblypass.ts';
+import {assemble as libAssemble, deserializeObjectFile, serializeObjectFile,
+        type AssemblyInput, type FileCallbacks} from '../src/libassembler.ts';
 import {SymbolIndex} from '../src/lspindex.ts';
+import {newSourceLog} from '../src/tokenstream.ts';
 import type {Module, Segment, Symbol} from '../src/module.ts';
 
 function chunk(segments: string[]) {
@@ -849,4 +853,151 @@ PICK
     expect(bytes(result.modules[0], 'CODE')).toEqual([2, 3]);
     expect(bytes(replay.modules[0], 'CODE')).toEqual([1, 3]);
   });
+});
+
+describe('replay from recorded source', function() {
+  const SEGMENTS = `
+.segment "CODE" :bank $00 :size $2000 :mem $8000 :off $0000
+.segment "BANK1" :bank $01 :size $2000 :mem $a000 :off $2000
+.segment "BANK1"
+Target:
+  rts
+`;
+  const zpEnv: LinkTimeEnv =
+      {addrSize: () => 1, bank: () => undefined, segmentBank: () => undefined};
+  const files: Record<string, string> = {'inc.s': '.byte $42\n'};
+  const callbacks: FileCallbacks = {
+    resolveText: (bases, f) =>
+        f in files ? {baseIndex: bases.length - 1, content: files[f]} : undefined,
+    resolveBinary: () => undefined,
+  };
+
+  function build(body: string) {
+    const result = libAssemble([{type: 'source', name: 'main.s', code: SEGMENTS + body}],
+                               {lineContinuations: true}, callbacks);
+    const env = buildLinkTimeEnv(result.modules, mergeModuleSegments(result.modules));
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    return {result, replay};
+  }
+
+  const bytes = (mod: Module, seg: string) =>
+      [...(mod.chunks ?? []).filter(c => c.segments.includes(seg))
+          .flatMap(c => [...c.data])];
+
+  it('keeps the programmatic bytes of an actions input', function() {
+    const result = libAssemble([{type: 'actions', name: 'acts', actions: [
+      {action: 'byte', bytes: [0x11]},
+      {action: 'code', code: '.import foo\nlda foo\n'},
+      {action: 'byte', bytes: [0x22]},
+    ]}]);
+    expect(result.success).toBe(true);
+    expect([...result.modules[0].chunks![0].data]).toEqual([0x11, 0xad, 0xff, 0xff, 0x22]);
+    const replay = replayModules(result.modules, result.moduleMessages, zpEnv);
+    expect(replay.success).toBe(true);
+    expect([...replay.modules[0].chunks![0].data]).toEqual([0x11, 0xa5, 0xff, 0x22]);
+  });
+
+  it('includes a file guarded by a deferred .if', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .include "inc.s"
+.endif
+`);
+    expect(result.success).toBe(true);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([]);
+    expect(replay.success).toBe(true);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([0x42]);
+  });
+
+  it('names a file the replay needs that pass 1 did not record', function() {
+    const {result} = build(`
+.segment "CODE"
+.if .bank(Target) <> .bank(*)
+  .include "inc.s"
+.endif
+`);
+    result.modules[0].lateAssembly!.files = newSourceLog();
+    const env = buildLinkTimeEnv(result.modules, mergeModuleSegments(result.modules));
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(replay.success).toBe(false);
+    expect(replay.messages.map(m => m.message))
+        .toContain('replay needs inc.s, which the first pass did not load');
+  });
+
+  it('only assigns in the arm a deferred .if takes', function() {
+    const {result, replay} = build(`
+.segment "CODE"
+x .set 1
+.if .bank(Target) <> .bank(*)
+  x .set 2
+.else
+  x .set 3
+.endif
+.byte x
+`);
+    expect(bytes(result.modules[0], 'CODE')).toEqual([3]);
+    expect(replay.success).toBe(true);
+    expect(bytes(replay.modules[0], 'CODE')).toEqual([2]);
+  });
+
+  it('starts from the features in effect before the first line', function() {
+    const result = libAssemble([{type: 'source', name: 'main.s',
+                                 code: '.import foo\nlda /* c */ foo\n.feature c_comments -\n'}],
+                               {cComments: true});
+    expect(result.success).toBe(true);
+    const replay = replayModules(result.modules, result.moduleMessages, zpEnv);
+    expect(replay.messages).toEqual([]);
+    expect([...replay.modules[0].chunks![0].data]).toEqual([0xa5, 0xff]);
+  });
+
+  it('replays a module read back from a .o', function() {
+    const result = libAssemble([{type: 'source', name: 'main.s',
+                                 code: '.import foo\nlda foo ; js65-lint-disable-line x\n'}]);
+    expect(result.success).toBe(true);
+    const m = deserializeObjectFile(serializeObjectFile(result.modules[0]));
+    const replay = replayModules([m], [[]], zpEnv);
+    expect(replay.messages).toEqual([]);
+    expect([...replay.modules[0].chunks![0].data]).toEqual([0xa5, 0xff]);
+  });
+});
+
+describe('replay keeps staged JavaScript output', function() {
+  beforeAll(() => setJsEngine(functionEngine));
+  afterAll(() => setJsEngine(undefined));
+
+  const zpEnv: LinkTimeEnv =
+      {addrSize: () => 1, bank: () => undefined, segmentBank: () => undefined};
+  const DEFERRED = '.import foo\n.if .defined(foo) && foo < $100\n  .byte 1\n.endif\n';
+
+  function build(js: string, fromObject: boolean) {
+    const result = libAssemble([{type: 'source', name: 'main.s', code: js + DEFERRED}],
+                               {allowJavascript: true, baseRom: new Uint8Array(2)});
+    expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
+    const original = fromObject ?
+        deserializeObjectFile(serializeObjectFile(result.modules[0])) : result.modules[0];
+    expect(original.lateAssembly?.condQueries.length).toBeGreaterThan(0);
+    const replay = replayModules([original], [[]], zpEnv);
+    expect(replay.replayed).toEqual([0]);
+    return {original, replayed: replay.modules[0]};
+  }
+
+  const ROM_PATCH = '.jsbegin\nbaserom[1] = 0x22;\n.jsend\n';
+  const JS_POST = '.jspostbegin\nrom[0] = 1;\n.jspostend\n';
+
+  for (const fromObject of [false, true]) {
+    const label = fromObject ? ' read back from a .o' : '';
+
+    it(`keeps romPatch${label}`, function() {
+      const {original, replayed} = build(ROM_PATCH, fromObject);
+      expect(original.romPatch).toBeDefined();
+      expect(replayed.romPatch).toEqual(original.romPatch!);
+    });
+
+    it(`keeps jsPost${label}`, function() {
+      const {original, replayed} = build(JS_POST, fromObject);
+      expect(original.jsPost).toBeDefined();
+      expect(replayed.jsPost).toEqual(original.jsPost!);
+    });
+  }
 });

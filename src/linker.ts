@@ -8,7 +8,7 @@ import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import { type CfgSymbols, type LinkerConfig, configSymbols, linkerDefines, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
 import { type Assertion, type Chunk, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
-import { buildLinkTimeEnv, replayModules } from './latepass.ts';
+import { buildLinkTimeEnv, replayModules } from './assemblypass.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';

@@ -11,11 +11,12 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblySizeQuery, JsPost, JsPostSource, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
+import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblyInput, LateAssemblySizeQuery, JsPost, JsPostSource, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
-import type { AssemblerOptions } from './options.ts';
+import type { AssemblerOptions, SymbolDefine } from './options.ts';
+import type { ResolvedFile, SourceLog } from './tokenstream.ts';
 
 /** The keys of `T` whose value is an optional boolean. */
 type BooleanKeys<T> =
@@ -364,11 +365,65 @@ function validateLateAssembly(v: unknown, path: string): LateAssembly {
   const condQueries = reqArray(v.condQueries, `${path}.condQueries`)
     .map((q, i) => validateLateAssemblyCondQuery(q, `${path}.condQueries[${i}]`));
   const globalKinds = validateGlobalKinds(v.globalKinds, `${path}.globalKinds`);
-  const stream = reqArray(v.stream, `${path}.stream`).map((line, i) =>
-    reqArray(line, `${path}.stream[${i}]`)
-      .map((t, j) => validateToken(t, `${path}.stream[${i}][${j}]`)));
   const opts = validateAssemblerOptions(v.opts, `${path}.opts`);
-  return { sizeQueries, condQueries, globalKinds, stream, opts };
+  const out: LateAssembly = { sizeQueries, condQueries, globalKinds, opts };
+  if (v.input !== undefined) out.input = validateLateAssemblyInput(v.input, `${path}.input`);
+  if (v.files !== undefined) out.files = validateSourceLog(v.files, `${path}.files`);
+  if (v.defines !== undefined) out.defines = validateDefines(v.defines, `${path}.defines`);
+  return out;
+}
+
+function validateLateAssemblyInput(v: unknown, path: string): LateAssemblyInput {
+  const input = validateInput(v, path);
+  if (input.type === 'module') fail(`${path}.type`, 'expected source or actions');
+  if (input.name === undefined) fail(`${path}.name`, 'expected string');
+  return {...input, name: input.name};
+}
+
+function validateResolvedFile<T>(v: unknown, path: string,
+                                 content: (c: unknown, path: string) => T): ResolvedFile<T> {
+  if (!isObject(v)) fail(path, 'expected object');
+  return {
+    baseIndex: reqOffset(v.baseIndex, `${path}.baseIndex`),
+    content: content(v.content, `${path}.content`),
+  };
+}
+
+/** Maps are serialized as `[key, value]` pairs. */
+function validateFileMap<T>(v: unknown, path: string,
+                            content: (c: unknown, path: string) => T): Map<string, ResolvedFile<T>> {
+  return new Map(reqArray(v, path).map((entry, i) => {
+    const pair = reqArray(entry, `${path}[${i}]`);
+    if (pair.length !== 2) fail(`${path}[${i}]`, 'expected [key, file]');
+    return [reqString(pair[0], `${path}[${i}][0]`),
+            validateResolvedFile(pair[1], `${path}[${i}][1]`, content)];
+  }));
+}
+
+function reqBase64(v: unknown, path: string): Uint8Array {
+  if (typeof v !== 'string') fail(path, 'expected base64 string');
+  try {
+    return new Base64().decode(v);
+  } catch {
+    fail(path, 'invalid base64');
+  }
+}
+
+function validateSourceLog(v: unknown, path: string): SourceLog {
+  if (!isObject(v)) fail(path, 'expected object');
+  return {
+    text: validateFileMap(v.text, `${path}.text`, reqString),
+    binary: validateFileMap(v.binary, `${path}.binary`, reqBase64),
+  };
+}
+
+function validateDefines(v: unknown, path: string): SymbolDefine[] {
+  return reqArray(v, path).map((d, i) => {
+    const p = `${path}[${i}]`;
+    if (!isObject(d)) fail(p, 'expected object');
+    return {name: reqString(d.name, `${p}.name`),
+            value: reqString(d.value, `${p}.value`)};
+  });
 }
 
 function reqOffset(v: unknown, path: string): number {
@@ -693,14 +748,7 @@ function validateOptions(v: unknown, path: string): Js65Options {
     out.includePaths = reqArray(v.includePaths, `${path}.includePaths`)
       .map((s, i) => reqString(s, `${path}.includePaths[${i}]`));
   }
-  if (v.defines !== undefined) {
-    out.defines = reqArray(v.defines, `${path}.defines`).map((d, i) => {
-      const p = `${path}.defines[${i}]`;
-      if (!isObject(d)) fail(p, 'expected object');
-      return {name: reqString(d.name, `${p}.name`),
-              value: reqString(d.value, `${p}.value`)};
-    });
-  }
+  if (v.defines !== undefined) out.defines = validateDefines(v.defines, `${path}.defines`);
   if (v.features !== undefined) {
     // The names themselves are checked by the assembler, which is where
     // `.feature` validates them too.

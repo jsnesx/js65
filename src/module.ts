@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { Expr } from './expr.ts';
-import type { SourceInfo, Token } from './token.ts';
-import type { AssemblerOptions } from './options.ts';
+import type { SourceInfo } from './token.ts';
+import type { AssemblerOptions, SymbolDefine } from './options.ts';
+import type { AssemblyAction } from './libassembler.ts';
+import type { SourceLog } from './tokenstream.ts';
 
 
 // export interface Substitution {
@@ -203,7 +205,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 4;
+export const MODULE_FORMAT_VERSION = 5;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {
@@ -223,14 +225,23 @@ export interface AutoImport {
   source?: SourceInfo;
 }
 
+/** The input a module was assembled from. `source` code is post-`jsPreprocess`. */
+export type LateAssemblyInput =
+  | { type: 'source', code: string, name: string }
+  | { type: 'actions', actions: AssemblyAction[], name: string };
+
 /** Everything needed to re-assemble a module once the linker runs the late pass. */
 export interface LateAssembly {
   sizeQueries: LateAssemblySizeQuery[];
   condQueries: LateAssemblyCondQuery[];
   /** Records whether global resolved to import or export for the late pass */
   globalKinds: Record<string, 'import'|'export'>;
-  stream: Token[][];
   opts: AssemblerOptions;
+  input?: LateAssemblyInput;
+  /** Every `.include`/`.incbin` the first pass loaded. */
+  files?: SourceLog;
+  /** `-D` defines applied before the input. */
+  defines?: SymbolDefine[];
 }
 
 /** One contiguous run of bytes a JS block wrote into the base ROM. */

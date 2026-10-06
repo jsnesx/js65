@@ -81,6 +81,20 @@ export class SourceContents {
   data: Map<string, string> = new Map<string, string>();
 }
 
+/** Every file a module loaded, so the late pass can re-run it from source. */
+export interface SourceLog {
+  text: Map<string, ResolvedFile<string>>;
+  binary: Map<string, ResolvedFile<Uint8Array>>;
+}
+
+export function newSourceLog(): SourceLog {
+  return {text: new Map(), binary: new Map()};
+}
+
+export function sourceLogKey(bases: readonly string[], filename: string): string {
+  return bases.join('\0') + '\0' + filename;
+}
+
 export class TokenStream implements Tokens.Source {
   private stack: Frame[] = [];
 
@@ -89,7 +103,8 @@ export class TokenStream implements Tokens.Source {
     readonly resolveFileBinary?: ResolveFileBinaryCallback,
     readonly opts?: Options,
     readonly sourceContents?: SourceContents,
-    readonly errorCollector?: ErrorCollector) {}
+    readonly errorCollector?: ErrorCollector,
+    readonly sourceLog?: SourceLog) {}
 
   /** Directory the frame currently on top should resolve includes against. */
   private currentDir(): string | undefined {
@@ -100,9 +115,10 @@ export class TokenStream implements Tokens.Source {
   // frontend that finds nothing returns undefined
   loadFile<T>(path: string, bases: string[],
              resolve: (bases: readonly string[], filename: string) => ResolvedFile<T> | undefined,
-             at?: Token): {content: T, base: string} {
+             at?: Token, log?: Map<string, ResolvedFile<T>>): {content: T, base: string} {
     const found = resolve(bases, path);
     if (found) {
+      log?.set(sourceLogKey(bases, path), found);
       const base = bases[found.baseIndex];
       // A frontend that reports a base it wasn't offered is broken; say so here rather
       // than letting an undefined leak into the resolved path.
@@ -152,7 +168,7 @@ export class TokenStream implements Tokens.Source {
     }
     // TODO - options?
     const {content: code, base} = this.loadFile<string>(
-        path, this.includeSearch(), this.resolveFile, at);
+        path, this.includeSearch(), this.resolveFile, at, this.sourceLog?.text);
     // Dont use the name of the file for the include, use the resolved
     // path so that two "header.inc" files in different dirs have the correct path.
     const resolved = joinDir(base, path);
@@ -175,14 +191,17 @@ export class TokenStream implements Tokens.Source {
     if (!this.resolveFileBinary) {
       Tokens.fail(`Cannot read binary file, no reader available: ${path}`, at);
     }
+    const bases = this.binIncludeSearch();
     const loaded = this.loadFile<Uint8Array|string>(
-        path, this.binIncludeSearch(), this.resolveFileBinary, at);
+        path, bases, this.resolveFileBinary, at);
     // The callback hands back either base64 or bytes, and the caller may slice
     // it, so decode to bytes, slice, then re-encode.
     // TODO this is a little jank, but we base64 encode the binary file for now
     // so it can be loaded faster without parsing later.
     const bytes = typeof loaded.content === 'string' ?
         new Base64().decode(loaded.content) : loaded.content;
+    this.sourceLog?.binary.set(sourceLogKey(bases, path),
+                               {baseIndex: bases.indexOf(loaded.base), content: bytes});
     const end = length !== undefined ? offset + length : undefined;
     return new Base64().encode(bytes.slice(offset, end));
   }

@@ -17,14 +17,12 @@
  * crowded, but you have free reign to do what you need.
  */
 
-import { runActions, type CodeRunner } from './actions.ts';
+import { assembleInput, type InputSetup } from './assemblypass.ts';
 import { Assembler, type RefExtractor } from './assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { diffRom, jsPostprocess, jsPreprocess } from './jspreprocessor.ts';
 import { Linker, type Export as LinkExport } from './linker.ts';
-import { Preprocessor } from './preprocessor.ts';
-import { Tokenizer } from './tokenizer.ts';
 import { SparseByteArray } from './util.ts';
 import { applyFeatures,
          JsActionTable,
@@ -33,9 +31,8 @@ import { applyFeatures,
          type SymbolDefine,
          type TokenizerOptions } from './options.ts';
 import { LintPragmas } from './lint.ts';
-import * as Tokens from './token.ts';
-import { TokenStream, SourceContents, type ResolvedFile } from './tokenstream.ts';
-import { MODULE_FORMAT_VERSION, type Module, type Segment } from "./module.ts";
+import { SourceContents, type ResolvedFile } from './tokenstream.ts';
+import { MODULE_FORMAT_VERSION, type LateAssemblyInput, type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest, staleModuleVersion } from "./validate_modules.ts";
 import type { Expr } from './expr.ts';
 import { ErrorCollector, SourceError, type AssemblerMessage } from './error.ts';
@@ -288,27 +285,6 @@ export interface AssembleResult {
   moduleMessages: AssemblerMessage[][];
 }
 
-function applyDefines(asm: Assembler, pre: Preprocessor,
-                      defines: SymbolDefine[] | undefined,
-                      opts: TokenizerOptions) {
-  for (const {name, value} of defines ?? []) {
-    const toks = new Tokenizer(value, '<command line>', opts).next() ?? [];
-    // Drop the trailing EOL the tokenizer appends so a lone number is length 1.
-    const body = toks.length && Tokens.eq(toks[toks.length - 1], Tokens.EOL)
-        ? toks.slice(0, -1) : toks;
-    if (body.length === 1 && body[0].token === 'num') {
-      asm.commandLineSet(name, body[0].num);
-      continue;
-    }
-    if (!body.length) {
-      // `-D FOO=` with an empty value expands to nothing like CPP would do
-      pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}]);
-      continue;
-    }
-    pre.parseDefine([Tokens.DEFINE, {token: 'ident', str: name}, ...body]);
-  }
-}
-
 /**
  * Assembles source files, pre-compiled modules, and/or action lists into
  * Module objects. This is like running with `-c` to compile only
@@ -368,10 +344,22 @@ export function assemble(
    * Set up the options so that the same TokenizerOptions object is passed to all preprocessor instances
    * This is needed to keep midmodule `.feature` changes rolling down through `.include`d files
    */
-  function moduleOpts(moduleName: string): {opts: TokenizerOptions, asmOpts: AsmOptions} {
-    const opts = {...baseOpts};
-    return {opts, asmOpts: {...baseAsmOpts, moduleName, tokenizerOptions: opts}};
+  function moduleOpts(moduleName: string): AsmOptions {
+    return {...baseAsmOpts, moduleName, tokenizerOptions: {...baseOpts}};
   }
+  const setup: InputSetup = {
+    defines: options?.defines,
+    macroIndex: options?.macroIndex,
+    inactiveRegionIndex: options?.inactiveRegionIndex,
+    stage: (code, name) => jsPreprocess(code, name, {
+      jsActions,
+      allowJavascript: options?.allowJavascript,
+      callbacks,
+      includePaths: options?.includePaths,
+      binIncludePaths: options?.binIncludePaths,
+      baseRom: options?.baseRom,
+    }),
+  };
 
   // Reference to the currently processing assembler. If the current file
   // errors out so horribly that it hits the outer try block, then we'd
@@ -392,86 +380,12 @@ export function assemble(
         continue;
       }
 
-      if (input.type === 'actions') {
-        let module_name = input.name ?? `module_${i}`;
-        const {opts, asmOpts} = moduleOpts(module_name);
-        const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
-        const original_module_name = module_name;
-
-        // For code actions, we need to tokenize and process through the full pipeline
-        const runCode: CodeRunner = (asm, code, name) => {
-          const toks = new TokenStream(
-            callbacks?.resolveText,
-            callbacks?.resolveBinary,
-            opts,
-            sourceContents,
-            asm.errorCollector
-          );
-          // Use the first name provided through a code action as the outer module name
-          if (module_name === original_module_name && name) {
-            module_name = name;
-          }
-          const tokenizer = new Tokenizer(code, module_name, opts, sourceContents, asm.errorCollector);
-          toks.enter(tokenizer);
-          const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
-                                       options?.macroIndex,
-                                       options?.inactiveRegionIndex);
-          applyDefines(asm, pre, options?.defines, opts);
-          asm.tokens(pre, signal);
-        };
-
-        runActions(asm, input.actions, runCode);
-
-        const module = asm.module();
-        module.name = module_name;
-        modules.push(module);
-        moduleMessages.push([...asm.getMessages()]);
-        allMessages.push(...asm.getMessages());
-        currentAssembler = undefined;
-        continue;
-      }
-
-      // Process source code
-      const {opts, asmOpts} = moduleOpts(input.name);
-      const asm = currentAssembler = new Assembler(Cpu.P02, asmOpts);
-      const toks = new TokenStream(
-        callbacks?.resolveText,
-        callbacks?.resolveBinary,
-        opts,
-        sourceContents,
-        asm.errorCollector
-      );
-
-      const staged = jsPreprocess(input.code, input.name, {
-        jsActions,
-        allowJavascript: options?.allowJavascript,
-        callbacks,
-        includePaths: options?.includePaths,
-        binIncludePaths: options?.binIncludePaths,
-        baseRom: options?.baseRom,
-      });
-
-      // Tokenize and assemble source code
-      const tokenizer = new Tokenizer(staged.code, input.name, opts, sourceContents, asm.errorCollector);
-      // The tokenizer wiped out any of the .js* directives
-      // but for the dbg info later, we want to put it back
-      if (staged.usedJavascript) sourceContents?.data.set(input.name, input.code);
-      toks.enter(tokenizer);
-      const pre = new Preprocessor(toks, asm, undefined, asm.errorCollector,
-                                   options?.macroIndex,
-                                   options?.inactiveRegionIndex);
-      applyDefines(asm, pre, options?.defines, opts);
-      asm.tokens(pre, signal);
-
-      const module = asm.module();
-      module.name = input.name;
-      const romPatch = staged.romPatch?.();
-      if (romPatch) module.romPatch = romPatch;
-      if (staged.jsPost) module.jsPost = staged.jsPost;
+      const named: LateAssemblyInput = input.type === 'actions' ?
+          {type: 'actions', actions: input.actions, name: input.name ?? `module_${i}`} : input;
+      const asm = currentAssembler = new Assembler(Cpu.P02, moduleOpts(named.name));
+      const module = assembleInput(asm, named, setup, callbacks, sourceContents, signal);
       modules.push(module);
       moduleMessages.push([...asm.getMessages()]);
-
-      // Collect messages from this assembler
       allMessages.push(...asm.getMessages());
       currentAssembler = undefined;
     }
@@ -684,7 +598,7 @@ function messageFromException(err: unknown): AssemblerMessage {
 function serializeModule(m: Module, keepDebugInfo = true): string {
   const base64 = new Base64();
   return JSON.stringify({...m, version: MODULE_FORMAT_VERSION}, (k, v) => {
-    if (k === 'data' && v instanceof Uint8Array) {
+    if ((k === 'data' || k === 'content') && v instanceof Uint8Array) {
       return base64.encode(v);
     }
     if (!keepDebugInfo && k === 'source') {

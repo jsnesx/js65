@@ -269,11 +269,35 @@ start:
     expect(asm.success).toBe(true);
     const m = asm.modules[0];
     expect(m.lateAssembly?.sizeQueries.length).toBe(1);
-    expect(m.lateAssembly?.stream.length).toBeGreaterThan(0);
+    expect(m.lateAssembly?.input?.type).toBe('source');
 
     const roundTripped = await deserializeObjectFile(await serializeObjectFile(m));
     expect(roundTripped.lateAssembly?.sizeQueries).toEqual(m.lateAssembly?.sizeQueries);
-    expect(roundTripped.lateAssembly?.stream).toEqual(m.lateAssembly?.stream);
+    expect(roundTripped.lateAssembly?.input).toEqual(m.lateAssembly?.input);
+  });
+
+  it('round-trips the recorded includes, binaries and defines through a .o', async () => {
+    const files: Record<string, string | Uint8Array> = {
+      'inc.s': '.byte 1\n',
+      'data.bin': new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+    };
+    const read = <T,>(bases: readonly string[], f: string) =>
+      f in files ? { baseIndex: bases.length - 1, content: files[f] as T } : undefined;
+    const source = '.import foo\nlda foo\n.include "inc.s"\n.incbin "data.bin", 1, 2\n';
+    const asm = assemble([{ type: 'source', code: source, name: 't.s' }],
+                         { defines: [{ name: 'X', value: '3' }] },
+                         { resolveText: read<string>, resolveBinary: read<Uint8Array> });
+    expect(asm.success).toBe(true);
+    const late = asm.modules[0].lateAssembly!;
+    expect([...late.files!.text.values()].map(f => f.content)).toEqual(['.byte 1\n']);
+    // The whole file is kept, not just the slice `.incbin` asked for.
+    expect([...late.files!.binary.values()].map(f => Array.from(f.content)))
+      .toEqual([[0xde, 0xad, 0xbe, 0xef]]);
+    expect(late.defines).toEqual([{ name: 'X', value: '3' }]);
+
+    const back = (await deserializeObjectFile(await serializeObjectFile(asm.modules[0]))).lateAssembly!;
+    expect(back.files).toEqual(late.files);
+    expect(back.defines).toEqual(late.defines);
   });
 
   it('a fully .importzp-annotated module carries no lateAssembly block through a .o', async () => {
@@ -321,7 +345,7 @@ start:
         sizeQueries: [{ name: 'foo', guess: 2, source: { file: 'a.s', line: 1, column: 0 } }],
         condQueries: [{ source: { file: 'a.s', line: 2, column: 0 } }],
         globalKinds: { foo: 'import' },
-        stream: [[{ token: 'ident', str: 'lda' }, { token: 'eol' }]],
+        input: { type: 'source', code: 'lda foo\n', name: 'a.s' },
         opts: { generateDebugInfo: true },
       },
     });
@@ -332,26 +356,28 @@ start:
 
   it('rejects a lateAssembly.sizeQueries guess outside 1|2', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [{ name: 'foo', guess: 3 }], condQueries: [], globalKinds: {}, stream: [], opts: {} },
+      lateAssembly: { sizeQueries: [{ name: 'foo', guess: 3 }], condQueries: [], globalKinds: {}, opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.sizeQueries[0].guess');
   });
 
-  it('rejects a malformed lateAssembly.stream token', () => {
+  it('rejects a module input as the lateAssembly.input', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [], condQueries: [], globalKinds: {}, stream: [[{ token: 'bogus' }]], opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: [], globalKinds: {}, opts: {},
+                      input: { type: 'module', module: {} } },
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('lateAssembly.stream[0][0]');
+    if (!r.ok) expect(r.error).toContain('lateAssembly.input.type');
   });
 
-  it('rejects a truncated (non-array) lateAssembly.stream', () => {
+  it('rejects a lateAssembly.files binary that is not base64', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [], condQueries: [], globalKinds: {}, stream: 'nope', opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: [], globalKinds: {}, opts: {},
+                      files: { text: [], binary: [['k', { baseIndex: 0, content: [1, 2] }]] } },
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('lateAssembly.stream');
+    if (!r.ok) expect(r.error).toContain('lateAssembly.files.binary[0][1].content');
   });
 
   it('round-trips a romPatch through a .o', () => {
@@ -406,7 +432,7 @@ start:
 
   it('rejects a truncated (non-array) lateAssembly.condQueries', () => {
     const r = parseModule({
-      lateAssembly: { sizeQueries: [], condQueries: 'nope', globalKinds: {}, stream: [], opts: {} },
+      lateAssembly: { sizeQueries: [], condQueries: 'nope', globalKinds: {}, opts: {} },
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('lateAssembly.condQueries');
@@ -469,12 +495,12 @@ describe('module format version', () => {
   it('refuses a hand-edited stale version', () => {
     const stale = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ version: 0, chunks: [] })));
     expect(() => deserializeObjectFile(stale, 'stale.o'))
-      .toThrow(/stale\.o: stale module format \(got 0, need 4\); rebuild the \.o file/);
+      .toThrow(/stale\.o: stale module format \(got 0, need 5\); rebuild the \.o file/);
   });
 
   it('treats a missing version as stale', () => {
     const noVersion = Bun.gzipSync(new TextEncoder().encode(JSON.stringify({ chunks: [] })));
     expect(() => deserializeObjectFile(noVersion, 'noversion.o'))
-      .toThrow(/noversion\.o: stale module format \(got none, need 4\); rebuild the \.o file/);
+      .toThrow(/noversion\.o: stale module format \(got none, need 5\); rebuild the \.o file/);
   });
 });

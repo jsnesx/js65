@@ -9,7 +9,7 @@ import {Assembler} from '../src/assembler.ts';
 import {FEATURE_NAMES, type TokenizerOptions} from '../src/options.ts';
 import {assemble as libAssemble, compile, deserializeObjectFile, serializeObjectFile,
         type AssemblyInput} from '../src/libassembler.ts';
-import {replayModule, replayModules, type LinkTimeEnv} from '../src/latepass.ts';
+import {replayModule, replayModules, type LinkTimeEnv} from '../src/assemblypass.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import * as util from '../src/util.ts';
@@ -49,6 +49,12 @@ function assembleModule(body: string): Module {
                                    {generateDebugInfo: false});
   if (!result.success) throw new Error(JSON.stringify(result.messages));
   return result.modules[0];
+}
+
+// The pass-1 module for a replay test, even when pass 1 reported errors.
+function pass1Module(body: string): Module {
+  return libAssemble([{type: 'source', code: body, name: 'test.s'} as AssemblyInput],
+                     {generateDebugInfo: false}).modules[0];
 }
 
 const [_a] = [util];
@@ -4427,22 +4433,6 @@ foo = $ff
       expect(lateAssembly!.condQueries.length).toBe(1);
     });
 
-    it('does not lose the skipped branch from the recorded late-assembly stream',
-        function() {
-      // `skipGuessedDeadBranch` pulls lines straight from `_tokenSource`,
-      // bypassing `tokens()`'s own loop - confirm they still land in
-      // `lateAssemblyStream` via the wrapped recording source.
-      const a = new Assembler(Cpu.P02);
-      const lines: Token[][] = [
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.endif')],
-      ];
-      a.tokens(tokenSource(lines));
-      expect((a as unknown as {lateAssemblyStream: Token[][]}).lateAssemblyStream)
-          .toEqual(lines);
-    });
-
     it('a stray `.elseif`/`.else`/`.endif` with no open `.if` fails clearly',
         function() {
       // `directive()` records via `this.fail`, which reports through the error
@@ -4472,171 +4462,159 @@ foo = $ff
       function() {
     const noEnv: LinkTimeEnv =
         {addrSize: () => undefined, bank: () => undefined, segmentBank: () => undefined};
+    // `.bank(T)` is 1 on replay, so `= 1` is true and `= 0` is false.
+    const bankOne: LinkTimeEnv =
+        {addrSize: () => undefined, bank: () => 1, segmentBank: () => undefined};
 
     it('processes the `.if` branch and skips the rest when its condition is true',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
-      const replay = replayModule(a.module(), noEnv);
+      const m = assembleModule(`.import T
+.if .bank(T) = 1
+.byte $11
+.else
+.byte $22
+.endif
+`);
+      const replay = replayModule(m, bankOne);
       expect(replay.success).toBe(true);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x11]);
     });
 
     it('falls through to `.else` when the `.if` condition is false', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
-      const replay = replayModule(a.module(), noEnv);
+      const m = assembleModule(`.import T
+.if .bank(T) = 0
+.byte $11
+.else
+.byte $22
+.endif
+`);
+      const replay = replayModule(m, bankOne);
       expect(replay.success).toBe(true);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22]);
     });
 
     it('evaluates an `.elseif` chain in turn and picks the first true branch',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.elseif'), num(1)],
-        [cs('.byte'), num(0x22)],
-        [cs('.else')],
-        [cs('.byte'), num(0x33)],
-        [cs('.endif')],
-      ]));
-      const replay = replayModule(a.module(), noEnv);
+      const m = assembleModule(`.import T
+.if .bank(T) = 0
+.byte $11
+.elseif .bank(T) = 1
+.byte $22
+.else
+.byte $33
+.endif
+`);
+      const replay = replayModule(m, bankOne);
       expect(replay.success).toBe(true);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22]);
     });
 
     it('leaves nothing live when every branch is false and there is no `.else`',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.elseif'), num(0)],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
-      const replay = replayModule(a.module(), noEnv);
+      const m = assembleModule(`.import T
+.if .bank(T) = 0
+.byte $11
+.elseif .bank(T) = 2
+.byte $22
+.endif
+`);
+      const replay = replayModule(m, bankOne);
       expect(replay.success).toBe(true);
       expect(strip(replay.module).chunks).toEqual([]);
     });
 
     it('resolves a nested `.if` inside a live branch recursively', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [cs('.if'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-        [cs('.byte'), num(0x33)],
-        [cs('.endif')],
-      ]));
-      const replay = replayModule(a.module(), noEnv);
+      const m = assembleModule(`.import T
+.if .bank(T) = 1
+.if .bank(T) = 0
+.byte $11
+.else
+.byte $22
+.endif
+.byte $33
+.endif
+`);
+      const replay = replayModule(m, bankOne);
       expect(replay.success).toBe(true);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22, 0x33]);
     });
 
     it('resolves `.bank(import)` via linkEnv even though imports normally only ' +
         'settle at closeScopes', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Target')],
-        [cs('.if'), cs('.bankbyte'), LP, ident('Target'), RP, cs('<>'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
+      const m = assembleModule(`.import Target
+.if .bankbyte(Target) <> 0
+.byte $11
+.else
+.byte $22
+.endif
+`);
       const diffBank: LinkTimeEnv =
           {addrSize: () => undefined, bank: () => 4, segmentBank: () => undefined};
-      const replay = replayModule(a.module(), diffBank);
+      const replay = replayModule(m, diffBank);
       expect(replay.success).toBe(true);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x11]);
     });
 
     it('resolves `.bank(localLabel)` via linkEnv, without an export', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.segment'), str('BANK1')],
-        [ident('localTarget'), COLON],
-        [cs('.segment'), str('CODE')],
-        [cs('.byte'), num(0x99)], // materialize a CODE chunk before `.if`
-        [cs('.if'), cs('.bankbyte'), LP, ident('localTarget'), RP, cs('<>'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
+      const m = assembleModule(`.segment "BANK1"
+localTarget:
+.segment "CODE"
+.byte $99 ; materialize a CODE chunk before .if
+.if .bankbyte(localTarget) <> 0
+.byte $11
+.else
+.byte $22
+.endif
+`);
       const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
                                  segmentBank: segs => segs.includes('BANK1') ? 4 : 0};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       expect(Array.from(strip(replay.module).chunks![1].data)).toEqual([0x99, 0x11]);
     });
 
     it('raises Expected a constant at the chain\'s `.if` when the condition still ' +
         'cannot resolve on replay', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Ghost')],
-        [cs('.if'), cs('.bankbyte'), LP, ident('Ghost'), RP, cs('<>'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.endif')],
-      ]));
-      const replay = replayModule(a.module(), noEnv);
+      const m = assembleModule(`.import Ghost
+.if .bankbyte(Ghost) <> 0
+.byte $11
+.endif
+`);
+      const replay = replayModule(m, noEnv);
       expect(replay.success).toBe(false);
       expect(replay.messages.map(m => m.message)).toEqual(['Expected a constant']);
     });
 
     it('needs a single scan when no `.if` queries a local forward reference',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Target')],
-        [cs('.if'), cs('.bankbyte'), LP, ident('Target'), RP, cs('<>'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
+      const m = assembleModule(`.import Target
+.if .bankbyte(Target) <> 0
+.byte $11
+.else
+.byte $22
+.endif
+`);
       const env: LinkTimeEnv =
           {addrSize: () => undefined, bank: () => 4, segmentBank: () => undefined};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       expect(replay.scans).toBe(1);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x11]);
     });
 
     it('needs two scans for a single-hop local forward reference', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.segment'), str('CODE')],
-        [cs('.if'), cs('.bankbyte'), LP, ident('forwardLabel'), RP, cs('<>'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-        [ident('forwardLabel'), COLON],
-        [cs('.byte'), num(0x33)],
-      ]));
+      const m = assembleModule(`.segment "CODE"
+.if .bankbyte(forwardLabel) <> 0
+.byte $11
+.else
+.byte $22
+.endif
+forwardLabel:
+.byte $33
+`);
       const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
                                  segmentBank: segs => segs.includes('BANK1') ? 1 : 0};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       expect(replay.scans).toBe(2);
       expect(Array.from(strip(replay.module).chunks![0].data)).toEqual([0x22, 0x33]);
@@ -4644,30 +4622,28 @@ foo = $ff
 
     it('follows a chain of forward references without cutting it short',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.segment'), str('CODE')],
-        [cs('.byte'), num(0x99)], // materialize a CODE chunk before `.if`
-        // C's segment depends on B's bank, and B's on A's, so each scan
-        // settles exactly one more hop of the chain.
-        [cs('.if'), cs('.bankbyte'), LP, ident('B'), RP, cs('<>'), num(0)],
-        [cs('.segment'), str('BANK1')],
-        [cs('.endif')],
-        [ident('C'), COLON],
-        [cs('.byte'), num(0x03)],
-        [cs('.segment'), str('CODE')],
-        [cs('.if'), cs('.bankbyte'), LP, ident('A'), RP, cs('='), num(0)],
-        [cs('.segment'), str('BANK1')],
-        [cs('.endif')],
-        [ident('B'), COLON],
-        [cs('.byte'), num(0x01)],
-        [cs('.segment'), str('CODE')],
-        [ident('A'), COLON],
-        [cs('.byte'), num(0x02)],
-      ]));
+      // C's segment depends on B's bank, and B's on A's, so each scan
+      // settles exactly one more hop of the chain.
+      const m = assembleModule(`.segment "CODE"
+.byte $99 ; materialize a CODE chunk before .if
+.if .bankbyte(LabB) <> 0
+.segment "BANK1"
+.endif
+LabC:
+.byte $03
+.segment "CODE"
+.if .bankbyte(LabA) = 0
+.segment "BANK1"
+.endif
+LabB:
+.byte $01
+.segment "CODE"
+LabA:
+.byte $02
+`);
       const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
                                  segmentBank: segs => segs.includes('BANK1') ? 1 : 0};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       expect(replay.scans).toBe(3);
       const chunks = strip(replay.module).chunks!;
@@ -4684,17 +4660,15 @@ foo = $ff
       function() {
     it('resolves .bankbyte(import) at the reference site, not via deferredOps',
         function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Other')],
-        [ident('lda'), ident('Other')], // forces a size query, so lateAssembly exists
-        [cs('.import'), ident('Target')],
-        [cs('.byte'), cs('.bankbyte'), LP, ident('Target'), RP],
-      ]));
+      const m = assembleModule(`.import Other
+lda Other ; forces a size query, so lateAssembly exists
+.import Target
+.byte .bankbyte(Target)
+`);
       const env: LinkTimeEnv = {addrSize: () => undefined,
                                  bank: sym => sym === 'Target' ? 4 : undefined,
                                  segmentBank: () => undefined};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       const chunk = strip(replay.module).chunks![0];
       // Only Other's unresolved address is a Substitution - Target's .bankbyte
@@ -4704,16 +4678,14 @@ foo = $ff
     });
 
     it('resolves .addrsize(import) the same way', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Other')],
-        [ident('lda'), ident('Other')],
-        [cs('.import'), ident('Target')],
-        [cs('.byte'), cs('.addrsize'), LP, ident('Target'), RP],
-      ]));
+      const m = assembleModule(`.import Other
+lda Other
+.import Target
+.byte .addrsize(Target)
+`);
       const env: LinkTimeEnv = {addrSize: sym => sym === 'Target' ? 1 : undefined,
                                  bank: () => undefined, segmentBank: () => undefined};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       const chunk = strip(replay.module).chunks![0];
       expect(chunk.subs?.length).toBe(1);
@@ -4722,32 +4694,28 @@ foo = $ff
 
     it('a genuine redeclaration (import then a real label) still errors, tolerance ' +
         'check does not swallow it', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Other')],
-        [ident('lda'), ident('Other')],
-        [cs('.import'), ident('foo')],
-        [ident('foo'), COLON],
-      ]));
+      const m = pass1Module(`.import Other
+lda Other
+.import foo
+foo:
+`);
       const noEnv: LinkTimeEnv =
           {addrSize: () => undefined, bank: () => undefined, segmentBank: () => undefined};
-      const replay = replayModule(a.module(), noEnv);
+      const replay = replayModule(m, noEnv);
       expect(replay.success).toBe(false);
       expect(replay.messages.map(m => m.message)).toEqual([`Symbol 'foo' already defined`]);
     });
 
     it('a plain .import picks up zp size from linkEnv.addrSize, not just ' +
         '.importzp/zeropageGlobals', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Other')],
-        [ident('lda'), ident('Other')],
-        [cs('.import'), ident('Target')],
-        [ident('lda'), ident('Target')],
-      ]));
+      const m = assembleModule(`.import Other
+lda Other
+.import Target
+lda Target
+`);
       const env: LinkTimeEnv = {addrSize: sym => sym === 'Target' ? 1 : undefined,
                                  bank: () => undefined, segmentBank: () => undefined};
-      const replay = replayModule(a.module(), env);
+      const replay = replayModule(m, env);
       expect(replay.success).toBe(true);
       const data = Array.from(strip(replay.module).chunks![0].data);
       expect(data.slice(-2)).toEqual([0xa5, 0xff]); // zp mode, not abs
@@ -4767,16 +4735,13 @@ foo = $ff
 
     it('a .global never locally defined gets the same eager import treatment as ' +
         '.import, in the .bank .if pattern', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.global'), ident('Target')],
-        [cs('.if'), cs('.bankbyte'), LP, ident('Target'), RP, cs('<>'), num(0)],
-        [cs('.byte'), num(0x11)],
-        [cs('.else')],
-        [cs('.byte'), num(0x22)],
-        [cs('.endif')],
-      ]));
-      const m = a.module();
+      const m = assembleModule(`.global Target
+.if .bankbyte(Target) <> 0
+.byte $11
+.else
+.byte $22
+.endif
+`);
       expect(m.lateAssembly!.globalKinds).toEqual({Target: 'import'});
       const diffBank: LinkTimeEnv =
           {addrSize: () => undefined, bank: () => 4, segmentBank: () => undefined};
@@ -4787,16 +4752,13 @@ foo = $ff
 
     it('a .global with a local definition is left for the normal forward-reference ' +
         'path, not eagerly resolved', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.import'), ident('Other')],
-        [ident('lda'), ident('Other')],
-        [cs('.segment'), str('BANK1')],
-        [cs('.global'), ident('Target')],
-        [cs('.byte'), cs('.bankbyte'), LP, ident('Target'), RP],
-        [ident('Target'), COLON],
-      ]));
-      const m = a.module();
+      const m = assembleModule(`.import Other
+lda Other
+.segment "BANK1"
+.global Target
+.byte .bankbyte(Target)
+Target:
+`);
       expect(m.lateAssembly!.globalKinds).toEqual({Target: 'export'});
       const env: LinkTimeEnv = {addrSize: () => undefined, bank: () => undefined,
                                  segmentBank: segs => segs.includes('BANK1') ? 6 : undefined};
@@ -4819,8 +4781,6 @@ foo = $ff
     });
   });
 
-  // ca65 keeps each .export/.import/.global bound to the scope it was written
-  // in, so a file-scope declaration is not satisfied by a .proc-scoped one.
   describe('scoped .export/.global declarations', function() {
     it('rejects a file-scope .export satisfied only inside a .proc', function() {
       expect(assembleErrors(`
@@ -4861,14 +4821,15 @@ a_after:
     });
   });
 
-  describe('late-assembly stream capture', function() {
-    it('carries a stream and queries for a module with an unresolved size', function() {
+  describe('late-assembly input capture', function() {
+    it('carries the input and queries for a module with an unresolved size', function() {
       const m = assembleModule('.import foo\nlda foo\n');
       expect(m.lateAssembly).toBeDefined();
       expect(m.lateAssembly!.sizeQueries.length).toBe(1);
       expect(m.lateAssembly!.sizeQueries[0].name).toBe('foo');
       expect(m.lateAssembly!.sizeQueries[0].guess).toBe(2);
-      expect(m.lateAssembly!.stream.length).toBeGreaterThan(0);
+      expect(m.lateAssembly!.input)
+          .toEqual({type: 'source', code: '.import foo\nlda foo\n', name: 'test.s'});
     });
 
     it('carries no block when every import is sized', function() {
@@ -4896,14 +4857,16 @@ a_after:
     });
   });
 
-  describe('late-assembly stream capture soundness (debug re-run)', function() {
-    it('reproduces an identical stream on a second full-pipeline run', function() {
-      const body = '.import foo\nlda foo\nrts\n';
-      const m1 = assembleModule(body);
-      const m2 = assembleModule(body);
-      expect(m1.lateAssembly!.stream.length).toBeGreaterThan(0);
-      expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
-      expect(m2.lateAssembly!.sizeQueries).toEqual(m1.lateAssembly!.sizeQueries);
+  describe('late-assembly replay from source reproduces pass 1', function() {
+    const replayed = (m: Module) => {
+      const replay = replayModule(m);
+      expect(replay.success).toBe(true);
+      return replay.module;
+    };
+
+    it('re-runs a plain size query identically', function() {
+      const m = assembleModule('.import foo\nlda foo\nrts\n');
+      expect(replayed(m).chunks).toEqual(m.chunks);
     });
 
     it('.ifref/.ifsym/.ifconst after a query-recording reference reproduce identically', function() {
@@ -4911,11 +4874,9 @@ a_after:
           '.ifref foo\n.byte 1\n.endif\n' +
           '.ifsym foo\n.byte 2\n.endif\n' +
           '.ifconst foo\n.byte 3\n.endif\n';
-      const m1 = assembleModule(body);
-      const m2 = assembleModule(body);
-      expect(m1.lateAssembly!.sizeQueries.length).toBe(1);
-      expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
-      expect(Array.from(m2.chunks![0].data)).toEqual(Array.from(m1.chunks![0].data));
+      const m = assembleModule(body);
+      expect(m.lateAssembly!.sizeQueries.length).toBe(1);
+      expect(replayed(m).chunks).toEqual(m.chunks);
     });
 
     it('.ifref/.ifsym/.ifconst ahead of the reference (unresolved width) reproduce identically', function() {
@@ -4923,10 +4884,8 @@ a_after:
           '.ifsym foo\n.byte 2\n.endif\n' +
           '.ifconst foo\n.byte 3\n.endif\n' +
           '.import foo\nlda foo\n';
-      const m1 = assembleModule(body);
-      const m2 = assembleModule(body);
-      expect(m2.lateAssembly!.stream).toEqual(m1.lateAssembly!.stream);
-      expect(Array.from(m2.chunks![0].data)).toEqual(Array.from(m1.chunks![0].data));
+      const m = assembleModule(body);
+      expect(replayed(m).chunks).toEqual(m.chunks);
     });
   });
 
@@ -5019,13 +4978,7 @@ a_after:
     });
 
     it('a module with only a deferred `.if` (no size disagreement) is still replayed', function() {
-      const a = new Assembler(Cpu.P02);
-      a.tokens(tokenSource([
-        [cs('.if'), num(1)],
-        [ident('Label1'), COLON],
-        [cs('.endif')],
-      ]));
-      const m = a.module();
+      const m = assembleModule('.if .bankbyte(Later) <> 0\n.endif\nLater:\n');
       expect(m.lateAssembly!.sizeQueries.length).toBe(0);
       expect(m.lateAssembly!.condQueries.length).toBe(1);
 
