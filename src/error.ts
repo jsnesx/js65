@@ -11,6 +11,8 @@ export interface SourceInfo {
   // Added for the LSP, so its only used in server mode for now.
   endLine?: number;
   endColumn?: number;
+  /** `.repeat` nesting depth when the token was replayed, for debug info. */
+  repeat?: number;
 }
 
 export type ErrorLevel = 'info' | 'warning' | 'error';

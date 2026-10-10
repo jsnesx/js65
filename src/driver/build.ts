@@ -42,6 +42,7 @@ export class BuildSession {
       resolveText: searchFiles((path, filename) => this.readSource(path, filename)),
       resolveBinary: searchFiles((path, filename) => this.readBinary(path, filename)),
       listDir: dir => callbacks.fsListDir(dir),
+      stat: callbacks.fsMtime && (name => callbacks.fsMtime!('', name)),
     };
   }
 

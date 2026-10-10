@@ -18,6 +18,7 @@ import type { LinkTimeEnv } from './assemblypass.ts';
 import { runActions } from './actions.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 import { createHash } from 'sha1-uint8array';
+import { DATA_ELEMENTS, DebugBuilder, arrayType } from './debugtables.ts';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
@@ -231,6 +232,12 @@ class Scope extends BaseScope {
   forwardDeclared?: boolean;
   /** This scope's own name, unset for the global and anonymous scopes. */
   name?: string;
+  /** Set for `.struct`/`.union`/`.enum` scopes, for debug info. */
+  dbgType?: 'struct'|'enum';
+  /** 1-based number of an unnamed scope, for debug info. */
+  anonId?: number;
+  /** Bytes emitted directly in this scope, not counting nested scopes. */
+  debugRuns?: mod.DebugScopeRun[];
 
   /** Find the scope prefix without the name of the label */
   qualifiedPrefix(): string {
@@ -501,6 +508,17 @@ export class Assembler {
   /** Debug labels for anonymous/temp labels that aren't in normal symbol tables. */
   private debugLabels: Array<{name: string, expr: Expr}> = [];
 
+  /** Debug tables for the `.dbg` writer, present when debug info is on. */
+  private readonly dbg?: DebugBuilder;
+  /** Element type of the data directive being assembled, for span types. */
+  private dataElement?: {size: number, type: string};
+  /** Symbols defined in this module, as opposed to references that resolved. */
+  private readonly definedSyms = new Set<Symbol>();
+  private readonly cheapSyms: Array<{name: string, sym: Symbol, parent?: Symbol}> = [];
+  /** The last non-cheap label, which owns the cheap locals after it. */
+  private lastLabel?: Symbol;
+  private anonScopeCount = 0;
+
   /** Token for reporting errors. */
   private errorToken?: Token;
 
@@ -555,9 +573,13 @@ export class Assembler {
     this.linkEnv = late?.linkEnv;
     this.globalKinds = late?.globalKinds;
     this.autoImportNames = late?.autoImportNames;
-    if (opts.collectReferences) {
+    if (opts.collectReferences || opts.generateDebugInfo) {
       this.currentScope.collectRefs = true;
       this.cheapLocals.collectRefs = true;
+    }
+    if (opts.generateDebugInfo) {
+      this.dbg = new DebugBuilder();
+      if (opts.moduleName) this.dbg.fileId(opts.moduleName);
     }
     if (opts.errorLimit != null) {
       this.errorCollector.limit = opts.errorLimit;
@@ -1372,7 +1394,142 @@ export class Assembler {
 
     const autoImports = this.autoImported.length ? this.autoImported : undefined;
 
-    return {chunks, symbols, segments, debugSymbols, lateAssembly, autoImports};
+    const debug = this.buildDebug();
+    return {chunks, symbols, segments, debugSymbols, debug, lateAssembly, autoImports};
+  }
+
+  /** Assembles the scope, symbol and line tables the `.dbg` writer reads. */
+  private buildDebug(): mod.Debug|undefined {
+    const dbg = this.dbg;
+    if (!dbg) return undefined;
+    const scopes: mod.DebugScope[] = [];
+    const syms: mod.DebugSym[] = [];
+    const scopeIds = new Map<Scope, number>();
+    const symIds = new Map<Symbol, number>();
+    const order: Scope[] = [];
+
+    const sizeOf = (expr?: Expr): number|undefined => {
+      if (!expr) return undefined;
+      try {
+        const r = this.resolve(expr);
+        return r.op === 'num' ? r.num : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const lineIds = (sources: Tokens.SourceInfo[]|undefined) =>
+        sources?.length ? sources.map(src => dbg.lineId(src)) : undefined;
+
+    // A scope's bytes include everything in the scopes nested inside it.
+    const gather = (scope: Scope, out: mod.DebugScopeRun[]) => {
+      if (scope.debugRuns) out.push(...scope.debugRuns);
+      for (const child of scope.children.values()) {
+        if (!child.forwardDeclared) gather(child, out);
+      }
+      for (const child of scope.anonymousChildren) gather(child, out);
+    };
+    const merged = (runs: mod.DebugScopeRun[]) => {
+      runs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const out: mod.DebugScopeRun[] = [];
+      for (const run of runs) {
+        const last = out[out.length - 1];
+        if (last && last[0] === run[0] && last[1] + last[2] === run[1]) {
+          last[2] += run[2];
+        } else {
+          out.push([run[0], run[1], run[2]]);
+        }
+      }
+      return out;
+    };
+    const visit = (scope: Scope, parent?: number) => {
+      const id = scopes.length;
+      scopeIds.set(scope, id);
+      order.push(scope);
+      const data = !scope.dbgType;
+      const runs = data ? merged((() => {
+        const all: mod.DebugScopeRun[] = [];
+        gather(scope, all);
+        return all;
+      })()) : [];
+      const entry: mod.DebugScope = {
+        name: scope.name ??
+            (scope.anonId ? `$anon-SCOPE-${String(scope.anonId).padStart(4, '0')}` : ''),
+        size: scope.dbgType === 'enum' ? 0 :
+            sizeOf(scope.symbols.get(SIZE_NAME)?.expr) ??
+            runs.reduce((n, r) => n + r[2], 0),
+        runs,
+      };
+      if (parent !== undefined) {
+        entry.parent = parent;
+        entry.type = scope.dbgType ?? 'scope';
+      }
+      scopes.push(entry);
+      for (const child of scope.children.values()) {
+        if (!child.forwardDeclared) visit(child, id);
+      }
+      for (const child of scope.anonymousChildren) visit(child, id);
+    };
+    visit(this.currentScope.global);
+
+    const addrSize = (name: string, sym: Symbol): mod.DebugAddrSize => {
+      const expr = sym.expr!;
+      if (expr.op === 'im') return this.zeropageGlobals.has(name) ? 'zeropage' : 'absolute';
+      if (expr.op === 'num' && !expr.meta?.rel) {
+        const n = expr.num!;
+        if (n >= 0 && n < 0x100) return 'zeropage';
+        if (n >= 0 && n < 0x10000) return 'absolute';
+        return n >= 0 && n < 0x1000000 ? 'far' : 'long';
+      }
+      return expr.meta?.zeropage || expr.meta?.size === 1 ? 'zeropage' : 'absolute';
+    };
+    const entryFor = (name: string, sym: Symbol): mod.DebugSym => {
+      const expr = sym.expr!;
+      const out: mod.DebugSym = {
+        name,
+        addrsize: addrSize(name, sym),
+        expr,
+        kind: expr.op === 'im' ? 'imp' : sym.isLabel ? 'lab' : 'equ',
+      };
+      if (sym.export != null) out.export = true;
+      const defs = lineIds(sym.def ? [sym.def] : undefined);
+      if (defs) out.defs = defs;
+      const refs = lineIds(sym.refs);
+      if (refs) out.refs = refs;
+      return out;
+    };
+
+    for (const scope of order) {
+      const scopeId = scopeIds.get(scope)!;
+      for (const [name, sym] of scope.symbols) {
+        if (isSizeOfSymbol(name) || !sym.expr || symIds.has(sym)) continue;
+        if (!this.definedSyms.has(sym) && sym.expr.op !== 'im') continue;
+        const entry = entryFor(name, sym);
+        entry.scope = scopeId;
+        const size = sizeOf(scope.symbols.get(`${name}${SIZE_SUFFIX}`)?.expr);
+        if (size) entry.size = size;
+        symIds.set(sym, syms.length);
+        syms.push(entry);
+      }
+    }
+    for (const {name, sym, parent} of this.cheapSyms) {
+      const parentId = parent && symIds.get(parent);
+      if (parentId === undefined || !sym.expr) continue;
+      const entry = entryFor(name, sym);
+      entry.parent = parentId;
+      syms.push(entry);
+    }
+    // A `.proc` names the label it hangs off.
+    for (const scope of order) {
+      if (!scope.label || !scope.parent) continue;
+      const label = scope.parent.symbols.get(scope.label);
+      const id = label && symIds.get(label);
+      if (id !== undefined) scopes[scopeIds.get(scope)!].label = id;
+    }
+
+    return {
+      files: dbg.files, lines: dbg.lines, lineSets: dbg.lineSets,
+      types: dbg.types, scopes, syms, hll: [],
+    };
   }
 
   /**
@@ -1409,6 +1566,7 @@ export class Assembler {
       return;
     }
     this._source = tokens[0].source;
+    const before = this.dbg && this.markEmitted();
     const isLabel =
         tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON) &&
         !(tokens[0].token === 'ident' && this.isMnemonic(tokens[0].str) &&
@@ -1430,6 +1588,38 @@ export class Assembler {
       this.recoverLine(err);
     } finally {
       if (!isLabel) this.closeLabelSpan();
+    }
+    if (before) this.recordRun(before);
+  }
+
+  /** Where the next byte will land, to compare against after a statement. */
+  private markEmitted(): {chunk?: Chunk, length: number, chunks: number} {
+    this.dataElement = undefined;
+    return {chunk: this._chunk, length: this._chunk?.data.length ?? 0,
+            chunks: this.chunks.length};
+  }
+
+  /** Attributes the bytes a statement emitted to its source lines. */
+  private recordRun(before: {chunk?: Chunk, length: number, chunks: number}) {
+    const chunk = this._chunk;
+    const src = this._source;
+    if (!chunk || !src) return;
+    // A chunk that already existed and was not current before is a `.popseg`.
+    if (chunk !== before.chunk && this._chunkIndex < before.chunks) return;
+    const start = chunk === before.chunk ? before.length : 0;
+    const size = chunk.data.length - start;
+    if (size <= 0) return;
+    const dbg = this.dbg!;
+    const elem = this.dataElement;
+    const type = elem && size % elem.size === 0 ?
+        dbg.typeId(arrayType(size / elem.size, elem.type)) : -1;
+    dbg.addRun(chunk, start, size, dbg.lineSet(src), type);
+    const runs = this.currentScope.debugRuns ??= [];
+    const last = runs[runs.length - 1];
+    if (last && last[0] === this._chunkIndex && last[1] + last[2] === start) {
+      last[2] += size;
+    } else {
+      runs.push([this._chunkIndex, start, size]);
     }
   }
 
@@ -1483,6 +1673,7 @@ export class Assembler {
   directive(tokens: Token[]) {
     // TODO - record line information, rewrap error messages?
     this.errorToken = tokens[0];
+    if (this.dbg) this.dataElement = DATA_ELEMENTS.get(Tokens.str(tokens[0]));
     // Conservatively end the sequence since many directives can emit bytes or change org/seg, so
     // the instructions on either side of it are no longer adjacent.
     this.linter?.endInstructionSequence();
@@ -1694,6 +1885,9 @@ export class Assembler {
       }
     }
     this.assignSymbol(ident, false, expr, token, /* isLabel= */ true);
+    if (this.dbg && !ident.startsWith('@')) {
+      this.lastLabel = this.currentScope.symbols.get(ident);
+    }
     // const symbol = this.scope.resolve(str, true);
     // if (symbol.expr) throw new Error(`Already defined: ${label}`);
     // if (!this.chunk) throw new Error(`Impossible?`);
@@ -1810,6 +2004,12 @@ export class Assembler {
 
     if (scope.collectRefs && token?.source) {
       sym.def = token.source;
+    }
+    if (this.dbg && !mut) {
+      this.definedSyms.add(sym);
+      if (isCheapLocal && isLabel) {
+        this.cheapSyms.push({name: ident, sym, parent: this.lastLabel});
+      }
     }
     this.opts.symbolIndex?.recordSymbol(sym, ident, this.opts.moduleName, kind);
 
@@ -2231,7 +2431,10 @@ export class Assembler {
 
   beginStruct(tokens: Token[], kind: 'struct'|'enum') {
     const name = this.parseOptionalIdentifier(tokens);
-    if (name != null) this.enterScope(name, 'scope', tokens[0].source);
+    if (name != null) {
+      this.enterScope(name, 'scope', tokens[0].source);
+      this.currentScope.dbgType = kind;
+    }
     this.structContext.push({kind, offset: 0, name: name ?? undefined, count: 0});
   }
 
@@ -2777,6 +2980,10 @@ export class Assembler {
 
   proc(name: string, at?: Tokens.SourceInfo) {
     this.label(name);
+    if (this.dbg && at) {
+      const label = this.currentScope.symbols.get(name);
+      if (label && !label.def) label.def = at;
+    }
     this.enterScope(name, 'proc', at);
     this.linter?.enterProc(name);
     // the size for the proc should match the scope, so give the scope the name of the label
@@ -2806,6 +3013,7 @@ export class Assembler {
     }
     const child = new Scope(this.currentScope, kind);
     child.startPc = this.pc();
+    if (this.dbg && !name) child.anonId = ++this.anonScopeCount;
     if (name) {
       child.name = name;
       this.currentScope.children.set(name, child);
@@ -2826,6 +3034,8 @@ export class Assembler {
     // Reported against the `.endproc`, which is what the fix goes in front of.
     if (kind === 'proc') this.linter?.exitProc(at);
     const scope = this.currentScope;
+    const end = at ?? this._source;
+    if (end && scope.dbgType !== 'enum') this.dbg?.lineId(end);
     if (scope.startPc && !scope.symbols.has(SIZE_NAME)) {
       this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.pc()));
     }

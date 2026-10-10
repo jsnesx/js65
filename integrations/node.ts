@@ -5,7 +5,7 @@
 
 import { Cli } from '../src/driver/cli.ts';
 import { dirname, resolve } from 'node:path';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { setGzipCodec } from '../src/driver/codec/codec.ts';
 import { nodeZlibCodec } from '../src/driver/codec/node.ts';
@@ -59,6 +59,13 @@ const cli = new Cli({
     // which is exactly the contract callers rely on.
     const entries = readdirSync(resolve(dir), { withFileTypes: true });
     return entries.map(e => e.isDirectory() ? `${e.name}/` : e.name);
+  },
+  fsMtime: (path: string, filename: string) => {
+    try {
+      return Math.floor(statSync(resolve(path, filename)).mtimeMs / 1000);
+    } catch {
+      return undefined;
+    }
   },
   exit: (code: number) => { process.exitCode = code; },
   runLsp: async (argv: string[]) => {

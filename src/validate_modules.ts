@@ -11,7 +11,7 @@
 
 import { Base64 } from './base64.ts';
 import { MODULE_FORMAT_VERSION } from './module.ts';
-import type { AssertAction, Assertion, AutoImport, Chunk, LateAssembly, LateAssemblyCondQuery, LateAssemblyInput, LateAssemblySizeQuery, JsPost, JsPostSource, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
+import type { AssertAction, Assertion, AutoImport, Chunk, Debug, DebugAddrSize, DebugCSym, DebugRun, DebugScope, DebugSym, LateAssembly, LateAssemblyCondQuery, LateAssemblyInput, LateAssemblySizeQuery, JsPost, JsPostSource, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
@@ -196,6 +196,118 @@ function validateSymbol(v: unknown, path: string): Symbol {
   return out;
 }
 
+function reqIndex(v: unknown, limit: number, path: string): number {
+  const n = reqNumber(v, path);
+  if (!Number.isInteger(n) || n < 0 || n >= limit) fail(path, `expected index below ${limit}`);
+  return n;
+}
+
+function optIndexList(v: unknown, limit: number, path: string): number[] | undefined {
+  if (v === undefined) return undefined;
+  return reqArray(v, path).map((x, i) => reqIndex(x, limit, `${path}[${i}]`));
+}
+
+const ADDR_SIZES = new Set<string>(['default', 'zeropage', 'absolute', 'far', 'long']);
+const SYM_KINDS = new Set<string>(['lab', 'equ', 'imp']);
+const SCOPE_TYPES = new Set<string>(['scope', 'struct', 'enum']);
+const CSYM_CLASSES = new Set<string>(['auto', 'reg', 'static', 'ext']);
+
+function validateDebug(v: unknown, path: string): Debug {
+  if (!isObject(v)) fail(path, 'expected object');
+  const files = reqArray(v.files, `${path}.files`).map((f, i) => {
+    const p = `${path}.files[${i}]`;
+    if (!isObject(f)) fail(p, 'expected object');
+    return {name: reqString(f.name, `${p}.name`), size: reqNumber(f.size, `${p}.size`),
+            mtime: reqNumber(f.mtime, `${p}.mtime`)};
+  });
+  const lines = reqArray(v.lines, `${path}.lines`).map((l, i) => {
+    const p = `${path}.lines[${i}]`;
+    if (!isObject(l)) fail(p, 'expected object');
+    return {file: reqIndex(l.file, files.length, `${p}.file`),
+            line: reqNumber(l.line, `${p}.line`), type: reqNumber(l.type, `${p}.type`),
+            count: reqNumber(l.count, `${p}.count`)};
+  });
+  const lineSets = reqArray(v.lineSets, `${path}.lineSets`).map((set, i) =>
+    reqArray(set, `${path}.lineSets[${i}]`)
+        .map((x, j) => reqIndex(x, lines.length, `${path}.lineSets[${i}][${j}]`)));
+  const types = reqArray(v.types, `${path}.types`)
+    .map((t, i) => reqString(t, `${path}.types[${i}]`));
+  const scopes: DebugScope[] = reqArray(v.scopes, `${path}.scopes`).map((sc, i) => {
+    const p = `${path}.scopes[${i}]`;
+    if (!isObject(sc)) fail(p, 'expected object');
+    const out: DebugScope = {
+      name: reqString(sc.name, `${p}.name`), size: reqNumber(sc.size, `${p}.size`),
+      runs: reqArray(sc.runs, `${p}.runs`).map((r, j) => {
+        const run = reqArray(r, `${p}.runs[${j}]`);
+        if (run.length !== 3) fail(`${p}.runs[${j}]`, 'expected [chunk, offset, size]');
+        return [reqNumber(run[0], `${p}.runs[${j}][0]`), reqNumber(run[1], `${p}.runs[${j}][1]`),
+                reqNumber(run[2], `${p}.runs[${j}][2]`)] as [number, number, number];
+      }),
+    };
+    if (sc.type !== undefined) {
+      const t = reqString(sc.type, `${p}.type`);
+      if (!SCOPE_TYPES.has(t)) fail(`${p}.type`, 'expected one of scope|struct|enum');
+      out.type = t as DebugScope['type'];
+    }
+    if (sc.parent !== undefined) out.parent = reqIndex(sc.parent, i, `${p}.parent`);
+    return out;
+  });
+  const syms: DebugSym[] = reqArray(v.syms, `${path}.syms`).map((sy, i) => {
+    const p = `${path}.syms[${i}]`;
+    if (!isObject(sy)) fail(p, 'expected object');
+    const addrsize = reqString(sy.addrsize, `${p}.addrsize`);
+    if (!ADDR_SIZES.has(addrsize)) fail(`${p}.addrsize`, 'unknown address size');
+    const kind = reqString(sy.kind, `${p}.kind`);
+    if (!SYM_KINDS.has(kind)) fail(`${p}.kind`, 'expected one of lab|equ|imp');
+    const out: DebugSym = {name: reqString(sy.name, `${p}.name`),
+                           addrsize: addrsize as DebugAddrSize,
+                           kind: kind as DebugSym['kind']};
+    if ((sy.scope === undefined) === (sy.parent === undefined)) {
+      fail(p, 'expected exactly one of scope or parent');
+    }
+    if (sy.scope !== undefined) out.scope = reqIndex(sy.scope, scopes.length, `${p}.scope`);
+    if (sy.parent !== undefined) out.parent = reqIndex(sy.parent, i, `${p}.parent`);
+    const size = optNumber(sy.size, `${p}.size`);
+    if (size !== undefined) out.size = size;
+    if (sy.expr !== undefined) out.expr = validateExpr(sy.expr, `${p}.expr`);
+    if (optBoolean(sy.export, `${p}.export`)) out.export = true;
+    const defs = optIndexList(sy.defs, lines.length, `${p}.defs`);
+    if (defs) out.defs = defs;
+    const refs = optIndexList(sy.refs, lines.length, `${p}.refs`);
+    if (refs) out.refs = refs;
+    return out;
+  });
+  scopes.forEach((sc, i) => {
+    const label = (v.scopes as Array<Record<string, unknown>>)[i].label;
+    if (label !== undefined) sc.label = reqIndex(label, syms.length, `${path}.scopes[${i}].label`);
+  });
+  const hll: DebugCSym[] = reqArray(v.hll, `${path}.hll`).map((c, i) => {
+    const p = `${path}.hll[${i}]`;
+    if (!isObject(c)) fail(p, 'expected object');
+    const sc = reqString(c.sc, `${p}.sc`);
+    if (!CSYM_CLASSES.has(sc)) fail(`${p}.sc`, 'expected one of auto|reg|static|ext');
+    const out: DebugCSym = {
+      name: reqString(c.name, `${p}.name`),
+      scope: reqIndex(c.scope, scopes.length, `${p}.scope`),
+      type: reqString(c.type, `${p}.type`), sc: sc as DebugCSym['sc'],
+    };
+    const offs = optNumber(c.offs, `${p}.offs`);
+    if (offs !== undefined) out.offs = offs;
+    if (c.sym !== undefined) out.sym = reqIndex(c.sym, syms.length, `${p}.sym`);
+    return out;
+  });
+  return {files, lines, lineSets, types, scopes, syms, hll};
+}
+
+function validateDebugRuns(v: unknown, path: string): DebugRun[] {
+  return reqArray(v, path).map((r, i) => {
+    const run = reqArray(r, `${path}[${i}]`);
+    if (run.length !== 4) fail(`${path}[${i}]`, 'expected [lineSet, offset, size, type]');
+    return [reqNumber(run[0], `${path}[${i}][0]`), reqNumber(run[1], `${path}[${i}][1]`),
+            reqNumber(run[2], `${path}[${i}][2]`), reqNumber(run[3], `${path}[${i}][3]`)];
+  });
+}
+
 // sourceMap / labelIndex arrive either as a real `Map` (a Module handed over
 // in-process) or as the `[key, value]` entry arrays a serialized `.o` carries.
 function mapEntries(v: unknown, path: string): Array<[unknown, unknown]> {
@@ -262,6 +374,7 @@ function validateChunk(v: unknown, path: string): Chunk {
     }
     out.labelIndex = m;
   }
+  if (v.debugRuns !== undefined) out.debugRuns = validateDebugRuns(v.debugRuns, `${path}.debugRuns`);
   if (v.placement !== undefined) {
     const p = reqString(v.placement, `${path}.placement`);
     if (!PLACEMENT_MODES.has(p)) fail(`${path}.placement`, `expected one of ${[...PLACEMENT_MODES].join('|')}`);
@@ -514,6 +627,15 @@ export function parseModule(obj: unknown): Validated<Module> {
     if (obj.debugSymbols !== undefined) {
       out.debugSymbols = reqArray(obj.debugSymbols, 'module.debugSymbols')
         .map((s, i) => validateSymbol(s, `module.debugSymbols[${i}]`));
+    }
+    if (obj.debug !== undefined) {
+      out.debug = validateDebug(obj.debug, 'module.debug');
+      const {lineSets, types} = out.debug;
+      out.chunks?.forEach((c, i) => c.debugRuns?.forEach((r, j) => {
+        const at = `module.chunks[${i}].debugRuns[${j}]`;
+        reqIndex(r[0], lineSets.length, `${at}[0]`);
+        if (r[3] !== -1) reqIndex(r[3], types.length, `${at}[3]`);
+      }));
     }
     if (obj.lateAssembly !== undefined) {
       out.lateAssembly = validateLateAssembly(obj.lateAssembly, 'module.lateAssembly');

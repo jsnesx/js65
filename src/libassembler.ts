@@ -248,11 +248,14 @@ export interface OutputFile {
  * 
  * listDir is optional, and only used if you have js preprocessor enabled in order
  * to support globbing.
+ * 
+ * stat is only used for dbg files to get the mtime
  */
 export interface FileCallbacks {
   resolveText: (bases: readonly string[], filename: string) => ResolvedFile<string> | undefined;
   resolveBinary: (bases: readonly string[], filename: string) => ResolvedFile<Uint8Array | string> | undefined;
   listDir?: (dir: string) => string[];
+  stat?: (path: string) => number | undefined;
 }
 
 /**
@@ -606,7 +609,7 @@ function serializeModule(m: Module, keepDebugInfo = true): string {
     if ((k === 'data' || k === 'content') && v instanceof Uint8Array) {
       return base64.encode(v);
     }
-    if (!keepDebugInfo && k === 'source') {
+    if (!keepDebugInfo && (k === 'source' || k === 'debug' || k === 'debugRuns')) {
       return undefined;
     }
     // Convert maps to [key, value] arrays so we can properly save it to the module

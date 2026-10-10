@@ -16,6 +16,8 @@ export interface Callbacks {
   fsWriteBytes: (path: string, filename: string, data: Uint8Array) => Promise<void>,
   /** List all paths in a directory, not recursive. Throws when the directory is missing. */
   fsListDir: (dir: string) => string[],
+  /** Modification time in seconds, for debug info. Frontends without a filesystem omit it. */
+  fsMtime?: (path: string, filename: string) => number|undefined,
   exit: (code: number) => void,
   /** Callbacks for bun and node frontends to start js65 in lsp mode */
   runLsp?: (argv: string[]) => Promise<void>,

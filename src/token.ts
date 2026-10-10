@@ -461,6 +461,12 @@ export function nullToken(token: NullTok, source?: SourceInfo): NullaryToken {
   return {token, source};
 }
 
+/** Copies a token with its source tagged with a `.repeat` depth. */
+export function withRepeat(tok: Token, repeat: number): Token {
+  if (!tok.source) return tok;
+  return {...tok, source: {...tok.source, repeat}} as Token;
+}
+
 export function labelsData(tok: StringToken): StringToken {
   return strToken(tok.token, tok.str, tok.source, tok.rawStr, tok.char, true);
 }
@@ -476,6 +482,7 @@ export function reparentSource(tok: Token, callSource?: SourceInfo): Token {
       sourceInfo(inner.file, inner.line, inner.column, inner.endLine,
                  inner.endColumn, callSource, inner.ident) :
       (inner ?? callSource)!;
+  if (inner?.repeat && source !== inner) source.repeat = inner.repeat;
   switch (tok.token) {
     case 'grp':
       return grpToken(tok.inner, source);
