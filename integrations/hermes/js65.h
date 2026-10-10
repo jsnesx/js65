@@ -54,11 +54,11 @@ typedef struct Js65Message {
 } Js65Message;
 
 // One named output produced by a compile. `type` tags the artifact kind.
-// "binary" (linked ROM / IPS), "object" (serialized .o), "debug" (debug info,
-// e.g. MLB labels), "source", and more in future (e.g. "listing").
+// "binary" (linked ROM / IPS), "object" (serialized .o), "debug" (ld65 .dbg),
+// "mlb" (Mesen labels), "source", and more in future (e.g. "listing").
 typedef struct Js65OutputFile {
   const char *name;
-  const char *type;     // artifact kind: "binary" | "object" | "debug" | "source" | ...
+  const char *type;     // artifact kind: "binary" | "object" | "debug" | "mlb" | "source" | ...
   const uint8_t *data;  // dataLength bytes (NULL when empty)
   int32_t dataLength;
 } Js65OutputFile;

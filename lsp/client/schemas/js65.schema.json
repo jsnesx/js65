@@ -55,7 +55,11 @@
 					},
 					"dbgfile": {
 						"type": "string",
-						"description": "Debug info (MLB labels) output, relative to `outDir`."
+						"description": "ld65 compatible .dbg debug file output, relative to `outDir`. Not implemented yet."
+					},
+					"mlbfile": {
+						"type": "string",
+						"description": "Mesen MLB labels output, relative to `outDir`."
 					},
 					"mapfile": {
 						"type": "string",

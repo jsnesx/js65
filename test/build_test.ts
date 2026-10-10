@@ -129,15 +129,15 @@ describe('BuildSession outputs', function() {
   it('writes the linked binary and the requested sidecars', async function() {
     const {session: s, written} = session();
     await s.writeOutputs(
-        result(output('rom', 'binary'), output('dbg', 'debug'), output('m', 'map')),
-        {outfile: 'out.nes', dbgfile: 'out.mlb', mapfile: 'out.map'});
+        result(output('rom', 'binary'), output('mlb', 'mlb'), output('m', 'map')),
+        {outfile: 'out.nes', mlbfile: 'out.mlb', mapfile: 'out.map'});
     expect([...written.keys()].sort()).toEqual(['out.map', 'out.mlb', 'out.nes']);
   });
 
   it('leaves out sidecars that were not asked for', async function() {
     const {session: s, written} = session();
     await s.writeOutputs(
-        result(output('rom', 'binary'), output('dbg', 'debug'), output('m', 'map')),
+        result(output('rom', 'binary'), output('mlb', 'mlb'), output('m', 'map')),
         {outfile: 'out.nes'});
     expect([...written.keys()]).toEqual(['out.nes']);
   });
@@ -281,7 +281,7 @@ describe('Builder', function() {
       const files = {
         'js65.json': JSON.stringify({outDir: 'out', projects: [{
           name: 'game', sources: ['src/a.s'], target: 'sim',
-          output: 'game.prg', dbgfile: 'game.mlb', mapfile: 'game.map',
+          output: 'game.prg', mlbfile: 'game.mlb', mapfile: 'game.map',
         }]}),
         'src/a.s': 'lda #1\n',
       };
@@ -385,12 +385,12 @@ describe('Builder', function() {
     it('turns debug info off for debug: -1', async function() {
       const withDebug = {
         'js65.json': JSON.stringify({projects: [{
-          name: 'game', sources: ['src/a.s'], target: 'sim', dbgfile: 'game.mlb',
+          name: 'game', sources: ['src/a.s'], target: 'sim', mlbfile: 'game.mlb',
         }]}),
         'src/a.s': 'label: lda #1\n',
       };
       const off = {...withDebug, 'js65.json': JSON.stringify({projects: [{
-        name: 'game', sources: ['src/a.s'], target: 'sim', dbgfile: 'game.mlb',
+        name: 'game', sources: ['src/a.s'], target: 'sim', mlbfile: 'game.mlb',
         debug: -1,
       }]})};
       expect((await runBuild(withDebug)).files).toContain('build/game.mlb');

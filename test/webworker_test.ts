@@ -126,7 +126,7 @@ describe('worker protocol', function() {
       const buffer = new ArrayBuffer(16);
       const transfers = collectTransfers([
         {name: 'a.nes', data: new Uint8Array(buffer, 0, 8), type: 'binary'},
-        {name: 'b.mlb', data: new Uint8Array(buffer, 8, 8), type: 'debug'},
+        {name: 'b.mlb', data: new Uint8Array(buffer, 8, 8), type: 'mlb'},
       ]);
       expect(transfers).toEqual([buffer]);
     });
@@ -136,7 +136,7 @@ describe('worker protocol', function() {
       const b = new Uint8Array(4);
       expect(collectTransfers([
         {name: 'a', data: a, type: 'binary'},
-        {name: 'b', data: b, type: 'debug'},
+        {name: 'b', data: b, type: 'mlb'},
       ])).toEqual([a.buffer as ArrayBuffer, b.buffer as ArrayBuffer]);
       if (typeof SharedArrayBuffer !== 'undefined') {
         const shared = new Uint8Array(new SharedArrayBuffer(4));
@@ -645,7 +645,7 @@ describe('spawned worker', function() {
         files,
       });
       expect(result.success).toBe(true);
-      const debug = result.outputs.find(o => o.type === 'debug');
+      const debug = result.outputs.find(o => o.type === 'mlb');
       expect(debug).toBeTruthy();
       const text = new TextDecoder().decode(debug!.data);
       // The second base is the one that has the file; the first must not show up.
