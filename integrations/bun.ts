@@ -16,7 +16,7 @@ bufferWorkerMessages();
 
 const { dirname, resolve } = require('path');
 const { mkdir } = require('fs').promises;
-const { readFileSync, readdirSync } = require('fs');
+const { readFileSync, readdirSync, statSync } = require('fs');
 
 async function mkdirFor(fullpath: string): Promise<void> {
   await mkdir(dirname(fullpath), { recursive: true });
@@ -53,6 +53,13 @@ const cli = new Cli({
     const entries = readdirSync(resolve(dir), {withFileTypes: true});
     return entries.map((e: {name: string, isDirectory(): boolean}) =>
         e.isDirectory() ? `${e.name}/` : e.name);
+  },
+  fsMtime: (path: string, filename: string) => {
+    try {
+      return Math.floor(statSync(resolve(path, filename)).mtimeMs / 1000);
+    } catch {
+      return undefined;
+    }
   },
   exit: (code: number) => process.exit(code),
   runLsp: async (argv: string[]) => {

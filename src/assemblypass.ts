@@ -17,8 +17,10 @@ import { Targets } from './preamble.ts';
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
-import { newSourceLog, sourceLogKey, TokenStream, type ResolvedFile, type SourceContents,
+import { newSourceLog, sourceLogKey, SourceContents, TokenStream, type ResolvedFile,
          type SourceLog } from './tokenstream.ts';
+import { utf8Length } from './debugtables.ts';
+import { joinDir } from './util.ts';
 import type { CancelSignal, FileCallbacks } from './libassembler.ts';
 
 export interface LinkTimeEnv {
@@ -188,6 +190,7 @@ export function assembleInput(
   const opts = asm.opts.tokenizerOptions ?? {};
   const lateOpts = initialOpts(asm.opts);
   const files = newSourceLog();
+  if (asm.opts.generateDebugInfo) sourceContents ??= new SourceContents();
   const newStream = () => new TokenStream(
       callbacks?.resolveText, callbacks?.resolveBinary, opts, sourceContents,
       asm.errorCollector, files);
@@ -229,6 +232,8 @@ export function assembleInput(
     input = {type: 'source', code, name: input.name};
   }
 
+  if (module.debug) fillFileInfo(module, sourceContents, files, callbacks);
+
   const late = module.lateAssembly;
   if (late) {
     late.opts = lateOpts;
@@ -237,6 +242,39 @@ export function assembleInput(
     if (setup.defines?.length) late.defines = setup.defines;
   }
   return module;
+}
+
+/** Fills in the size and mtime of each file, and adds the `.incbin` ones. */
+function fillFileInfo(module: Module, sourceContents: SourceContents|undefined,
+                      log: SourceLog, callbacks?: FileCallbacks) {
+  const debug = module.debug!;
+  const known = new Set(debug.files.map(f => f.name));
+  for (const [key, bin] of log.binary) {
+    const parts = key.split('\0');
+    const filename = parts.pop()!;
+    const name = joinDir(parts[bin.baseIndex] ?? '', filename);
+    if (known.has(name)) continue;
+    known.add(name);
+    debug.files.push({name, size: bin.content.length, mtime: 0});
+  }
+  for (const file of debug.files) {
+    if (!file.size) {
+      const text = sourceContents?.data.get(file.name);
+      if (text !== undefined) file.size = utf8Length(text);
+    }
+    file.mtime = callbacks?.stat?.(file.name) ?? 0;
+  }
+}
+
+/** Keeps the sizes and times pass 1 found, since a replay has no way to stat. */
+function carryFileInfo(from: Module, to: Module) {
+  const old = new Map((from.debug?.files ?? []).map(f => [f.name, f]));
+  for (const file of to.debug?.files ?? []) {
+    const prev = old.get(file.name);
+    if (!prev) continue;
+    file.size = prev.size;
+    file.mtime = prev.mtime;
+  }
 }
 
 /** Overrides for a replay, on top of the options the module recorded. */
@@ -403,6 +441,7 @@ export function replayModule(
   }
 
   replayed.name = module.name;
+  carryFileInfo(module, replayed);
   // Staged at pass 1 and link-independent; replay runs without a stage.
   if (module.romPatch) replayed.romPatch = module.romPatch;
   if (module.jsPost) replayed.jsPost = module.jsPost;

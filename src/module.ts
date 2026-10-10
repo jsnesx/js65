@@ -60,6 +60,8 @@ interface BaseChunk {
   sourceMap?: Map<number, SourceInfo>;
   /** Labels within the chunk, mapped to byte offset. */
   labelIndex?: Map<string, number>;
+  /** Source lines behind each run of bytes, in offset order. Debug builds only. */
+  debugRuns?: DebugRun[];
   /** Tracks if the chunk is assigned to a segment in zeropage.
    * Defaults to abs (false) unless assigned by using .segment "whatever" : zeropage
    * to force the segment to use zeropage (or if the segment was defined in the
@@ -205,7 +207,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 5;
+export const MODULE_FORMAT_VERSION = 6;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {
@@ -284,6 +286,96 @@ export interface JsPost {
   blocks: JsPostBlock[];
 }
 
+/** A source file seen by the module. Sizes and times are filled in after assembly. */
+export interface DebugFile {
+  name: string;
+  /** UTF-8 byte length for text, byte length for `.incbin`. */
+  size: number;
+  /** Seconds since the epoch, 0 when the frontend cannot stat. */
+  mtime: number;
+}
+
+/** Same values as ld65's `common/lidefs.h`. */
+export const DEBUG_LINE_ASM = 0;
+export const DEBUG_LINE_EXT = 1;
+export const DEBUG_LINE_MACRO = 2;
+export const DEBUG_LINE_MACPARAM = 3;
+
+/** One source line. `count` is the macro or `.repeat` depth. */
+export interface DebugLine {
+  /** Index into `files`. */
+  file: number;
+  line: number;
+  type: number;
+  count: number;
+}
+
+/**
+ * Bytes a set of lines produced: `[lineSet, offset, size, type]`.
+ * `lineSet` indexes `Debug.lineSets`, `type` indexes `Debug.types` or is -1.
+ */
+export type DebugRun = [lineSet: number, offset: number, size: number, type: number];
+
+/** Bytes a scope owns: `[chunk, offset, size]`. Includes nested scopes. */
+export type DebugScopeRun = [chunk: number, offset: number, size: number];
+
+export interface DebugScope {
+  name: string;
+  /** Omitted for the module's root scope. */
+  type?: 'scope'|'struct'|'enum';
+  /** Index into `scopes`, omitted for the root. */
+  parent?: number;
+  size: number;
+  /** Index into `syms` of the label of a `.proc`. */
+  label?: number;
+  runs: DebugScopeRun[];
+}
+
+export type DebugAddrSize = 'default'|'zeropage'|'absolute'|'far'|'long';
+
+export interface DebugSym {
+  name: string;
+  /** Index into `scopes`. Absent for a cheap local, which has `parent`. */
+  scope?: number;
+  /** Index into `syms` of the label a cheap local hangs off. */
+  parent?: number;
+  addrsize: DebugAddrSize;
+  size?: number;
+  /** An `im` expression marks an import. */
+  expr?: Expr;
+  kind: 'lab'|'equ'|'imp';
+  export?: boolean;
+  /** Indices into `lines`. */
+  defs?: number[];
+  refs?: number[];
+}
+
+/** High level language symbol, written as a ld65 `csym`. */
+export interface DebugCSym {
+  name: string;
+  /** Index into `scopes`. */
+  scope: number;
+  /** Type string in hex. */
+  type: string;
+  sc: 'auto'|'reg'|'static'|'ext';
+  offs?: number;
+  /** Index into `syms`. */
+  sym?: number;
+}
+
+/** Tables that the `.dbg` writer needs. Present only with debug info on. */
+export interface Debug {
+  files: DebugFile[];
+  lines: DebugLine[];
+  /** Each entry lists the `lines` that share a run of bytes. */
+  lineSets: number[][];
+  /** Hex type strings used by runs. */
+  types: string[];
+  scopes: DebugScope[];
+  syms: DebugSym[];
+  hll: DebugCSym[];
+}
+
 export interface Module {
   /** .o format version this module was serialized with. */
   version?: number;
@@ -297,6 +389,8 @@ export interface Module {
   segments?: Segment[];
   /** All symbols from all scopes for debug purposes. */
   debugSymbols?: Symbol[];
+  /** Files, lines, scopes and symbols for the `.dbg` writer. */
+  debug?: Debug;
   /** Present only when a symbol's zp/abs size guess needs confirming. */
   lateAssembly?: LateAssembly;
   /** All undefined symbols turned into imports */

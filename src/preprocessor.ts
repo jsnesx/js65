@@ -1157,9 +1157,12 @@ export class Preprocessor {
     if (!top) Tokens.fail(`.endrep with no .repeat`, line[0]);
     if (++top[2] >= top[1]) return;
     this.repeats.push(top);
+    const tag = this.asm.opts.generateDebugInfo ? this.repeats.length : 0;
     this.stream.unshift(...top[0].map(line => line.map(token => {
-      if (token.token !== 'ident' || token.str !== top[3]) return token;
-      return Tokens.numToken(top[2], token.source);
+      if (token.token === 'ident' && token.str === top[3]) {
+        return Tokens.numToken(top[2], token.source);
+      }
+      return tag ? Tokens.withRepeat(token, tag) : token;
     })));
   }
 
