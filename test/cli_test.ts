@@ -580,14 +580,14 @@ describe('CLI', function() {
       expect(s.exits).toEqual([1]);
     });
 
-    it('accepts every --dbgfile spelling', function() {
-      expect(cli.parseArgs(['--dbgfile', 'a.dbg']).dbgfile).toBe('a.dbg');
-      expect(cli.parseArgs(['--dbgfile=a.dbg']).dbgfile).toBe('a.dbg');
+    it('accepts every --mlbfile spelling', function() {
+      expect(cli.parseArgs(['--mlbfile', 'a.mlb']).mlbfile).toBe('a.mlb');
+      expect(cli.parseArgs(['--mlbfile=a.mlb']).mlbfile).toBe('a.mlb');
     });
 
-    it('rejects a repeated --dbgfile', function() {
+    it('rejects a repeated --mlbfile', function() {
       const s = strict();
-      s.parse(['--dbgfile', 'a.dbg', '--dbgfile', 'b.dbg']);
+      s.parse(['--mlbfile', 'a.mlb', '--mlbfile', 'b.mlb']);
       expect(s.exits).toEqual([1]);
     });
 

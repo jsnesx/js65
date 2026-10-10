@@ -46,8 +46,10 @@ export interface Js65Project {
   target?: string;
   /** Absolute POSIX path of the linked output. */
   output: string;
-  /** Absolute POSIX path for debug info (MLB labels), when asked for. */
+  /** Absolute POSIX path for the ld65 .dbg file, when asked for. Not written yet. */
   dbgfile?: string;
+  /** Absolute POSIX path for Mesen MLB labels, when asked for. */
+  mlbfile?: string;
   /** Absolute POSIX path for the linker map, when asked for. */
   mapfile?: string;
   format: OutputFormat;
@@ -84,7 +86,7 @@ interface RawConfig {
 const CONFIG_KEYS = ['$schema', 'outDir', 'projects', 'lint'];
 const PROJECT_KEYS = [
   'name', 'sources', 'includePaths', 'binIncludePaths', 'linkerConfig', 'target',
-  'output', 'dbgfile', 'mapfile', 'format', 'baseRom', 'defines', 'features', 'debug',
+  'output', 'dbgfile', 'mlbfile', 'mapfile', 'format', 'baseRom', 'defines', 'features', 'debug',
   'allowJavascript',
 ];
 
@@ -147,6 +149,7 @@ function parseOne(
   }
   const output = optString(fail, p.output, `${where}.output`) ?? `${name}.nes`;
   const dbgfile = optString(fail, p.dbgfile, `${where}.dbgfile`);
+  const mlbfile = optString(fail, p.mlbfile, `${where}.mlbfile`);
   const mapfile = optString(fail, p.mapfile, `${where}.mapfile`);
   const baseRom = optString(fail, p.baseRom, `${where}.baseRom`);
   const target = optString(fail, p.target, `${where}.target`);
@@ -169,6 +172,7 @@ function parseOne(
     // writes into one directory that is easy to clean and easy to gitignore.
     output: resolveProjectPath(outDir, output),
     dbgfile: dbgfile && resolveProjectPath(outDir, dbgfile),
+    mlbfile: mlbfile && resolveProjectPath(outDir, mlbfile),
     mapfile: mapfile && resolveProjectPath(outDir, mapfile),
     format: format as OutputFormat,
     baseRom: baseRom && resolveProjectPath(rootDir, baseRom),

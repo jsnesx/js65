@@ -27,7 +27,7 @@ async function assembleAndGetDebugInfo(source: string, filename: string = 'test.
   const modulesrc = { type: 'source' as const, name: filename, code: source };
 
   const res = await compile([initsrc, modulesrc], opts);
-  const debug = res.outputs.find(o => o.type === 'debug');
+  const debug = res.outputs.find(o => o.type === 'mlb');
   const debugInfo = debug ? new TextDecoder().decode(debug.data) : '';
 
   const mlb = parseMlb(debugInfo);

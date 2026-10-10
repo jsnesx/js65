@@ -225,11 +225,12 @@ export interface Js65Request {
  * If more output types are created, we'll add them to the end here
  *   - 'binary' : a linked ROM image or IPS patch
  *   - 'object' : a serialized .o module
- *   - 'debug'  : debug info (currently MLB labels)
+ *   - 'debug'  : ld65 .dbg debug file (not produced yet)
  *   - 'source' : generated source text
  *   - 'map'    : linker map (free space / placed chunks report)
+ *   - 'mlb'    : Mesen MLB labels
  */
-export type OutputType = 'source' | 'binary' | 'object' | 'debug' | 'map';
+export type OutputType = 'source' | 'binary' | 'object' | 'debug' | 'map' | 'mlb';
 
 /** One named output produced by a compile. */
 export interface OutputFile {
@@ -408,8 +409,10 @@ export interface LinkResult {
   data: Uint8Array;
   /** Any outputs named in a linker config that was the original %o output */
   extraOutputs: {name: string, data: Uint8Array}[];
-  /** Debug information in MLB format (empty string if sourceContents not provided or errors) */
-  debugInfo: string;
+  /** ld65 .dbg debug file (empty until the writer exists) */
+  dbg: string;
+  /** Mesen MLB labels (empty string if sourceContents not provided or errors) */
+  mlb: string;
   /** Linker map (empty unless requested or on errors) */
   mapFile: string;
   /** Resolved exported symbols */
@@ -471,7 +474,7 @@ export function link(
     const extraOutputs = linker.outputFiles();
 
     // Before the output, since post blocks read the labelMap it leaves behind
-    const debugInfo = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
+    const mlb = linker.getDebugInfo(sourceContents, options?.debugLevel ?? 0);
     const labelMap = linker.labelMap ?? new Map();
 
     // Generate output based on format
@@ -518,7 +521,8 @@ export function link(
       success: !hasErrors,
       data: binaryData,
       extraOutputs,
-      debugInfo,
+      dbg: '',
+      mlb,
       mapFile,
       get exports() { return linker.exports(); },
       messages: allMessages
@@ -532,7 +536,8 @@ export function link(
       success: false,
       data: new Uint8Array(0),
       extraOutputs: [],
-      debugInfo: '',
+      dbg: '',
+      mlb: '',
       mapFile: '',
       exports: new Map(),
       messages: allMessages
@@ -768,9 +773,8 @@ export function compile(
     for (const extra of lr.extraOutputs) {
       outputs.push({ name: extra.name, data: extra.data, type: 'binary' });
     }
-    // Debug info rides as a sidecar output (type 'debug') rather than a separate field.
-    if (lr.debugInfo) {
-      outputs.push({ name: 'out.mlb', data: new TextEncoder().encode(lr.debugInfo), type: 'debug' });
+    if (lr.mlb) {
+      outputs.push({ name: 'out.mlb', data: new TextEncoder().encode(lr.mlb), type: 'mlb' });
     }
     if (lr.mapFile) {
       outputs.push({ name: 'out.map', data: new TextEncoder().encode(lr.mapFile), type: 'map' });

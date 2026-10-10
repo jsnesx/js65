@@ -48,15 +48,16 @@ describe('parseProject', function() {
       expect(config.projects[0].format).toBe('binary');
     });
 
-    it('honors outDir for output, dbgfile and mapfile', function() {
+    it('honors outDir for output, dbgfile, mlbfile and mapfile', function() {
       const config = parse({outDir: 'out/roms', projects: [{
         name: 'game', sources: ['src/main.s'],
-        output: 'game.prg', dbgfile: 'game.mlb', mapfile: 'game.map',
+        output: 'game.prg', dbgfile: 'game.dbg', mlbfile: 'game.mlb', mapfile: 'game.map',
       }]});
       expect(config.outDir).toBe('/proj/out/roms');
       const p = config.projects[0];
       expect(p.output).toBe('/proj/out/roms/game.prg');
-      expect(p.dbgfile).toBe('/proj/out/roms/game.mlb');
+      expect(p.dbgfile).toBe('/proj/out/roms/game.dbg');
+      expect(p.mlbfile).toBe('/proj/out/roms/game.mlb');
       expect(p.mapfile).toBe('/proj/out/roms/game.map');
     });
 

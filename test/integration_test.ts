@@ -940,7 +940,7 @@ TestLabel:
         { lineContinuations: true, generateDebugInfo: true, debugLevel: 0 }
       );
 
-      const debug = result.outputs.find(o => o.type === 'debug');
+      const debug = result.outputs.find(o => o.type === 'mlb');
       expect(debug).toBeTruthy();
       const debugText = new TextDecoder().decode(debug!.data);
       expect(debugText).toBeTruthy();

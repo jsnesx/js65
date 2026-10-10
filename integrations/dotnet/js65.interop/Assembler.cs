@@ -87,8 +87,8 @@ public record Js65AssemblerMessage
 
 /// <summary>
 /// One named output produced by a compile. <c>type</c> tags the artifact kind:
-/// "binary" (linked ROM / IPS), "object" (serialized .o), "debug" (debug info such as
-/// MLB labels), "source", and more in future (e.g. "listing").
+/// "binary" (linked ROM / IPS), "object" (serialized .o), "debug" (ld65 .dbg),
+/// "mlb" (Mesen labels), "source", and more in future (e.g. "listing").
 /// </summary>
 public record Js65OutputFile
 {
@@ -106,7 +106,7 @@ public record Js65CompileResult
 
     /// <summary>
     /// Named outputs produced by the compile. The linked ROM/IPS is a "binary" entry;
-    /// debug info ("debug") and serialized .o modules ("object") ride in the same list.
+    /// debug info ("debug", "mlb") and serialized .o modules ("object") ride in the same list.
     /// </summary>
     public Js65OutputFile[] outputs { get; init; } = [];
 
@@ -115,13 +115,19 @@ public record Js65CompileResult
     /// the first non-debug output's bytes.
     /// </summary>
     public byte[] romdata =>
-        Array.Find(outputs, o => o.type != "debug")?.data ?? (outputs.Length > 0 ? outputs[0].data : []);
+        Array.Find(outputs, o => o.type != "debug" && o.type != "mlb")?.data ?? (outputs.Length > 0 ? outputs[0].data : []);
 
     /// <summary>
-    /// Debug file contents (the "debug"-typed output decoded as UTF-8 text), or "" if none.
+    /// ld65 .dbg file contents decoded as UTF-8 text or "" if none.
     /// </summary>
     public string debugfile =>
         Array.Find(outputs, o => o.type == "debug") is { } d ? System.Text.Encoding.UTF8.GetString(d.data) : "";
+
+    /// <summary>
+    /// MLB file contents decoded as UTF-8 text or "" if none.
+    /// </summary>
+    public string mlbfile =>
+        Array.Find(outputs, o => o.type == "mlb") is { } d ? System.Text.Encoding.UTF8.GetString(d.data) : "";
 
     /// <summary>
     /// All messages (errors, warnings, info) from compilation

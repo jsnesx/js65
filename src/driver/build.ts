@@ -18,7 +18,7 @@ export const STDOUT = '//stdout';
 /** Where one build's artifacts go. An absent sidecar is simply not written. */
 export interface OutputPaths {
   outfile: string;
-  dbgfile?: string;
+  mlbfile?: string;
   mapfile?: string;
   depfile?: string;
 }
@@ -34,13 +34,7 @@ export class BuildSession {
   private readonly sources = new Map<string, string>();
   private readonly sourceLines = new Map<string, string[]>();
 
-  // Resolved paths of every file this build actually read, for --create-dep. A Set
-  // dedupes the header that gets included from a dozen places while keeping read
-  // order, so the dependency file comes out the same on every run.
   private readonly deps = new Set<string>();
-
-  // The search loop runs here so only the base that actually hits is recorded as a
-  // dependency and cached; the misses along the way leave no trace.
   readonly fileCallbacks: FileCallbacks;
 
   constructor(readonly callbacks: Callbacks) {
@@ -144,10 +138,9 @@ export class BuildSession {
           "", extra.name.replace(/%O/g, paths.outfile), extra.data);
     }
 
-    // Write debug info if requested
-    const debug = findOutput(result, 'debug');
-    if (paths.dbgfile && debug) {
-      await this.callbacks.fsWriteBytes("", paths.dbgfile, debug.data);
+    const mlb = findOutput(result, 'mlb');
+    if (paths.mlbfile && mlb) {
+      await this.callbacks.fsWriteBytes("", paths.mlbfile, mlb.data);
     }
 
     // Write the linker map if requested
@@ -195,7 +188,7 @@ export interface BuildOverrides {
   allowJavascript?: boolean;
   lint?: LintOptions;
   outfile?: string;
-  dbgfile?: string;
+  mlbfile?: string;
   mapfile?: string;
   depfile?: string;
 }
@@ -307,7 +300,7 @@ export class Builder {
 
       const bytes = await this.session.writeOutputs(result, {
         outfile,
-        dbgfile: overrides.dbgfile ?? project.dbgfile,
+        mlbfile: overrides.mlbfile ?? project.mlbfile,
         mapfile: overrides.mapfile ?? project.mapfile,
         depfile: overrides.depfile,
       });

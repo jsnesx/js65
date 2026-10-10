@@ -81,11 +81,7 @@ function toU8(hostBytes) {
     for (let i = 0; i < n; i++) u8[i] = hostBytes[i];
     return u8;
 }
-// The whole include search list crosses to the host in one call, as a string[] the
-// resolve delegates take directly (IReadOnlyList<string>).
 const toHostList = (bases) => hostList(bases);
-// The host owns the search, so one .include costs one interop crossing no matter how
-// many directories it had to try, and a resource-backed host answers from a lookup.
 const callbacks = {
     resolveText: (bases, relPath) => {
         const hit = FileCallbacks.OnFileResolveText(toHostList(bases), relPath);
@@ -96,13 +92,8 @@ const callbacks = {
         return hit && {baseIndex: hit.BaseIndex, content: toU8(hit.Content)};
     },
 };
-// Bare CancelSignal polling the host token (V8 ships no AbortController); the core reads
-// .aborted at per-line / per-chunk boundaries so a long compile cancels cooperatively.
 const signal = { get aborted() { return hostCancel.IsCancellationRequested; } };
-// compileRequest deserializes the request, and catches any errors to return a proper CompileResult
 const result = compileRequest(requestJson, callbacks, baseRom.length ? baseRom : undefined, signal);
-// Hand the whole outputs list (each { name, data:Uint8Array, type }) to the host;
-// the debug sidecar is just a 'debug'-typed entry, no separate field.
 compileOutputs = result.outputs;
 compileSuccess = result.success;
 compileMessages = JSON.stringify(result.messages || []);

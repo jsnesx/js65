@@ -37,6 +37,7 @@ class Arguments {
   rom = "";
   files : string[] = [];
   dbgfile = "";
+  mlbfile = "";
   mapfile = "";
   cfgfile = "";
   depfile = "";
@@ -57,6 +58,9 @@ class Arguments {
 }
 
 const DEPFILE_FLAGS = ['--create-dep', '--create-full-dep', '--create-deps'];
+
+const DBGFILE_UNSUPPORTED =
+    "--dbgfile is not implemented yet, use --mlbfile for Mesen labels";
 
 const RE_SYMBOL_NAME = /^[a-z_][a-z0-9_]*$/i;
 
@@ -89,6 +93,8 @@ const OPTIONS: Option[] = [
    apply: once(out => out.outfile, (out, v) => { out.outfile = v; })},
   {names: ['--dbgfile'], arity: 1,
    apply: once(out => out.dbgfile, (out, v) => { out.dbgfile = v; })},
+  {names: ['--mlbfile'], arity: 1,
+   apply: once(out => out.mlbfile, (out, v) => { out.mlbfile = v; })},
   {names: ['-m', '--mapfile'], arity: 1,
    apply: once(out => out.mapfile, (out, v) => { out.mapfile = v; })},
   {names: DEPFILE_FLAGS, arity: 1,
@@ -186,7 +192,7 @@ const SUBCOMMANDS = new Map<string, (src: string, cpu: Cpu, prg: Uint8Array) => 
  * giving one is an error rather than something quietly ignored.
  */
 const BUILD_OPTIONS = new Set([
-  '-h', '-V', '-p', '-o', '--dbgfile', '-m', DEPFILE_FLAGS[0], '-I',
+  '-h', '-V', '-p', '-o', '--dbgfile', '--mlbfile', '-m', DEPFILE_FLAGS[0], '-I',
   '--bin-include-dir', '-D', '--feature', '--allow-javascript', '--no-lint', '-W',
 ]);
 
@@ -283,6 +289,10 @@ export class Cli {
       return this.usage(0);
     }
 
+    if (args.dbgfile) {
+      return this.usage(8, [new Error(DBGFILE_UNSUPPORTED)]);
+    }
+
     if (args.files.length === 0) {
       return this.usage(1, [new Error("No input files provided")]);
     }
@@ -369,7 +379,7 @@ export class Cli {
 
       await this.session.writeOutputs(result, {
         outfile: args.outfile,
-        dbgfile: args.dbgfile,
+        mlbfile: args.mlbfile,
         mapfile: args.mapfile,
         depfile: args.depfile,
       });
@@ -412,9 +422,11 @@ export class Cli {
       return this.buildUsage(8, [e as Error]);
     }
 
+    if (args.dbgfile) return this.buildUsage(8, [new Error(DBGFILE_UNSUPPORTED)]);
+
     // These name one file each. Against several projects they would either be
     // meaningless or let one project clobber another's output, so say so instead.
-    const single = ([['-o', args.outfile], ['--dbgfile', args.dbgfile],
+    const single = ([['-o', args.outfile], ['--mlbfile', args.mlbfile],
                      ['-m', args.mapfile], [DEPFILE_FLAGS[0], args.depfile]] as const)
         .find(([, value]) => value);
     if (single && selected.length !== 1) {
@@ -431,7 +443,7 @@ export class Cli {
       allowJavascript: args.options.allowJavascript,
       lint: args.options.lint,
       outfile: args.outfile || undefined,
-      dbgfile: args.dbgfile || undefined,
+      mlbfile: args.mlbfile || undefined,
       mapfile: args.mapfile || undefined,
       depfile: args.depfile || undefined,
     };
@@ -661,8 +673,10 @@ optional arguments:
                           current directory; js65 does not search parent directories.
   -o FILE/--output=FILE   Write the linked output here, in place of the project's
                           own \`output\`. Only valid when one project is selected.
-  --dbgfile FILE          Write debug symbols here, in place of the project's \`dbgfile\`.
-                          Only valid when one project is selected.
+  --dbgfile FILE          Write a ld65 compatible .dbg file here, in place of the project's
+                          \`dbgfile\`. Not implemented yet.
+  --mlbfile FILE          Write Mesen MLB labels here, in place of the project's
+                          \`mlbfile\`. Only valid when one project is selected.
   -m FILE/--mapfile=FILE  Write the linker map here, in place of the project's
                           \`mapfile\`. Only valid when one project is selected.
   --create-dep FILE       Write a make dependency file for the selected project.
@@ -759,7 +773,8 @@ optional arguments:
   --ips                   Produce an IPS patch rather than a complete binary. Cannot be used with --compileonly.
   -g                      Add debug info to the assembly that can be used at link time to produce debug symbols (Default ON)
   --no-debuginfo          Disable debug info generation.
-  --dbgfile FILE          Output debug symbols to the specified file.
+  --dbgfile FILE          Output an ld65 .dbg debug file to the specified file. Not implemented yet.
+  --mlbfile FILE          Output Mesen MLB labels to the specified file.
   -m FILE/--mapfile=FILE  Output a linker map (free space / placed chunks) to the specified file. Cannot be used with --compileonly.
   --create-dep FILE       Write a make dependency file listing every source, \`.include\` and
                           \`.incbin\` the build read, with the output file as the target.
