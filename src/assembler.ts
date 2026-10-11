@@ -18,7 +18,7 @@ import type { LinkTimeEnv } from './assemblypass.ts';
 import { runActions } from './actions.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
 import { createHash } from 'sha1-uint8array';
-import { DATA_ELEMENTS, DebugBuilder, arrayType } from './debugtables.ts';
+import { DATA_ELEMENTS, DebugBuilder, type ExtLine, arrayType } from './debugtables.ts';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
@@ -159,6 +159,25 @@ interface PendingAssert {
   /** PC at the directive, when in `.org` mode. */
   pc?: number;
 }
+
+/** A `.dbg func` or `.dbg sym`, kept until the module ends. */
+interface PendingCSym {
+  name: string;
+  type: string;
+  sc: mod.DebugCSym['sc'];
+  scope: Scope;
+  offs?: number;
+  asmName?: string;
+  func?: boolean;
+  source?: Tokens.SourceInfo;
+}
+
+const FUNC_CLASSES = new Map<string, mod.DebugCSym['sc']>([
+  ['extern', 'ext'], ['static', 'static'],
+]);
+const SYM_CLASSES = new Map<string, mod.DebugCSym['sc']>([
+  ['auto', 'auto'], ['extern', 'ext'], ['register', 'reg'], ['static', 'static'],
+]);
 
 /** `.export`/`.import`/`.global` calls along with the scope it appeared in. */
 interface GlobalDecl {
@@ -542,8 +561,8 @@ export class Assembler {
   private readonly cheapSyms: Array<{name: string, sym: Symbol, parent?: Symbol}> = [];
   /** Token of every assignment of a `.set` symbol. */
   private readonly setDefs = new Map<Symbol, Tokens.SourceInfo[]>();
-  /** Statement each definition came from, with its whole macro chain. */
-  private readonly defLines = new Map<Symbol, Tokens.SourceInfo[]>();
+  /** Statement each definition came from, with the `.dbg line` open there. */
+  private readonly defLines = new Map<Symbol, Array<{src: Tokens.SourceInfo, ext?: ExtLine}>>();
   /** The current statement's source with the deepest macro chain. */
   private _dbgSource?: Tokens.SourceInfo;
   /** Where each `.import`/`.global` name was first declared, its def for ca65. */
@@ -555,6 +574,10 @@ export class Assembler {
   /** The last non-cheap label, which owns the cheap locals after it. */
   private lastLabel?: Symbol;
   private anonScopeCount = 0;
+  /** `.dbg func`/`.dbg sym` entries, whose asm symbols resolve at the end. */
+  private readonly csyms: PendingCSym[] = [];
+  /** ca65 `.debuginfo`; the value at the end of the module wins. */
+  private debugSyms = true;
 
   /** Token for reporting errors. */
   private errorToken?: Token;
@@ -1562,8 +1585,9 @@ export class Assembler {
       };
       if (sym.export != null) out.export = true;
       const decl = expr.op === 'im' ? this.globalDecls.get(name) : undefined;
-      const defLines = this.defLines.get(sym) ?? (sym.def ? [sym.def] : decl ? [decl] : []);
-      const defs = defLines.flatMap(src => dbg.lineChain(src));
+      const defLines = this.defLines.get(sym) ??
+          (sym.def ? [{src: sym.def}] : decl ? [{src: decl}] : []);
+      const defs = defLines.flatMap(({src, ext}) => dbg.fullChain(src, ext));
       if (defs.length) out.defs = defs;
       // A definition resolves its own name, which ca65 does not count as a ref.
       const defTokens = this.setDefs.get(sym) ?? (sym.def ? [sym.def] : []);
@@ -1605,10 +1629,34 @@ export class Assembler {
       if (id !== undefined) scopes[scopeIds.get(scope)!].label = id;
     }
 
-    return {
-      files: dbg.files, lines: dbg.lines, lineSets: dbg.lineSets,
-      types: dbg.types, scopes, syms, hll: [],
-    };
+    const hll = this.csyms.map(c => {
+      const out: mod.DebugCSym = {
+        name: c.name, scope: scopeIds.get(c.scope) ?? 0, type: c.type, sc: c.sc,
+      };
+      if (c.offs) out.offs = c.offs;
+      const sym = c.asmName === undefined ? undefined : c.func ?
+          c.scope.parent?.symbols.get(c.asmName) : this.findAnySymbol(c);
+      const id = sym && symIds.get(sym);
+      if (id !== undefined) out.sym = id;
+      return out;
+    });
+
+    const files = dbg.files, lines = dbg.lines, lineSets = dbg.lineSets, types = dbg.types;
+    if (!this.debugSyms) {
+      return {files, lines, lineSets, types, scopes: [], syms: [], hll: [], lineOnly: true};
+    }
+    return {files, lines, lineSets, types, scopes, syms, hll};
+  }
+
+  private findAnySymbol(c: PendingCSym): Symbol|undefined {
+    for (let s: Scope|undefined = c.scope; s; s = s.parent) {
+      const sym = s.symbols.get(c.asmName!);
+      if (sym?.expr) return sym;
+    }
+    // An import nothing uses exists, but has no debug sym.
+    if (this.hasGlobalKind(c.asmName!, 'import')) return undefined;
+    this.errorCollector.add('error', `Assembler symbol '${c.asmName}' not found`, c.source);
+    return undefined;
   }
 
   /**
@@ -1813,7 +1861,7 @@ export class Assembler {
         case '.endenum': return this.parseNoArgs(tokens, 1), this.endStruct('enum', tokens[0].source);
         case '.scope': return this.scope(this.parseOptionalIdentifier(tokens), tokens[0].source);
         case '.endscope': return this.parseNoArgs(tokens, 1), this.endScope(tokens[0].source);
-        case '.proc': return this.proc(this.parseRequiredIdentifier(tokens), tokens[0].source);
+        case '.proc': return this.proc(this.parseProcName(tokens), tokens[0].source);
         case '.endproc': return this.parseNoArgs(tokens, 1), this.endProc(tokens[0].source);
         case '.pushseg': return this.pushSegInternal(this.parseSegmentList(tokens, 1, true));
         case '.popseg': return this.parseNoArgs(tokens, 1), this.popSeg();
@@ -1827,6 +1875,8 @@ export class Assembler {
         case '.error': return this.log('error', tokens);
         case '.fatal': return this.log('error', tokens, true);
         case '.feature': return this.feature(tokens);
+        case '.dbg': return this.dbgDirective(tokens);
+        case '.debuginfo': return void (this.debugSyms = this.parseBoolOption(tokens));
         case '.autoimport': return this.autoimport(tokens);
 
         case '.a8':
@@ -1850,7 +1900,8 @@ export class Assembler {
         case '.listbytes':
         case '.pagelength':
         case '.fileopt':
-        case '.debuginfo':
+        // Only changes code on the 65816.
+        case '.smart':
         case '.linecont':
         case '.localchar':
         case '.case':
@@ -2095,7 +2146,10 @@ export class Assembler {
     if (this.dbg) {
       this.definedSyms.add(sym);
       const at = this._dbgSource ?? token?.source;
-      if (at) this.defLines.set(sym, mut ? [...this.defLines.get(sym) ?? [], at] : [at]);
+      if (at) {
+        const def = {src: at, ext: this.dbg.ext};
+        this.defLines.set(sym, mut ? [...this.defLines.get(sym) ?? [], def] : [def]);
+      }
       if (mut && token?.source) {
         const defs = this.setDefs.get(sym) ?? [];
         defs.push(token.source);
@@ -3205,27 +3259,114 @@ export class Assembler {
     this.fail(`Expected on, off, + or - after feature name`, tok ?? nameTok);
   }
 
+  /** .dbg file|func|line|sym */
+  private dbgDirective(tokens: Token[]) {
+    const args = Tokens.parseArgList(tokens, 1);
+    const key = Tokens.expectIdentifier(args[0][0], tokens[0]).toLowerCase();
+    Tokens.expectEol(args[0][1]);
+    const want = (n: number) => {
+      if (args.length !== n) this.fail(`Expected ${n - 1} arguments after .dbg ${key}`, tokens[0]);
+    };
+    const str = (i: number) => {
+      const out = Tokens.expectString(args[i][0], tokens[0]);
+      Tokens.expectEol(args[i][1]);
+      return out;
+    };
+    const storage = (i: number, classes: Map<string, mod.DebugCSym['sc']>) => {
+      const tok = args[i][0];
+      const sc = tok?.token === 'ident' && args[i].length === 1 ?
+          classes.get(Tokens.str(tok).toLowerCase()) : undefined;
+      if (!sc) this.fail(`Storage class specifier expected`, tok ?? tokens[0]);
+      return sc;
+    };
+    const type = (i: number) => {
+      const hex = str(i);
+      if (hex.length < 2 || hex.length & 1) this.fail(`Type value has invalid length`, args[i][0]);
+      if (!/^[0-9a-f]*$/i.test(hex)) this.fail(`Type value contains invalid characters`, args[i][0]);
+      return hex.toUpperCase();
+    };
+    const source = tokens[0].source;
+    switch (key) {
+      case 'file': {
+        want(4);
+        const name = str(1);
+        const size = this.parseConst(args[2], 0);
+        const mtime = this.parseConst(args[3], 0);
+        this.dbg?.declareFile(name, size, mtime);
+        return;
+      }
+      case 'line': {
+        if (this.dbg) this.dbg.ext = undefined;
+        if (args.length === 1) return;
+        want(3);
+        const file = str(1);
+        const line = this.parseConst(args[2], 0);
+        if (line < 0) this.fail(`Line number is out of valid range`, args[2][0]);
+        if (!this.dbg) return;
+        if (!this.dbg.hasFile(file)) this.fail(`File name '${file}' not found in file table`, args[1][0]);
+        this.dbg.ext = {file, line};
+        return;
+      }
+      case 'func': {
+        want(5);
+        const csym: PendingCSym = {
+          name: str(1), type: type(2), sc: storage(3, FUNC_CLASSES),
+          scope: this.currentScope, asmName: str(4), func: true, source,
+        };
+        const scope = this.currentScope;
+        if (scope === scope.global) {
+          this.fail(`Functions may not be used in the root scope`, tokens[0]);
+        }
+        if (scope.kind !== 'proc' || !scope.label) {
+          this.fail(`Functions can only be tagged to .PROC scopes`, tokens[0]);
+        }
+        if (this.csyms.some(c => c.func && c.scope === scope)) {
+          this.fail(`Only one HLL symbol per asm symbol is allowed`, tokens[0]);
+        }
+        if (scope.label !== csym.asmName) {
+          this.fail(`Scope label and asm name for function must match`, args[4][0]);
+        }
+        if (this.dbg) this.csyms.push(csym);
+        return;
+      }
+      case 'sym': {
+        if (args.length < 5) want(5);
+        const csym: PendingCSym = {
+          name: str(1), type: type(2), sc: storage(3, SYM_CLASSES),
+          scope: this.currentScope, source,
+        };
+        if (csym.sc === 'auto') {
+          want(5);
+          csym.offs = this.parseConst(args[4], 0);
+        } else {
+          want(csym.sc === 'reg' ? 6 : 5);
+          csym.asmName = str(4);
+          if (csym.sc === 'reg') csym.offs = this.parseConst(args[5], 0);
+        }
+        if (this.dbg) this.csyms.push(csym);
+        return;
+      }
+    }
+    this.fail(`Unknown .dbg kind: ${key}`, args[0][0]);
+  }
+
   move(size: number, source: Expr) {
     this.append({op: '.move', args: [source], meta: {size}}, size);
   }
 
   autoimport(tokens: Token[]) {
-    if (tokens.length === 1) {
-      this.autoimportEnabled = true;
-      return;
-    }
+    this.autoimportEnabled = this.parseBoolOption(tokens);
+  }
+
+  /** `on`, `off`, `+`, `-`, or nothing for on. */
+  private parseBoolOption(tokens: Token[]): boolean {
     const tok = tokens[1];
-    if (tokens.length === 2 && tok.token === 'op') {
-      if (tok.str === '+') {
-        this.autoimportEnabled = true;
-        return;
-      }
-      if (tok.str === '-') {
-        this.autoimportEnabled = false;
-        return;
-      }
-    }
-    this.fail(`Expected + or - after .autoimport`, tok);
+    if (!tok) return true;
+    Tokens.expectEol(tokens[2]);
+    const state = Tokens.str(tok).toLowerCase();
+    if (tok.token === 'ident' && (state === 'on' || state === 'off')) return state === 'on';
+    if (tok.token === 'op' && (state === '+' || state === '-')) return state === '+';
+    this.fail(`'on' or 'off' expected`, tok);
   }
 
   log(level: 'info'|'warn'|'error', line: Token[], fatal = false) {
@@ -3587,6 +3728,20 @@ export class Assembler {
     return ident;
   }
 
+  /** `.proc name[: addrsize]` but the label's size still comes from its segment. */
+  parseProcName(tokens: Token[]): string {
+    const ident = Tokens.expectIdentifier(tokens[1]);
+    if (Tokens.eq(tokens[2], Tokens.COLON)) {
+      const size = tokens[3]?.token === 'ident' ? Tokens.str(tokens[3]).toLowerCase() : '';
+      if (!ADDR_SIZE_KEYWORDS.has(size))
+        this.fail(`Address size specifier expected`, tokens[3] ?? tokens[2]);
+      Tokens.expectEol(tokens[4]);
+    } else {
+      Tokens.expectEol(tokens[2]);
+    }
+    return ident;
+  }
+
   parseMoveArgs(tokens: Token[]): [number, Expr] {
     // .move 10, ident        ; must be an offset
     // .move 10, $1234, "seg" ; maybe support this?
@@ -3764,6 +3919,10 @@ function parseSymbol(name: string): ParsedSymbol {
   if (/^-+$/.test(name)) return {type: 'rel', num: -name.length};
   return {type: 'none'};
 }
+
+const ADDR_SIZE_KEYWORDS = new Set([
+  'direct', 'zeropage', 'zp', 'absolute', 'abs', 'near', 'far', 'long', 'dword',
+]);
 
 const ADDR_SIZE_NAMES = {z: 'direct', a: 'absolute', f: 'far'} as const;
 
