@@ -8,7 +8,7 @@ import {functionEngine} from '../src/driver/js/function.ts';
 import { fromHexString, fromByteString, joinDir } from "../src/util.ts";
 import { VERSION } from '../src/version.ts';
 import { createHash } from "sha1-uint8array";
-import { parseDbg } from '../tools/ca65compat/dbg.ts';
+import { parseDbg } from './dbgparse.ts';
 
 describe('CLI', function() {
   // disable the usage message to keep the test output clean

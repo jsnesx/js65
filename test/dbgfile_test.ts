@@ -3,7 +3,7 @@
 import {describe, it, expect} from 'bun:test';
 import {
   parseDbg, checkDbgSyntax, normalizeDbg, DbgError, type DbgSym,
-} from '../tools/ca65compat/dbg.ts';
+} from './dbgparse.ts';
 import {
   assemble, compile, deserializeObjectFile, findOutput, serializeObjectFile,
 } from '../src/libassembler.ts';
