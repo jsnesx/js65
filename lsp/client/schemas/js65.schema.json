@@ -55,7 +55,7 @@
 					},
 					"dbgfile": {
 						"type": "string",
-						"description": "ld65 compatible .dbg debug file output, relative to `outDir`. Not implemented yet."
+						"description": "ld65 compatible .dbg debug file output, relative to `outDir`."
 					},
 					"mlbfile": {
 						"type": "string",

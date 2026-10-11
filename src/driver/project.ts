@@ -46,7 +46,7 @@ export interface Js65Project {
   target?: string;
   /** Absolute POSIX path of the linked output. */
   output: string;
-  /** Absolute POSIX path for the ld65 .dbg file, when asked for. Not written yet. */
+  /** Absolute POSIX path for the ld65 .dbg file, when asked for. */
   dbgfile?: string;
   /** Absolute POSIX path for Mesen MLB labels, when asked for. */
   mlbfile?: string;

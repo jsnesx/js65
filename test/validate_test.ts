@@ -163,7 +163,6 @@ start:
     expect(Array.from(roundTripped.data)).toEqual([0xa9, 0x01, 0x8d, 0x00, 0x20, 0x60]);
   });
 
-  // Check that the .o round trip works with the sourceMap added
   it('a .o built with debug info re-validates with its debug maps intact', async () => {
     const source = `
 .segment "CODE" :bank $00 :size $8000 :mem $8000 :off $0000
@@ -184,7 +183,7 @@ loop:
     expect(chunk.labelIndex).toBeInstanceOf(Map);
     expect(chunk.labelIndex!.get('start')).toBe(0);
     expect(chunk.labelIndex!.get('loop')).toBe(2);
-    expect(chunk.sourceMap!.get(0)).toMatchObject({ file: 't.s', line: 6 }); // the `lda`
+    expect(chunk.source).toMatchObject({ file: 't.s', line: 6 }); // the `lda`
   });
 
   it('keeps source info out of a .o built without debug info', async () => {
@@ -203,7 +202,7 @@ start:
     expect(off.success).toBe(true);
 
     const m = await deserializeObjectFile(off.outputs[0].data);
-    expect(m.chunks![0].sourceMap).toBeUndefined();
+    expect(m.chunks![0].source).toBeUndefined();
     expect(m.chunks![0].labelIndex).toBeUndefined();
     // The symbol exprs carry a `source` in memory, but it must not be written.
     expect(JSON.stringify(m)).not.toContain('"source"');
@@ -248,12 +247,12 @@ start:
       chunks: [{
         segments: ['CODE'], data: new Uint8Array([0x60]),
         labelIndex: new Map([['here', 0]]),
-        sourceMap: new Map([[0, { file: 'a.s', line: 1, column: 0 }]]),
+        source: { file: 'a.s', line: 1, column: 0 },
       }],
     };
     const chunk = (await deserializeObjectFile(await serializeObjectFile(m))).chunks![0];
     expect(chunk.labelIndex!.get('here')).toBe(0);
-    expect(chunk.sourceMap!.get(0)).toEqual({ file: 'a.s', line: 1, column: 0 });
+    expect(chunk.source).toEqual({ file: 'a.s', line: 1, column: 0 });
   });
 
   it('a module with a size guess carries a lateAssembly block that round-trips through a .o', async () => {

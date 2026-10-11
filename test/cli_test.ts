@@ -8,6 +8,7 @@ import {functionEngine} from '../src/driver/js/function.ts';
 import { fromHexString, fromByteString, joinDir } from "../src/util.ts";
 import { VERSION } from '../src/version.ts';
 import { createHash } from "sha1-uint8array";
+import { parseDbg } from '../tools/ca65compat/dbg.ts';
 
 describe('CLI', function() {
   // disable the usage message to keep the test output clean
@@ -100,6 +101,26 @@ describe('CLI', function() {
       expect([...written.get('rom.nes')!]).toEqual([0xa9, 3, 0xff, 0xff]);
       // `%O` in the config's file name is the output file's name.
       expect([...written.get('rom.nes_header')!]).toEqual([1, 2, 3, 4]);
+    });
+
+    it('writes a --dbgfile that names the output file', async function() {
+      const files = {
+        'main.s': '.segment "CODE"\nlda #3\n',
+        'nes.cfg': `
+          MEMORY { PRG: start = $8000, size = $4, file = %O; }
+          SEGMENTS { CODE: load = PRG, type = ro; }`,
+      };
+      const written = await build(files, ['-C', 'nes.cfg', '--dbgfile', 'rom.dbg',
+                                          '-o', 'rom.nes', 'main.s']);
+      const dbg = parseDbg(new TextDecoder().decode(written.get('rom.dbg')!));
+      expect(dbg.segs[0]).toMatchObject(
+          {name: 'CODE', start: 0x8000, size: 2, oname: 'rom.nes', ooffs: 0});
+      expect(dbg.lines.map(l => l.line)).toEqual([2]);
+    });
+
+    it('rejects --dbgfile combined with --compileonly', async function() {
+      await expect(build({'main.s': 'lda #3\n'}, ['-c', '--dbgfile', 'a.dbg', 'main.s']))
+          .rejects.toThrow();
     });
 
     it('reports a config parse error against the config file',

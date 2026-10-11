@@ -52,6 +52,8 @@ export interface SegmentDef {
   run?: string;
   /** Optional in the config. Defaults to the *load* area's type. */
   type: SegmentType;
+  /** `type` as the config wrote it. ld65 marks only these read-only in a `.dbg`. */
+  declaredType?: SegmentType;
   mirror?: string[];
   pool?: string[];
   // Unlike the MEMORY section, every numeric SEGMENTS attribute is a plain number
@@ -630,7 +632,9 @@ export function parseLinkerConfig(text: string, file = 'linker.cfg',
           ''}but does not load and run there. Rename one of them or use the MEMORY segment directly`, at);
     }
     // ld65 defaults a segment's type to that of the area it loads into.
-    return {...rest, type: rest.type ?? areas.get(rest.load!)!.type} as SegmentDef;
+    const def = {...rest, type: rest.type ?? areas.get(rest.load!)!.type} as SegmentDef;
+    if (rest.type) def.declaredType = rest.type;
+    return def;
   });
 
   return {memory, segments, files, symbols};

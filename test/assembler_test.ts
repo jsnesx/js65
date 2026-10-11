@@ -4829,7 +4829,7 @@ a_after:
   });
 
   describe('late-assembly replay', function() {
-    it('reproduces byte-identical output, sourceMap and labelIndex with no linkEnv', function() {
+    it('reproduces byte-identical output, debug runs and labelIndex with no linkEnv', function() {
       const body = '.import foo\nlda foo\nrts\n';
       const result = libAssemble(
           [{type: 'source', code: body, name: 'test.s'} as AssemblyInput],
@@ -4837,7 +4837,7 @@ a_after:
       if (!result.success) throw new Error(JSON.stringify(result.messages));
       const m = result.modules[0];
       expect(m.lateAssembly).toBeDefined();
-      expect(m.chunks![0].sourceMap?.size).toBeGreaterThan(0);
+      expect(m.chunks![0].debugRuns?.length).toBeGreaterThan(0);
 
       const replay = replayModule(m);
       expect(replay.success).toBe(true);

@@ -10,7 +10,7 @@
  */
 
 import { Base64 } from './base64.ts';
-import { MODULE_FORMAT_VERSION } from './module.ts';
+import { DEBUG_RUN_CODE, DEBUG_RUN_UNTYPED, MODULE_FORMAT_VERSION } from './module.ts';
 import type { AssertAction, Assertion, AutoImport, Chunk, Debug, DebugAddrSize, DebugCSym, DebugRun, DebugScope, DebugSym, LateAssembly, LateAssemblyCondQuery, LateAssemblyInput, LateAssemblySizeQuery, JsPost, JsPostSource, Module, OverwriteMode, PlacementMode, RomPatch, RomPatchRun, Segment, Substitution, Symbol } from './module.ts';
 import type { Expr, Meta } from './expr.ts';
 import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringToken, Token } from './token.ts';
@@ -308,7 +308,7 @@ function validateDebugRuns(v: unknown, path: string): DebugRun[] {
   });
 }
 
-// sourceMap / labelIndex arrive either as a real `Map` (a Module handed over
+// labelIndex arrives either as a real `Map` (a Module handed over
 // in-process) or as the `[key, value]` entry arrays a serialized `.o` carries.
 function mapEntries(v: unknown, path: string): Array<[unknown, unknown]> {
   if (v instanceof Map) return [...v];
@@ -360,13 +360,7 @@ function validateChunk(v: unknown, path: string): Chunk {
     if (!OVERWRITE_MODES.has(ow)) fail(`${path}.overwrite`, `expected one of forbid|allow|require`);
     out.overwrite = ow as OverwriteMode;
   }
-  if (v.sourceMap !== undefined) {
-    const m = new Map<number, SourceInfo>();
-    for (const [k, val] of mapEntries(v.sourceMap, `${path}.sourceMap`)) {
-      m.set(reqNumber(k, `${path}.sourceMap.key`), validateSourceInfo(val, `${path}.sourceMap.value`));
-    }
-    out.sourceMap = m;
-  }
+  if (v.source !== undefined) out.source = validateSourceInfo(v.source, `${path}.source`);
   if (v.labelIndex !== undefined) {
     const m = new Map<string, number>();
     for (const [k, val] of mapEntries(v.labelIndex, `${path}.labelIndex`)) {
@@ -634,7 +628,9 @@ export function parseModule(obj: unknown): Validated<Module> {
       out.chunks?.forEach((c, i) => c.debugRuns?.forEach((r, j) => {
         const at = `module.chunks[${i}].debugRuns[${j}]`;
         reqIndex(r[0], lineSets.length, `${at}[0]`);
-        if (r[3] !== -1) reqIndex(r[3], types.length, `${at}[3]`);
+        if (r[3] !== DEBUG_RUN_UNTYPED && r[3] !== DEBUG_RUN_CODE) {
+          reqIndex(r[3], types.length, `${at}[3]`);
+        }
       }));
     }
     if (obj.lateAssembly !== undefined) {
@@ -894,6 +890,9 @@ function validateOptions(v: unknown, path: string): Js65Options {
   flag('labelsWithoutColons');
   flag('pcAssignment');
   flag('forceRange');
+  flag('generateDbgFile');
+  const outputName = optString(v.outputName, `${path}.outputName`);
+  if (outputName !== undefined) out.outputName = outputName;
   const generateDebugInfo = optBoolean(v.generateDebugInfo, `${path}.generateDebugInfo`);
   if (generateDebugInfo !== undefined) out.generateDebugInfo = generateDebugInfo;
   const debugLevel = optNumber(v.debugLevel, `${path}.debugLevel`);

@@ -111,6 +111,27 @@ function firstRef(sym?: Symbol): Tokens.SourceInfo|undefined {
   return sym?.refs?.[0];
 }
 
+function chainDepth(source?: Tokens.SourceInfo): number {
+  let depth = 0;
+  for (let s = source?.parent; s; s = s.parent) depth++;
+  return depth;
+}
+
+/** A macro argument keeps its call site, so prefer a token from the macro body. */
+function deepestSource(tokens: Token[]): Tokens.SourceInfo|undefined {
+  let best: Tokens.SourceInfo|undefined;
+  let bestDepth = -1;
+  for (const {source} of tokens) {
+    if (!source) continue;
+    const depth = chainDepth(source);
+    if (depth > bestDepth) {
+      best = source;
+      bestDepth = depth;
+    }
+  }
+  return best;
+}
+
 /** What to do when a qualified name mentions a scope that doesn't exist yet. */
 type MissingScope = 'fail'|'undefined'|'create';
 
@@ -431,7 +452,9 @@ export class Assembler {
    * so we need a flag to track that a label started on this line so we can close
    * the size after the line ends.
    */
-  private pendingLabel?: {name: string, startPc: Expr};
+  private pendingLabel?: {name: string, startPc: Expr, depth: number};
+  /** Enum members and labels on a macro call line, which ca65 gives no size. */
+  private readonly unsizedSyms = new Set<Symbol>();
 
   /** Mapping for any string to byte array  */
   private charMapping = new MaxKeySizeCacheMap<string, number[]>();
@@ -512,9 +535,23 @@ export class Assembler {
   private readonly dbg?: DebugBuilder;
   /** Element type of the data directive being assembled, for span types. */
   private dataElement?: {size: number, type: string};
+  /** Whether the statement being assembled emitted an instruction. */
+  private emittedCode = false;
   /** Symbols defined in this module, as opposed to references that resolved. */
   private readonly definedSyms = new Set<Symbol>();
   private readonly cheapSyms: Array<{name: string, sym: Symbol, parent?: Symbol}> = [];
+  /** Token of every assignment of a `.set` symbol. */
+  private readonly setDefs = new Map<Symbol, Tokens.SourceInfo[]>();
+  /** Statement each definition came from, with its whole macro chain. */
+  private readonly defLines = new Map<Symbol, Tokens.SourceInfo[]>();
+  /** The current statement's source with the deepest macro chain. */
+  private _dbgSource?: Tokens.SourceInfo;
+  /** Where each `.import`/`.global` name was first declared, its def for ca65. */
+  private readonly globalDecls = new Map<string, Tokens.SourceInfo>();
+  /** Each `.export` of a name, which ca65 counts as a ref. */
+  private readonly exportSites = new Map<string, Tokens.SourceInfo[]>();
+  /** Conditional refs to names not defined yet. */
+  private readonly pendingCondRefs: Array<{name: string, scope: Scope, source: Tokens.SourceInfo}> = [];
   /** The last non-cheap label, which owns the cheap locals after it. */
   private lastLabel?: Symbol;
   private anonScopeCount = 0;
@@ -638,11 +675,7 @@ export class Assembler {
       }
       this._chunk.overwrite = this.overwriteMode;
 
-      // Initialize debug info tracking if enabled
-      if (this.opts.generateDebugInfo) {
-        this._chunk.sourceMap = new Map();
-        this._chunk.labelIndex = new Map();
-      }
+      if (this.opts.generateDebugInfo) this._chunk.labelIndex = new Map();
       // Check the current segments right now to see if we know if this
       // chunk is landing in ZP or ABS. If all of the possible segments for this
       // chunk are labelled as ZP, then this chunk should be in ZP too.
@@ -685,6 +718,30 @@ export class Assembler {
    * so we need to handle these cases. Resolve the label here, and then
    * if we do math on it later, we can substitute the label again.
    */
+  /** Keeps a line record for a line ca65 holds on to, such as a conditional. */
+  noteLine(src?: Tokens.SourceInfo) {
+    if (this.dbg && src) this.dbg.lineChain(src);
+  }
+
+  /** ca65 counts every symbol in a conditional as a ref, even forward ones. */
+  conditionRefs(expr: Expr, at?: Tokens.SourceInfo) {
+    if (!this.dbg) return;
+    const walk = (e: Expr) => {
+      if (e.op === '.sizeof') return;
+      const source = e.source ?? at;
+      if (e.op === 'sym' && e.sym && e.sym !== '*' && source) {
+        const sym = this.lookupSymbol(e.sym);
+        if (sym) {
+          (sym.refs ??= []).push(source);
+        } else if (!e.sym.startsWith('@') && !e.sym.includes('::')) {
+          this.pendingCondRefs.push({name: e.sym, scope: this.currentScope, source});
+        }
+      }
+      e.args?.forEach(walk);
+    };
+    walk(expr);
+  }
+
   definedValue(sym: string): Expr|undefined {
     if (sym === '*') return this.pc();
     const expr = this.walkSymbolTree(sym);
@@ -1080,7 +1137,9 @@ export class Assembler {
       return expr;
     }
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
-    const sym = scope.resolve(name, {allowForwardRef: true, ref: symbol});
+    // A nested term carries no source, but the debug info still wants its line.
+    const ref = symbol.source || !this.dbg ? symbol : {source: this._dbgSource};
+    const sym = scope.resolve(name, {allowForwardRef: true, ref});
     if (sym.expr) {
       // console.log(`sometging: ${JSON.stringify(sym)}`);
       return sym.expr;
@@ -1151,15 +1210,19 @@ export class Assembler {
             if (!multiScopeGlobal) scope.parent.symbols.set(name, sym);
           } else if (multiScopeGlobal) {
             // leave sym as-is since the imports/exports pass resolves it directly.
-          } else if (parentSym.id != null && parentSym.id >= 0) {
-            // If this is resolving a macro from a parent symbol, try to use that value, otherwise
-            // fall back to parent sym id
-            sym.expr = {op: 'sym', num: parentSym.id};
-          } else if (parentSym.expr) {
-            sym.expr = parentSym.expr;
           } else {
-            // must have either id or expr...?
-            collector.add('error', `Internal error: symbol '${name}' has neither id nor expr`, firstRef(sym));
+            // The parent symbol is the real one, so the debug info credits it the refs.
+            if (this.dbg && sym.refs) (parentSym.refs ??= []).push(...sym.refs);
+            if (parentSym.id != null && parentSym.id >= 0) {
+              // If this is resolving a macro from a parent symbol, try to use that value, otherwise
+              // fall back to parent sym id
+              sym.expr = {op: 'sym', num: parentSym.id};
+            } else if (parentSym.expr) {
+              sym.expr = parentSym.expr;
+            } else {
+              // must have either id or expr...?
+              collector.add('error', `Internal error: symbol '${name}' has neither id nor expr`, firstRef(sym));
+            }
           }
         }
         // handle global scope separately...
@@ -1402,6 +1465,14 @@ export class Assembler {
   private buildDebug(): mod.Debug|undefined {
     const dbg = this.dbg;
     if (!dbg) return undefined;
+    for (const {name, scope, source} of this.pendingCondRefs) {
+      for (let s: Scope|undefined = scope; s; s = s.parent) {
+        const sym = s.symbols.get(name);
+        if (!sym?.expr) continue;
+        (sym.refs ??= []).push(source);
+        break;
+      }
+    }
     const scopes: mod.DebugScope[] = [];
     const syms: mod.DebugSym[] = [];
     const scopeIds = new Map<Scope, number>();
@@ -1417,8 +1488,6 @@ export class Assembler {
         return undefined;
       }
     };
-    const lineIds = (sources: Tokens.SourceInfo[]|undefined) =>
-        sources?.length ? sources.map(src => dbg.lineId(src)) : undefined;
 
     // A scope's bytes include everything in the scopes nested inside it.
     const gather = (scope: Scope, out: mod.DebugScopeRun[]) => {
@@ -1453,7 +1522,8 @@ export class Assembler {
       })()) : [];
       const entry: mod.DebugScope = {
         name: scope.name ??
-            (scope.anonId ? `$anon-SCOPE-${String(scope.anonId).padStart(4, '0')}` : ''),
+            (scope.anonId ?
+                `$anon-SCOPE-${scope.anonId.toString(16).toUpperCase().padStart(4, '0')}` : ''),
         size: scope.dbgType === 'enum' ? 0 :
             sizeOf(scope.symbols.get(SIZE_NAME)?.expr) ??
             runs.reduce((n, r) => n + r[2], 0),
@@ -1491,10 +1561,18 @@ export class Assembler {
         kind: expr.op === 'im' ? 'imp' : sym.isLabel ? 'lab' : 'equ',
       };
       if (sym.export != null) out.export = true;
-      const defs = lineIds(sym.def ? [sym.def] : undefined);
-      if (defs) out.defs = defs;
-      const refs = lineIds(sym.refs);
-      if (refs) out.refs = refs;
+      const decl = expr.op === 'im' ? this.globalDecls.get(name) : undefined;
+      const defLines = this.defLines.get(sym) ?? (sym.def ? [sym.def] : decl ? [decl] : []);
+      const defs = defLines.flatMap(src => dbg.lineChain(src));
+      if (defs.length) out.defs = defs;
+      // A definition resolves its own name, which ca65 does not count as a ref.
+      const defTokens = this.setDefs.get(sym) ?? (sym.def ? [sym.def] : []);
+      const refs = [
+        ...(sym.refs ?? []).filter(r => !defTokens.some(
+            d => d.file === r.file && d.line === r.line && d.column === r.column)),
+        ...(sym.export != null ? this.exportSites.get(name) ?? [] : []),
+      ].map(r => dbg.asmLine(r));
+      if (refs.length) out.refs = refs;
       return out;
     };
 
@@ -1505,7 +1583,8 @@ export class Assembler {
         if (!this.definedSyms.has(sym) && sym.expr.op !== 'im') continue;
         const entry = entryFor(name, sym);
         entry.scope = scopeId;
-        const size = sizeOf(scope.symbols.get(`${name}${SIZE_SUFFIX}`)?.expr);
+        const size = this.unsizedSyms.has(sym) ? undefined :
+            sizeOf(scope.symbols.get(`${name}${SIZE_SUFFIX}`)?.expr);
         if (size) entry.size = size;
         symIds.set(sym, syms.length);
         syms.push(entry);
@@ -1559,6 +1638,7 @@ export class Assembler {
 
   // Assemble from a list of tokens
   line(tokens: Token[]) {
+    if (this.dbg) this._dbgSource = deepestSource(tokens);
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
@@ -1595,6 +1675,7 @@ export class Assembler {
   /** Where the next byte will land, to compare against after a statement. */
   private markEmitted(): {chunk?: Chunk, length: number, chunks: number} {
     this.dataElement = undefined;
+    this.emittedCode = false;
     return {chunk: this._chunk, length: this._chunk?.data.length ?? 0,
             chunks: this.chunks.length};
   }
@@ -1612,8 +1693,10 @@ export class Assembler {
     const dbg = this.dbg!;
     const elem = this.dataElement;
     const type = elem && size % elem.size === 0 ?
-        dbg.typeId(arrayType(size / elem.size, elem.type)) : -1;
-    dbg.addRun(chunk, start, size, dbg.lineSet(src), type);
+        dbg.typeId(arrayType(size / elem.size, elem.type)) :
+        this.emittedCode ? mod.DEBUG_RUN_CODE : mod.DEBUG_RUN_UNTYPED;
+    if (start === 0 && !chunk.source) chunk.source = src;
+    dbg.addRun(chunk, start, size, dbg.lineSet(this._dbgSource ?? src), type);
     const runs = this.currentScope.debugRuns ??= [];
     const last = runs[runs.length - 1];
     if (last && last[0] === this._chunkIndex && last[1] + last[2] === start) {
@@ -1820,6 +1903,10 @@ export class Assembler {
     const pending = this.pendingLabel;
     if (!pending) return;
     this.pendingLabel = undefined;
+    if (this.dbg && chainDepth(this._dbgSource) > pending.depth) {
+      const sym = this.currentScope.symbols.get(pending.name);
+      if (sym) this.unsizedSyms.add(sym);
+    }
     this.defineSizeOfSymbol(
         this.currentScope, pending.name, this.sizeSpan(pending.startPc, this.pc()));
   }
@@ -1870,7 +1957,7 @@ export class Assembler {
       // so we need to collect the data here into `pendingLabel` and end that when the next
       // line starts. If there's nothing on the line, then the size of the label is zero.
       if (token && (token as Tokens.StringToken).labelsData) {
-        this.pendingLabel = {name: ident, startPc: this.pc()};
+        this.pendingLabel = {name: ident, startPc: this.pc(), depth: chainDepth(this._dbgSource)};
       } else {
         this.defineSizeOfSymbol(this.currentScope, ident, 0);
       }
@@ -2005,9 +2092,16 @@ export class Assembler {
     if (scope.collectRefs && token?.source) {
       sym.def = token.source;
     }
-    if (this.dbg && !mut) {
+    if (this.dbg) {
       this.definedSyms.add(sym);
-      if (isCheapLocal && isLabel) {
+      const at = this._dbgSource ?? token?.source;
+      if (at) this.defLines.set(sym, mut ? [...this.defLines.get(sym) ?? [], at] : [at]);
+      if (mut && token?.source) {
+        const defs = this.setDefs.get(sym) ?? [];
+        defs.push(token.source);
+        this.setDefs.set(sym, defs);
+      }
+      if (isCheapLocal && isLabel && !mut) {
         this.cheapSyms.push({name: ident, sym, parent: this.lastLabel});
       }
     }
@@ -2232,11 +2326,7 @@ export class Assembler {
     if (arglen) expr = this.resolve(expr); // BEFORE opcode (in case of *)
     const {chunk} = this;
     this.markWritten(1 + arglen);
-
-    // Record source info for this instruction
-    if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-      this._chunk.sourceMap.set(chunk.data.length, this._source);
-    }
+    if (this.dbg) this.emittedCode = true;
 
     chunk.data.push(op);
     if (arglen) {
@@ -2472,6 +2562,8 @@ export class Assembler {
     const ctx = this.structContext[this.structContext.length - 1];
     this.assign(name, value, false, token, 'enumMember');
     this.defineSizeOfSymbol(this.currentScope, name, 1);
+    const sym = this.dbg && this.currentScope.symbols.get(name);
+    if (sym) this.unsizedSyms.add(sym);
     ctx.offset = value + 1;
     ctx.count++;
   }
@@ -2630,24 +2722,10 @@ export class Assembler {
       // and markWritten are based on the start of the chunk, rather than where
       // it ends; but this is still a potential source of bugs!
       if (typeof arg === 'number') {
-        // Record source info for each byte
-        if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-          this._chunk.sourceMap.set(chunk.data.length, this._source);
-        }
         this.writeNumber(chunk.data, 1, arg);
       } else if (typeof arg === 'string') {
-        // Record source info for each character in the string
-        if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-          for (let i = 0; i < arg.length; i++) {
-            this._chunk.sourceMap.set(chunk.data.length + i, this._source);
-          }
-        }
         writeString(chunk.data, arg, charmap);
       } else {
-        // Record source info before append (which writes 1 byte)
-        if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-          this._chunk.sourceMap.set(chunk.data.length, this._source);
-        }
         this.append(arg, 1);
       }
     }
@@ -2667,11 +2745,6 @@ export class Assembler {
     this.markWritten(2 * args.length);
 
     for (const arg of args) {
-      // Record source info for each byte of the word (2 bytes)
-      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-        this._chunk.sourceMap.set(chunk.data.length, this._source);
-        this._chunk.sourceMap.set(chunk.data.length + 1, this._source);
-      }
       if (typeof arg === 'number') {
         this.writeNumber(chunk.data, 2, arg);
       } else {
@@ -2690,11 +2763,6 @@ export class Assembler {
     this.markWritten(3 * args.length);
 
     for (const arg of args) {
-      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-        for (let i = 0; i < 3; i++) {
-          this._chunk.sourceMap.set(chunk.data.length + i, this._source);
-        }
-      }
       if (typeof arg === 'number') {
         this.writeNumber(chunk.data, 3, arg);
       } else {
@@ -2715,11 +2783,6 @@ export class Assembler {
     this.markWritten(2 * args.length);
 
     for (const arg of args) {
-      // Record source info for each byte of the word (2 bytes)
-      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-        this._chunk.sourceMap.set(chunk.data.length, this._source);
-        this._chunk.sourceMap.set(chunk.data.length + 1, this._source);
-      }
       if (typeof arg === 'number') {
         this.writeNumber(chunk.data, 1, arg >> 8);
         this.writeNumber(chunk.data, 1, arg);
@@ -2739,12 +2802,6 @@ export class Assembler {
     this.markWritten(4 * args.length);
 
     for (const arg of args) {
-      // Record source info for each byte of the dword (4 bytes)
-      if (this.opts.generateDebugInfo && this._chunk?.sourceMap && this._source) {
-        for (let i = 0; i < 4; i++) {
-          this._chunk.sourceMap.set(chunk.data.length + i, this._source);
-        }
-      }
       if (typeof arg === 'number') {
         this.writeNumber(chunk.data, 4, arg);
       } else {
@@ -2903,6 +2960,16 @@ export class Assembler {
     // different. The .global should turn into an .import at close, and .export should still
     // export that sym.
     if (existing && weak) return;
+    this.noteLine(this._dbgSource);
+    if (this.dbg && this._source) {
+      if (kind === 'export') {
+        const sites = this.exportSites.get(ident) ?? [];
+        sites.push(this._source);
+        this.exportSites.set(ident, sites);
+      } else if (!this.globalDecls.has(ident)) {
+        this.globalDecls.set(ident, this._source);
+      }
+    }
     // Use the linker version of the -D cli define instead of the global .set version
     if (kind === 'import' && this.commandLineDefines.delete(ident)) {
       this.currentScope.global.symbols.delete(ident);

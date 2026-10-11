@@ -249,14 +249,17 @@ function fillFileInfo(module: Module, sourceContents: SourceContents|undefined,
                       log: SourceLog, callbacks?: FileCallbacks) {
   const debug = module.debug!;
   const known = new Set(debug.files.map(f => f.name));
-  for (const [key, bin] of log.binary) {
+  const add = (key: string, baseIndex: number, size: number) => {
     const parts = key.split('\0');
     const filename = parts.pop()!;
-    const name = joinDir(parts[bin.baseIndex] ?? '', filename);
-    if (known.has(name)) continue;
+    const name = joinDir(parts[baseIndex] ?? '', filename);
+    if (known.has(name)) return;
     known.add(name);
-    debug.files.push({name, size: bin.content.length, mtime: 0});
-  }
+    debug.files.push({name, size, mtime: 0});
+  };
+  // ca65 lists every file it opened, even one that produced no lines.
+  for (const [key, text] of log.text) add(key, text.baseIndex, utf8Length(text.content));
+  for (const [key, bin] of log.binary) add(key, bin.baseIndex, bin.content.length);
   for (const file of debug.files) {
     if (!file.size) {
       const text = sourceContents?.data.get(file.name);
