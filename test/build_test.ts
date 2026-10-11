@@ -129,9 +129,10 @@ describe('BuildSession outputs', function() {
   it('writes the linked binary and the requested sidecars', async function() {
     const {session: s, written} = session();
     await s.writeOutputs(
-        result(output('rom', 'binary'), output('mlb', 'mlb'), output('m', 'map')),
-        {outfile: 'out.nes', mlbfile: 'out.mlb', mapfile: 'out.map'});
-    expect([...written.keys()].sort()).toEqual(['out.map', 'out.mlb', 'out.nes']);
+        result(output('rom', 'binary'), output('dbg', 'debug'), output('mlb', 'mlb'),
+               output('m', 'map')),
+        {outfile: 'out.nes', dbgfile: 'out.dbg', mlbfile: 'out.mlb', mapfile: 'out.map'});
+    expect([...written.keys()].sort()).toEqual(['out.dbg', 'out.map', 'out.mlb', 'out.nes']);
   });
 
   it('leaves out sidecars that were not asked for', async function() {
@@ -281,12 +282,12 @@ describe('Builder', function() {
       const files = {
         'js65.json': JSON.stringify({outDir: 'out', projects: [{
           name: 'game', sources: ['src/a.s'], target: 'sim',
-          output: 'game.prg', mlbfile: 'game.mlb', mapfile: 'game.map',
+          output: 'game.prg', dbgfile: 'game.dbg', mlbfile: 'game.mlb', mapfile: 'game.map',
         }]}),
         'src/a.s': 'lda #1\n',
       };
       expect((await runBuild(files)).files)
-          .toEqual(['out/game.map', 'out/game.mlb', 'out/game.prg']);
+          .toEqual(['out/game.dbg', 'out/game.map', 'out/game.mlb', 'out/game.prg']);
     });
 
     it('passes includePaths and binIncludePaths to the assembler', async function() {

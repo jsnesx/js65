@@ -36,7 +36,14 @@ export class DebugBuilder {
   private readonly fileIds = new Map<string, number>();
   /** Per file, line ids keyed by line, type and count. */
   private readonly lineIds = new Map<string, Map<number, number>>();
-  /** Trie over the line ids of each set. */
+  /**
+   * Trie over the line ids of each set.
+   * This holds the tree structure for the call stack active on this line.
+   * For most lines, this is just one deep for the current line, but during macro
+   * expansion this can get fairly deep. For a macro expansion, the body line is the
+   * "root" and maps to each of the call sites for that macro. Each node in this tree is
+   * shared by using only an index into the lineSets instead of copying everything.
+   */
   private readonly setTrie: SetNode = {};
   private readonly typeIds = new Map<string, number>();
 
@@ -68,12 +75,12 @@ export class DebugBuilder {
     return this.lineChain(src)[0];
   }
 
-  /** Builds out the macro call chain. Basically all the lines that share the same source line */
+  /** Builds out the macro call chain (or just all the lines that share the same source line) */
   lineSet(src: SourceInfo): number {
     return this.internSet(this.lineChain(src));
   }
 
-  /** Every line active at `src`, innermost first, like ca65's `GetFullLineInfo`. */
+  /** Every line active at `src` starting from the innermost. */
   lineChain(src: SourceInfo): number[] {
     const ids: number[] = [];
     let depth = ancestors(src);
@@ -88,7 +95,7 @@ export class DebugBuilder {
     return ids;
   }
 
-  /** The line ca65 last read from the file, like its `GetAsmLineInfo`. */
+  /** The start of the most line read from the file starting from this current root */
   asmLine(src: SourceInfo): number {
     let root = src;
     for (;;) {
@@ -124,7 +131,6 @@ export class DebugBuilder {
     return id;
   }
 
-  /** Adds one statement's bytes to a chunk. */
   addRun(chunk: Chunk|{debugRuns?: DebugRun[]}, offset: number, size: number,
          set: number, type: number) {
     (chunk.debugRuns ??= []).push([set, offset, size, type]);

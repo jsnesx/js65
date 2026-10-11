@@ -56,8 +56,8 @@ interface BaseChunk {
   asserts?: Assertion[];
   /** How overwriting previously-written fixed-position data is handled. */
   overwrite?: OverwriteMode; // NOTE: only set programmatically?
-  /** Source infos for each byte in the chunk. */
-  sourceMap?: Map<number, SourceInfo>;
+  /** Where the chunk's first byte came from. Debug builds only. */
+  source?: SourceInfo;
   /** Labels within the chunk, mapped to byte offset. */
   labelIndex?: Map<string, number>;
   /** Source lines behind each run of bytes, in offset order. Debug builds only. */
@@ -295,7 +295,7 @@ export interface DebugFile {
   mtime: number;
 }
 
-/** Same values as ld65's `common/lidefs.h`. */
+/** matches the line values from ld65 */
 export const DEBUG_LINE_ASM = 0;
 export const DEBUG_LINE_EXT = 1;
 export const DEBUG_LINE_MACRO = 2;
@@ -312,9 +312,14 @@ export interface DebugLine {
 
 /**
  * Bytes a set of lines produced: `[lineSet, offset, size, type]`.
- * `lineSet` indexes `Debug.lineSets`, `type` indexes `Debug.types` or is -1.
+ * `lineSet` indexes `Debug.lineSets`, `type` indexes `Debug.types` or is one
+ * of the untyped markers below.
  */
 export type DebugRun = [lineSet: number, offset: number, size: number, type: number];
+
+export const DEBUG_RUN_UNTYPED = -1;
+/** One instruction, untyped. Kept so the MLB can find opcodes. */
+export const DEBUG_RUN_CODE = -2;
 
 /** Bytes a scope owns: `[chunk, offset, size]`. Includes nested scopes. */
 export type DebugScopeRun = [chunk: number, offset: number, size: number];

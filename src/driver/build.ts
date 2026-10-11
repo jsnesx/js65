@@ -18,6 +18,7 @@ export const STDOUT = '//stdout';
 /** Where one build's artifacts go. An absent sidecar is simply not written. */
 export interface OutputPaths {
   outfile: string;
+  dbgfile?: string;
   mlbfile?: string;
   mapfile?: string;
   depfile?: string;
@@ -84,7 +85,10 @@ export class BuildSession {
         : this.readBinary("", filename);
     if (typeof bytes === "string") bytes = new Base64().decode(bytes);
     if (isGzip(bytes)) {
-      return { type: 'module', module: deserializeObjectFile(bytes, filename) };
+      const module = deserializeObjectFile(bytes, filename);
+      // ld65 names a module after its object file, not the source in it.
+      if (filename !== STDIN) module.name = filename;
+      return { type: 'module', module };
     }
     // Frontends also strip the BOM, but it doesn't hurt to check it in this path too.
     if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
@@ -139,6 +143,11 @@ export class BuildSession {
           "", extra.name.replace(/%O/g, paths.outfile), extra.data);
     }
 
+    const dbg = findOutput(result, 'debug');
+    if (paths.dbgfile && dbg) {
+      await this.callbacks.fsWriteBytes("", paths.dbgfile, dbg.data);
+    }
+
     const mlb = findOutput(result, 'mlb');
     if (paths.mlbfile && mlb) {
       await this.callbacks.fsWriteBytes("", paths.mlbfile, mlb.data);
@@ -189,6 +198,7 @@ export interface BuildOverrides {
   allowJavascript?: boolean;
   lint?: LintOptions;
   outfile?: string;
+  dbgfile?: string;
   mlbfile?: string;
   mapfile?: string;
   depfile?: string;
@@ -284,6 +294,7 @@ export class Builder {
         inputs.push(await this.session.readInput(source));
       }
       const options = await projectOptions(this.session, config, project, overrides, sources);
+      options.outputName = outfile;
       let baseRom: Uint8Array | undefined;
       if (project.baseRom) {
         const data = this.session.readBinary("", project.baseRom);
@@ -301,6 +312,7 @@ export class Builder {
 
       const bytes = await this.session.writeOutputs(result, {
         outfile,
+        dbgfile: overrides.dbgfile ?? project.dbgfile,
         mlbfile: overrides.mlbfile ?? project.mlbfile,
         mapfile: overrides.mapfile ?? project.mapfile,
         depfile: overrides.depfile,
@@ -358,6 +370,7 @@ export async function projectOptions(
     debugLevel,
     generateDebugInfo: debugLevel >= 0,
     generateMapFile: Boolean(overrides.mapfile ?? project.mapfile),
+    generateDbgFile: Boolean(overrides.dbgfile ?? project.dbgfile),
     lint: mergeLint(config.lint, overrides.lint),
   };
   // Read through the session so a config parse error gets a source snippet like any

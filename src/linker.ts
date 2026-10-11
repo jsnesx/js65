@@ -7,8 +7,9 @@ import { type ErrorCollector, FatalError, RecoverableError } from './error.ts';
 import type { Expr } from './expr.ts';
 import * as Exprs from './expr.ts';
 import { type CfgSymbols, type LinkerConfig, configSymbols, linkerDefines, lowerLinkerConfig, parseLinkerConfig, resolveCfgExpr } from './linkerconfig.ts';
-import { type Assertion, type Chunk, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
+import { type Assertion, type Chunk, DEBUG_RUN_CODE, type Debug, type DebugRun, type Module, type OverwriteMode, type PlacementMode, Segment, type Substitution, type Symbol } from './module.ts';
 import { buildLinkTimeEnv, replayModules } from './assemblypass.ts';
+import { type DbgLink, type DbgModule, type DbgSegment, writeDbg } from './dbgfile.ts';
 import { Targets } from "./preamble.ts";
 import { Preprocessor } from './preprocessor.ts';
 import * as Tokens from './token.ts';
@@ -124,6 +125,11 @@ export class Linker {
 
   report(verbose = false): string {
     return this._link.report(verbose);
+  }
+
+  /** ld65 `--dbgfile` text. Only meaningful after `link()`. */
+  dbgFile(outputName: string): string {
+    return writeDbg(this._link.dbgLink(outputName));
   }
 
   outputFiles(): Array<{name: string, data: Uint8Array}> {
@@ -264,7 +270,7 @@ export class Linker {
     const commentCache = new Map<string, Map<number, string>>();
     let cachedFile: string|undefined;
     let cachedComments: Map<number, string>|undefined;
-    const commentFor = (source: SourceInfo, line: number): string => {
+    const commentFor = (source: SourceLine, line: number): string => {
       if (source.file !== cachedFile) {
         cachedFile = source.file;
         cachedComments = commentCache.get(cachedFile);
@@ -443,9 +449,8 @@ export class Linker {
           labelType = "NesPrgRom";
         }
 
-        // Get source info from sourceMap if available
         let comment = "";
-        const srcInfo = c.sourceMap?.get(offsetInChunk);
+        const srcInfo = c.sourceAt(offsetInChunk);
         if (srcInfo) comment = commentFor(srcInfo, srcInfo.line - 1);
 
         // Labels from chunk labelIndex are real labels, not anonymous/temp
@@ -474,7 +479,7 @@ export class Linker {
       // Group consecutive bytes with the same source info into ranges
       let rangeStart = -1;
       let rangeEnd = -1;
-      let rangeSrcInfo: SourceInfo | undefined;
+      let rangeSrcInfo: SourceLine | undefined;
       let rangeName: string | undefined;
       let name = c.name;
 
@@ -534,9 +539,12 @@ export class Linker {
         rangeStart = -1;
       };
 
+      const ranges = c.sourceRanges();
+      let r = 0;
       for (let offset = 0; offset < c.size; offset++) {
         name = rev.get(offset) || name;
-        const srcInfo = c.sourceMap?.get(offset);
+        while (r < ranges.length && ranges[r][1] <= offset) r++;
+        const srcInfo = r < ranges.length && ranges[r][0] <= offset ? ranges[r][2] : undefined;
 
         // Check if this continues the current range
         const sameSource = srcInfo && rangeSrcInfo &&
@@ -820,6 +828,14 @@ class LinkSegment {
   get delta(): number { return this.isRam ? this.ramBase : (this.offset - this.memory); }
 }
 
+interface SourceLine {
+  file: string;
+  line: number;
+}
+
+/** Each module's lines as the MLB writer wants them, shared by its chunks. */
+const sourceLines = new WeakMap<Debug, SourceLine[]>();
+
 /** A contiguous run of a placed chunk's bytes within one segment. */
 interface Piece {
   segment: LinkSegment;
@@ -857,8 +873,12 @@ class LinkChunk {
   /** Table of contents for labels in the chunk, for debugging. */
   readonly labelIndex: Map<string, number>|undefined;
 
-  /** Table of contents for source info in the chunk, for debugging. */
-  readonly sourceMap: Map<number, SourceInfo>|undefined;
+  /** Where the first byte came from, for error messages. */
+  readonly source: SourceInfo|undefined;
+  readonly debugRuns: readonly DebugRun[]|undefined;
+  /** The owning module's debug tables, which `debugRuns` index into. */
+  readonly debug: Debug|undefined;
+  private _sourceRanges?: Array<[number, number, SourceLine]>;
 
   private _data?: Uint8Array;
 
@@ -871,14 +891,17 @@ class LinkChunk {
               readonly index: number,
               chunk: Chunk,
               readonly chunkOffset: number,
-              readonly symbolOffset: number) {
+              readonly symbolOffset: number,
+              debug?: Debug) {
     this.name = chunk.name;
     this.size = chunk.data.length;
     this.align = chunk.align;
     this.segments = chunk.segments;
     this.placement = chunk.placement ?? 'declarationOrder';
     this.labelIndex = chunk.labelIndex && new Map(chunk.labelIndex);
-    this.sourceMap = chunk.sourceMap && new Map(chunk.sourceMap);
+    this.source = chunk.source;
+    this.debugRuns = chunk.debugRuns;
+    this.debug = debug;
     this._data = chunk.data;
     for (const sub of chunk.subs || []) {
       this.subs.add(translateSub(sub, chunkOffset, symbolOffset));
@@ -904,8 +927,33 @@ class LinkChunk {
   }
 
   at(): {source?: SourceInfo}|undefined {
-    const source = this.sourceMap?.get(0);
+    const source = this.source;
     return source && {source};
+  }
+
+  /** Innermost line of each run. Code claims only its opcode byte. */
+  sourceRanges(): ReadonlyArray<readonly [number, number, SourceLine]> {
+    if (this._sourceRanges) return this._sourceRanges;
+    const out: Array<[number, number, SourceLine]> = [];
+    const debug = this.debug;
+    if (debug) {
+      let lines = sourceLines.get(debug);
+      if (!lines) sourceLines.set(debug, lines = []);
+      for (const [set, offset, size, type] of this.debugRuns ?? []) {
+        const id = debug.lineSets[set][0];
+        let line = lines[id];
+        if (!line) {
+          const l = debug.lines[id];
+          lines[id] = line = {file: debug.files[l.file].name, line: l.line};
+        }
+        out.push([offset, offset + (type === DEBUG_RUN_CODE ? 1 : size), line]);
+      }
+    }
+    return this._sourceRanges = out;
+  }
+
+  sourceAt(k: number): SourceLine|undefined {
+    return this.sourceRanges().find(([s, e]) => k >= s && k < e)?.[2];
   }
 
   /** The segments a mirror chunk replicates into, in declaration order. */
@@ -1452,7 +1500,7 @@ class Link {
       this.addRawSegment(segment);
     }
     for (const chunk of file.chunks || []) {
-      const lc = new LinkChunk(this, this.chunks.length, chunk, dc, ds);
+      const lc = new LinkChunk(this, this.chunks.length, chunk, dc, ds, file.debug);
       this.chunks.push(lc);
     }
     for (const symbol of file.symbols || []) {
@@ -2726,6 +2774,125 @@ class Link {
              hex(this.segmentAlign.get(name) ?? 1, 5)}  ${offs}  ${file}\n`;
     }
     return out + '\n';
+  }
+
+  /** Generates the full context for the dbg writer */
+  dbgLink(outputName: string): DbgLink {
+    const named = new Set<string>();
+    for (const m of this.rawModules) {
+      for (const s of m.segments ?? []) named.add(s.name);
+      for (const c of m.chunks ?? []) for (const s of c.segments) named.add(s);
+    }
+    const extent = new Map<string, number>();
+    for (const [, , p] of this.placed) {
+      const end = p.offset - p.segment.delta - p.segment.memory + p.size;
+      extent.set(p.segment.name, Math.max(extent.get(p.segment.name) ?? 0, end));
+    }
+    const names = this.segmentOrder.filter(
+        n => this.segments.has(n) && (named.has(n) || extent.has(n)));
+    const segIds = new Map(names.map((n, i) => [n, i]));
+    const segments = names.map((name): DbgSegment => {
+      const s = this.segments.get(name)!;
+      const def = this.config?.segments.find(d => d.name === name);
+      const out: DbgSegment = {
+        name, start: s.memory, size: extent.get(name) ?? 0,
+        addrsize: ['default', 'zeropage', 'absolute', 'far', 'long'][s.addressing] ?? 'absolute',
+        readOnly: def ? def.declaredType === 'ro' || def.declaredType === 'overwrite' : !s.isRam,
+      };
+      if (!s.isRam) {
+        const file = s.out || '%O';
+        out.oname = file.replace(/%O/g, outputName);
+        out.ooffs = s.offset - this.fileBase(file);
+      }
+      return out;
+    });
+    const modules = this.rawModules.map((module, i): DbgModule => {
+      const {chunkStart, chunkCount} = this.moduleRanges[i];
+      const pieces = this.chunks.slice(chunkStart, chunkStart + chunkCount).map(
+          c => c.pieces.map(p => ({
+            seg: segIds.get(p.segment.name)!, start: p.start, size: p.size,
+            segStart: p.offset - p.segment.delta - p.segment.memory,
+          })));
+      return {module, pieces};
+    });
+    return {
+      segments, modules,
+      resolve: (module, expr) => {
+        const {chunkStart, symbolStart} = this.moduleRanges[module];
+        const translated = translateExpr(expr, chunkStart, symbolStart);
+        const e = this.resolveQuietly(translated);
+        if (e?.op !== 'num' || e.meta?.rel) return undefined;
+        const value = e.num!;
+        const index = this.segmentChunk(translated)?.chunk;
+        const chunk = index != null ? this.chunks[index] : undefined;
+        if (!chunk?.pieces.length) return {value};
+        const k = value - (chunk.org ?? 0);
+        const p = chunk.pieces.find(p => k >= p.start && k < p.start + p.size) ??
+            chunk.pieces[0];
+        return {value, seg: segIds.get(p.segment.name)};
+      },
+      exporter: name => {
+        const i = this.exports.get(name);
+        if (i == null) return undefined;
+        const m = this.moduleRanges.findIndex(
+            r => i >= r.symbolStart && i < r.symbolStart + r.symbolCount);
+        return m >= 0 ? m : undefined;
+      },
+    };
+  }
+
+  /** The chunk an address points into */
+  private segmentChunk(expr: Expr, depth = 0): {chunk?: number}|undefined {
+    if (depth > 64) return undefined;
+    const [a, b] = expr.args ?? [];
+    switch (expr.op) {
+      case 'im':
+      case 'sym': {
+        const i = expr.op === 'im' ? this.exports.get(expr.sym!) : expr.num;
+        const next = i != null ? this.symbols[i]?.expr : undefined;
+        return next && this.segmentChunk(next, depth + 1);
+      }
+      case 'num':
+        return {chunk: expr.meta?.chunk};
+      case '+': {
+        if (!b) break;
+        const l = this.segmentChunk(a, depth + 1);
+        const r = this.segmentChunk(b, depth + 1);
+        if (!l || !r || (l.chunk != null && r.chunk != null)) return undefined;
+        return {chunk: l.chunk ?? r.chunk};
+      }
+      case '-': {
+        if (!b) break;
+        const l = this.segmentChunk(a, depth + 1);
+        const r = this.segmentChunk(b, depth + 1);
+        if (!l || !r) return undefined;
+        if (r.chunk == null) return l;
+        return l.chunk === r.chunk ? {} : undefined;
+      }
+    }
+    for (const arg of expr.args ?? []) {
+      const s = this.segmentChunk(arg, depth + 1);
+      if (!s || s.chunk != null) return undefined;
+    }
+    return {};
+  }
+
+  /** Like resolveSymbols, but gives up quietly instead of reporting. */
+  private resolveQuietly(expr: Expr): Expr|undefined {
+    let missing = false;
+    const out = Exprs.traverse(expr, (e, rec) => {
+      while (e.op === 'im' || e.op === 'sym') {
+        const i = e.op === 'im' ? this.exports.get(e.sym!) : e.num;
+        const next = i != null ? this.symbols[i]?.expr : undefined;
+        if (!next) {
+          missing = true;
+          return e;
+        }
+        e = next;
+      }
+      return this.resolveLink(Exprs.evaluate(rec(e)));
+    });
+    return missing ? undefined : out;
   }
 
   report(verbose = false): string {

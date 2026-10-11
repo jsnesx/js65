@@ -297,6 +297,9 @@ export class Preprocessor {
     }
     if (!front) return;
     if (front.token === 'cs') {
+      if (front.str !== '.endif' && (front.str.startsWith('.if') || front.str.startsWith('.else'))) {
+        this.asm.noteLine(front.source);
+      }
       switch (front.str) {
         case '.endif': {
           this.conds.pop();
@@ -349,6 +352,7 @@ export class Preprocessor {
   }
 
   private ifValue(expr: Expr, line: Token[]): CondResult {
+    this.asm.conditionRefs(expr, line[0].source);
     const r = this.evaluateConstOrDefer(expr, line[0]);
     if (!('deferred' in r)) return {value: !!r.value};
     const late = this.asm.lateCondition(line);
@@ -357,6 +361,7 @@ export class Preprocessor {
 
   private openIf(line: Token[], test: () => CondResult): void {
     const at = line[0];
+    this.asm.noteLine(at.source);
     const state = armState(this.condition(test, at));
     this.conds.push({at, state, depth: this.stream.depth});
   }
@@ -365,6 +370,7 @@ export class Preprocessor {
   private nextBranch(line: Token[]): void {
     const top = this.conds[this.conds.length - 1];
     if (!top) badClose('.if', line[0]);
+    this.asm.noteLine(line[0].source);
     top.state = 'done';
   }
 
@@ -818,6 +824,7 @@ export class Preprocessor {
   /** `.const(expr)` is 1 when the expression is already known, 0 otherwise. */
   private constExpr(cs: Token, arg: Token[]) : Token[] {
     const expr = parseOneExpr(arg, cs, this.asm.encodeChar);
+    this.asm.conditionRefs(expr, cs.source);
     let known = true;
     try {
       // `*` and labels have a value here, but it's an address rather than a
@@ -1158,11 +1165,13 @@ export class Preprocessor {
     if (++top[2] >= top[1]) return;
     this.repeats.push(top);
     const tag = this.asm.opts.generateDebugInfo ? this.repeats.length : 0;
+    // A replayed `.endrep` is itself tagged, so keep the outermost one.
+    const end = line[0].source?.repeatEnd ?? line[0].source;
     this.stream.unshift(...top[0].map(line => line.map(token => {
       if (token.token === 'ident' && token.str === top[3]) {
         return Tokens.numToken(top[2], token.source);
       }
-      return tag ? Tokens.withRepeat(token, tag) : token;
+      return tag ? Tokens.withRepeat(token, tag, end) : token;
     })));
   }
 

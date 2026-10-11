@@ -2,9 +2,11 @@
 
 import {describe, it, expect} from 'bun:test';
 import {
-  parseDbg, checkDbgSyntax, normalizeDbg, DbgError,
+  parseDbg, checkDbgSyntax, normalizeDbg, DbgError, type DbgSym,
 } from '../tools/ca65compat/dbg.ts';
-import {assemble, deserializeObjectFile, serializeObjectFile} from '../src/libassembler.ts';
+import {
+  assemble, compile, deserializeObjectFile, findOutput, serializeObjectFile,
+} from '../src/libassembler.ts';
 import type {Module} from '../src/module.ts';
 
 const T = (...fields: string[]) => fields.join('\t');
@@ -264,11 +266,13 @@ describe('module debug tables', () => {
     expect(set.map(l => [l.line, l.type, l.count])).toEqual([[8, 0, 0], [6, 2, 1], [3, 2, 2]]);
   });
 
-  it('counts .repeat depth', () => {
+  it('counts .repeat depth beside the .endrepeat line', () => {
     const m = build('.segment "CODE"\n.repeat 2\n  nop\n.endrepeat\n');
     const set = m.debug!.lineSets[m.chunks![0].debugRuns![0][0]];
-    expect(set.map(id => lineOf(m, id))).toEqual([{file: 0, line: 3, type: 0, count: 1}]);
-    expect(m.chunks![0].debugRuns![0].slice(1, 3)).toEqual([0, 2]);
+    expect(set.map(id => lineOf(m, id))).toEqual([
+      {file: 0, line: 3, type: 0, count: 1}, {file: 0, line: 4, type: 0, count: 0},
+    ]);
+    expect(m.chunks![0].debugRuns!.map(r => r.slice(0, 3))).toEqual([[0, 0, 1], [0, 1, 1]]);
   });
 
   it('records imports, exports and def/ref lines', () => {
@@ -307,5 +311,96 @@ describe('module debug tables', () => {
     const back = deserializeObjectFile(serializeObjectFile(m, false));
     expect(back.debug).toBeUndefined();
     expect(back.chunks![0].debugRuns).toBeUndefined();
+  });
+});
+
+// Expected values were checked against ca65 -g and ld65 --dbgfile.
+describe('dbg writer', () => {
+  const A = [
+    '.import ext', '.export main', '.segment "CODE"',
+    '.proc main', '  lda #1', '@loop:', '  dex', '  bne @loop', '  jsr ext', '  rts', '.endproc',
+    '.macro twice', '  nop', '  nop', '.endmacro', '  twice',
+    '.segment "BSS"', 'buf: .res 4',
+  ].join('\n') + '\n';
+  const B = '.export ext\n.segment "CODE"\next:\n  rts\n';
+  const CFG = `
+    MEMORY { RAM: start=$0200, size=$100; ROM: start=$8000, size=$100, file=%O; }
+    SEGMENTS { CODE: load=ROM, type=ro; BSS: load=RAM, type=bss; }`;
+
+  function link() {
+    const r = compile(
+        [{type: 'source', code: A, name: 'a.s'}, {type: 'source', code: B, name: 'b.s'}],
+        {generateDebugInfo: true, generateDbgFile: true, outputName: 'ld.bin',
+         linkerConfig: CFG, lint: {enabled: false}});
+    expect(r.messages.filter(m => m.level === 'error')).toEqual([]);
+    const text = new TextDecoder().decode(findOutput(r, 'debug')!.data);
+    expect(checkDbgSyntax(text)).toEqual([]);
+    return parseDbg(text);
+  }
+  const m = link();
+  const seg = (name: string) => m.segs.findIndex(s => s.name === name);
+  const modOf = (s: DbgSym): number =>
+      s.scope !== undefined ? m.scopes[s.scope].mod : modOf(m.syms[s.parent!]);
+  const sym = (name: string, mod = 0) => m.syms.find(s => s.name === name && modOf(s) === mod)!;
+  const lineAt = (line: number, type = 0) =>
+      m.lines.find(l => l.file === 0 && l.line === line && l.type === type)!;
+  const spansOf = (ids: number[]) => ids.map(id => {
+    const s = m.spans[id];
+    return [m.segs[s.seg].name, s.start, s.size];
+  });
+
+  it('writes the segments as ld65 does', () => {
+    expect(m.segs.map(s => [s.name, s.start, s.size, s.type, s.oname, s.ooffs])).toEqual([
+      ['CODE', 0x8000, 12, 'ro', 'ld.bin', 0],
+      ['BSS', 0x200, 4, 'rw', undefined, undefined],
+    ]);
+  });
+
+  it('describes a .proc', () => {
+    const main = sym('main');
+    const scope = m.scopes.find(s => s.name === 'main')!;
+    expect(scope).toMatchObject({mod: 0, type: 'scope', size: 9, parent: 0, sym: main.id});
+    expect(spansOf(scope.spans)).toEqual([['CODE', 0, 9]]);
+    expect(main).toMatchObject({size: 9, scope: 0, val: 0x8000, seg: seg('CODE'), kind: 'lab'});
+    expect(main.defs.map(id => m.lines[id].line)).toEqual([4]);
+    expect(main.refs.map(id => m.lines[id].line)).toEqual([2]);
+  });
+
+  it('hangs a cheap local off its label', () => {
+    const loop = sym('@loop');
+    expect(loop).toMatchObject({parent: sym('main').id, val: 0x8002, seg: seg('CODE')});
+    expect(loop.defs.map(id => m.lines[id].line)).toEqual([6]);
+    expect(loop.refs.map(id => m.lines[id].line)).toEqual([8]);
+  });
+
+  it('gives a macro call and its body lines the same bytes', () => {
+    expect(spansOf(lineAt(16).spans)).toEqual([['CODE', 9, 2]]);
+    expect(lineAt(13, 2)).toMatchObject({count: 1});
+    expect(spansOf(lineAt(13, 2).spans)).toEqual([['CODE', 9, 1]]);
+    expect(spansOf(lineAt(14, 2).spans)).toEqual([['CODE', 10, 1]]);
+  });
+
+  it('points an import at the export', () => {
+    const imp = sym('ext', 0);
+    const exp = sym('ext', 1);
+    expect(imp).toMatchObject({kind: 'imp', exp: exp.id});
+    expect(imp.defs.map(id => m.lines[id].line)).toEqual([1]);
+    expect(imp.refs.map(id => m.lines[id].line)).toEqual([9]);
+    expect(exp).toMatchObject({kind: 'lab', val: 0x800B, seg: seg('CODE')});
+    expect(exp.refs.map(id => m.lines[id].line)).toEqual([1]);
+  });
+
+  it('sizes .res data in its segment', () => {
+    expect(sym('buf')).toMatchObject({size: 4, val: 0x200, seg: seg('BSS'), kind: 'lab'});
+    expect(spansOf(lineAt(18).spans)).toEqual([['BSS', 0, 4]]);
+    const root = m.scopes.find(s => s.mod === 0 && s.parent === undefined)!;
+    expect(root.size).toBe(11);
+    expect(spansOf(root.spans).sort()).toEqual([['BSS', 0, 4], ['CODE', 0, 11]]);
+  });
+
+  it('counts every record in info', () => {
+    expect(Object.fromEntries(m.info)).toEqual({
+      csym: 0, file: 2, lib: 0, line: 17, mod: 2, scope: 3, seg: 2, span: 12, sym: 5, type: 0,
+    });
   });
 });

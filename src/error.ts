@@ -13,6 +13,8 @@ export interface SourceInfo {
   endColumn?: number;
   /** `.repeat` nesting depth when the token was replayed, for debug info. */
   repeat?: number;
+  /** Where the outermost `.endrepeat` is. Needed for dbg files */
+  repeatEnd?: SourceInfo;
 }
 
 export type ErrorLevel = 'info' | 'warning' | 'error';

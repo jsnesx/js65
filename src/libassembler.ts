@@ -168,6 +168,10 @@ export interface LinkerOptions {
   debugLevel?: number;
   /** Emit a linker map (free space / placed chunks report) as a sidecar output. */
   generateMapFile?: boolean;
+  /** Emit an ld65 `.dbg` file as a sidecar output. */
+  generateDbgFile?: boolean;
+  /** Output file name the `.dbg` file records for `%O`. */
+  outputName?: string;
   /** Enables' `.jspostbegin` blocks to postprocess the final ROM. */
   allowJavascript?: boolean;
 }
@@ -199,6 +203,10 @@ export interface Js65Options {
   baseRomOffset?: number;
   outputFormat?: OutputFormat;
   generateMapFile?: boolean;
+  /** Emit an ld65 `.dbg` file. Needs `generateDebugInfo` for anything past segments. */
+  generateDbgFile?: boolean;
+  /** Output file name the `.dbg` file records for `%O`. */
+  outputName?: string;
   /** Full text of an ld65 linker config. Replaces `target` when given. */
   linkerConfig?: string;
   /** Name to report `linkerConfig` parse errors against. */
@@ -225,7 +233,7 @@ export interface Js65Request {
  * If more output types are created, we'll add them to the end here
  *   - 'binary' : a linked ROM image or IPS patch
  *   - 'object' : a serialized .o module
- *   - 'debug'  : ld65 .dbg debug file (not produced yet)
+ *   - 'debug'  : ld65 .dbg debug file
  *   - 'source' : generated source text
  *   - 'map'    : linker map (free space / placed chunks report)
  *   - 'mlb'    : Mesen MLB labels
@@ -412,7 +420,7 @@ export interface LinkResult {
   data: Uint8Array;
   /** Any outputs named in a linker config that was the original %o output */
   extraOutputs: {name: string, data: Uint8Array}[];
-  /** ld65 .dbg debug file (empty until the writer exists) */
+  /** ld65 .dbg debug file (empty unless requested or on errors) */
   dbg: string;
   /** Mesen MLB labels (empty string if sourceContents not provided or errors) */
   mlb: string;
@@ -516,6 +524,8 @@ export function link(
     }
 
     const mapFile = options?.generateMapFile ? linker.report(true) : '';
+    const dbg = options?.generateDbgFile ?
+        linker.dbgFile(options.outputName ?? defaultOutputName(outputFormat)) : '';
 
     allMessages.push(...collector.getMessages());
     const hasErrors = allMessages.some(m => m.level === 'error');
@@ -524,7 +534,7 @@ export function link(
       success: !hasErrors,
       data: binaryData,
       extraOutputs,
-      dbg: '',
+      dbg,
       mlb,
       mapFile,
       get exports() { return linker.exports(); },
@@ -546,6 +556,10 @@ export function link(
       messages: allMessages
     };
   }
+}
+
+function defaultOutputName(format: OutputFormat): string {
+  return format === 'ips' ? 'out.ips' : 'out.nes';
 }
 
 /**
@@ -727,6 +741,8 @@ export function compile(
       defines: options.defines,
       debugLevel: options.debugLevel,
       generateMapFile: options.generateMapFile,
+      generateDbgFile: options.generateDbgFile,
+      outputName: options.outputName,
       linkerConfig: options.linkerConfig,
       linkerConfigName: options.linkerConfigName,
       allowJavascript: options.allowJavascript,
@@ -751,6 +767,7 @@ export function compile(
             : found;
       },
       listDir: callbacks?.listDir,
+      stat: callbacks?.stat,
     };
 
     const asm = assemble(inputs, asmOpts, fileCallbacks, sourceContents, signal);
@@ -769,7 +786,7 @@ export function compile(
     }
 
     const lr = link(asm.modules, linkerOpts, outputFormat, sourceContents, asm.messages, signal);
-    const outputName = outputFormat === 'ips' ? 'out.ips' : 'out.nes';
+    const outputName = defaultOutputName(outputFormat);
     // The main output comes first, so anything picking "the binary" out of the
     // list still gets the ROM rather than one of the config's extra files.
     const outputs: OutputFile[] = [{ name: outputName, data: lr.data, type: 'binary' }];
@@ -778,6 +795,9 @@ export function compile(
     }
     if (lr.mlb) {
       outputs.push({ name: 'out.mlb', data: new TextEncoder().encode(lr.mlb), type: 'mlb' });
+    }
+    if (lr.dbg) {
+      outputs.push({ name: 'out.dbg', data: new TextEncoder().encode(lr.dbg), type: 'debug' });
     }
     if (lr.mapFile) {
       outputs.push({ name: 'out.map', data: new TextEncoder().encode(lr.mapFile), type: 'map' });
