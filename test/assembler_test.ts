@@ -3686,10 +3686,16 @@ lda #.sizeof(Point)
       expect(a.getMessages()).toEqual([]);
     });
 
+    it('should accept on and off like ca65', function() {
+      const a = new Assembler(Cpu.P02);
+      expect(() => a.directive([cs('.autoimport'), ident('on')])).not.toThrow();
+      expect(() => a.directive([cs('.autoimport'), ident('off')])).not.toThrow();
+    });
+
     it('should reject anything else after the directive', function() {
       const a = new Assembler(Cpu.P02);
-      expect(() => a.directive([cs('.autoimport'), ident('on')]))
-          .toThrow(/Expected \+ or -/);
+      expect(() => a.directive([cs('.autoimport'), ident('maybe')]))
+          .toThrow(/'on' or 'off' expected/);
     });
 
     it('should keep assembling normally after `-`', function() {

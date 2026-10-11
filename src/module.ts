@@ -379,6 +379,8 @@ export interface Debug {
   scopes: DebugScope[];
   syms: DebugSym[];
   hll: DebugCSym[];
+  /** `.debuginfo off`: lines only, without spans. The other tables are empty. */
+  lineOnly?: boolean;
 }
 
 export interface Module {

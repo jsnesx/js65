@@ -265,7 +265,7 @@ function fillFileInfo(module: Module, sourceContents: SourceContents|undefined,
       const text = sourceContents?.data.get(file.name);
       if (text !== undefined) file.size = utf8Length(text);
     }
-    file.mtime = callbacks?.stat?.(file.name) ?? 0;
+    file.mtime ||= callbacks?.stat?.(file.name) ?? 0;
   }
 }
 

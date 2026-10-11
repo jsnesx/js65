@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type {Chunk, DebugFile, DebugLine, DebugRun} from './module.ts';
-import {DEBUG_LINE_ASM, DEBUG_LINE_MACRO} from './module.ts';
+import {DEBUG_LINE_ASM, DEBUG_LINE_EXT, DEBUG_LINE_MACRO} from './module.ts';
 import type {SourceInfo} from './token.ts';
 
 /** Element types of the data directives, as ld65 spells them. */
@@ -26,6 +26,12 @@ export function arrayType(count: number, element: string): string {
   return head + sizeBytes + element;
 }
 
+/** A `.dbg line` source position. */
+export interface ExtLine {
+  file: string;
+  line: number;
+}
+
 /** Collects the files, lines and byte runs of one module while it assembles. */
 export class DebugBuilder {
   readonly files: DebugFile[] = [];
@@ -46,6 +52,19 @@ export class DebugBuilder {
    */
   private readonly setTrie: SetNode = {};
   private readonly typeIds = new Map<string, number>();
+  /** The open `.dbg line`, which joins every chain until the next one. */
+  ext?: ExtLine;
+
+  hasFile(name: string): boolean {
+    return this.fileIds.has(name);
+  }
+
+  /** `.dbg file` gives the size and mtime itself. */
+  declareFile(name: string, size: number, mtime: number) {
+    const file = this.files[this.fileId(name)];
+    file.size = size;
+    file.mtime = mtime;
+  }
 
   fileId(name: string): number {
     let id = this.fileIds.get(name);
@@ -77,7 +96,14 @@ export class DebugBuilder {
 
   /** Builds out the macro call chain (or just all the lines that share the same source line) */
   lineSet(src: SourceInfo): number {
-    return this.internSet(this.lineChain(src));
+    return this.internSet(this.fullChain(src));
+  }
+
+  /** The chain plus the `.dbg line` open at the time. */
+  fullChain(src: SourceInfo, ext = this.ext): number[] {
+    const ids = this.lineChain(src);
+    if (ext) ids.push(this.line(ext.file, ext.line, DEBUG_LINE_EXT, 0));
+    return ids;
   }
 
   /** Every line active at `src` starting from the innermost. */

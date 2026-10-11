@@ -296,7 +296,9 @@ function validateDebug(v: unknown, path: string): Debug {
     if (c.sym !== undefined) out.sym = reqIndex(c.sym, syms.length, `${p}.sym`);
     return out;
   });
-  return {files, lines, lineSets, types, scopes, syms, hll};
+  const out: Debug = {files, lines, lineSets, types, scopes, syms, hll};
+  if (optBoolean(v.lineOnly, `${path}.lineOnly`)) out.lineOnly = true;
+  return out;
 }
 
 function validateDebugRuns(v: unknown, path: string): DebugRun[] {

@@ -404,3 +404,132 @@ describe('dbg writer', () => {
     });
   });
 });
+
+// Expected values were checked against ca65 -g and ld65 --dbgfile.
+describe('.dbg directives', () => {
+  const H = [
+    '.dbg file, "h.c", 100, 12345',
+    '.import ext_var', '.importzp regbank', '.export _main',
+    '.segment "BSS"', '_glob: .res 2', '.segment "CODE"',
+    '.proc _main: near',
+    '.dbg func, "main", "00", extern, "_main"',
+    '.dbg sym, "a", "00", auto, 2',
+    '.dbg sym, "z", "00", auto, 0',
+    '.dbg sym, "g", "20", static, "_glob"',
+    '.dbg sym, "x", "21", extern, "ext_var"',
+    '.dbg sym, "r", "00", register, "regbank", 4',
+    '.dbg line, "h.c", 3', '  lda #1', '  sta _glob',
+    '.dbg line, "h.c", 4', '  lda ext_var', '@l: dex', '  bne @l',
+    '.dbg line, "h.c", 5',
+    '.dbg line, "h.c", 6', '  rts',
+    '.dbg line', '.endproc',
+  ].join('\n') + '\n';
+  const X = [
+    '.exportzp regbank', '.export ext_var', '.segment "ZEROPAGE"', 'regbank: .res 6',
+    '.segment "CODE"', 'ext_var: .word 0',
+  ].join('\n') + '\n';
+  const N = '.export nf\n.segment "CODE"\nnf: lda #2\n  rts\n.debuginfo off\n';
+  const CFG = `
+    MEMORY { ZP: start=$0, size=$100; RAM: start=$0200, size=$100; ROM: start=$8000, size=$100, file=%O; }
+    SEGMENTS { ZEROPAGE: load=ZP, type=zp; CODE: load=ROM, type=ro; BSS: load=RAM, type=bss; }`;
+
+  function link() {
+    const r = compile(
+        [{type: 'source', code: H, name: 'h.s'}, {type: 'source', code: X, name: 'x.s'},
+         {type: 'source', code: N, name: 'n.s'}],
+        {generateDebugInfo: true, generateDbgFile: true, outputName: 'out.bin',
+         linkerConfig: CFG, lint: {enabled: false}});
+    expect(r.messages.filter(m => m.level === 'error')).toEqual([]);
+    const text = new TextDecoder().decode(findOutput(r, 'debug')!.data);
+    expect(checkDbgSyntax(text)).toEqual([]);
+    return parseDbg(text);
+  }
+  const m = link();
+  const fileNamed = (name: string) => m.files.findIndex(f => f.name === name);
+  const symNamed = (name: string, mod = 0) => m.syms.find(s =>
+      s.name === name && (s.scope === undefined || m.scopes[s.scope].mod === mod))!;
+  const ext = (line: number) =>
+      m.lines.find(l => l.file === fileNamed('h.c') && l.line === line);
+  const spansOf = (ids: number[]) => ids.map(id => [m.spans[id].start, m.spans[id].size]);
+
+  it('writes a csym per .dbg func and .dbg sym', () => {
+    const proc = m.scopes.find(s => s.name === '_main')!.id;
+    expect(m.csyms.map(c => [c.name, c.scope, m.types[c.type].val, c.sc, c.offs, c.sym]))
+        .toEqual([
+          ['main', proc, '00', 'ext', 0, symNamed('_main').id],
+          ['a', proc, '00', 'auto', 2, undefined],
+          ['z', proc, '00', 'auto', 0, undefined],
+          ['g', proc, '20', 'static', 0, symNamed('_glob').id],
+          ['x', proc, '21', 'ext', 0, symNamed('ext_var').id],
+          ['r', proc, '00', 'reg', 4, undefined],
+        ]);
+  });
+
+  it('keeps the size and mtime from .dbg file', () => {
+    expect(m.files[fileNamed('h.c')]).toMatchObject({size: 100, mtime: 12345, mods: [0]});
+  });
+
+  it('joins an ext line across statements and drops an empty one', () => {
+    expect(ext(3)).toMatchObject({type: 1, count: 0});
+    expect(spansOf(ext(3)!.spans)).toEqual([[0, 5]]);
+    expect(spansOf(ext(4)!.spans)).toEqual([[5, 6]]);
+    expect(ext(5)).toBeUndefined();
+    expect(spansOf(ext(6)!.spans)).toEqual([[11, 1]]);
+  });
+
+  it('adds the ext line to a label def but not to refs', () => {
+    const l = symNamed('@l');
+    expect(l.defs.map(id => [m.lines[id].file, m.lines[id].line]).sort())
+        .toEqual([[fileNamed('h.c'), 4], [fileNamed('h.s'), 20]].sort());
+    expect(l.refs.map(id => m.lines[id].line)).toEqual([21]);
+  });
+
+  it('keeps only spanless lines after .debuginfo off', () => {
+    expect(m.scopes.some(s => s.mod === 2)).toBe(false);
+    expect(m.syms.find(s => s.name === 'nf')).toBeUndefined();
+    const lines = m.lines.filter(l => l.file === fileNamed('n.s'));
+    expect(lines.map(l => l.line).sort()).toEqual([1, 3, 4]);
+    expect(lines.every(l => !l.spans.length)).toBe(true);
+  });
+});
+
+describe('.dbg directive errors', () => {
+  const errors = (code: string) =>
+      assemble([{type: 'source', code, name: 'a.s'}], {generateDebugInfo: true})
+          .messages.filter(m => m.level === 'error').map(m => m.message);
+
+  it('needs a .proc with the same name for func', () => {
+    expect(errors('.dbg func, "f", "00", extern, "f"\n'))
+        .toEqual(['Functions may not be used in the root scope']);
+    expect(errors('.scope s\n.dbg func, "f", "00", extern, "s"\n.endscope\n'))
+        .toEqual(['Functions can only be tagged to .PROC scopes']);
+    expect(errors('.proc p\n.dbg func, "f", "00", extern, "q"\n.endproc\n'))
+        .toEqual(['Scope label and asm name for function must match']);
+    expect(errors('.proc p\n.dbg func, "f", "00", static, "p"\n' +
+                  '.dbg func, "g", "00", static, "p"\n.endproc\n'))
+        .toEqual(['Only one HLL symbol per asm symbol is allowed']);
+  });
+
+  it('checks types, storage classes and file names', () => {
+    expect(errors('.dbg sym, "s", "0", auto, 0\n')).toEqual(['Type value has invalid length']);
+    expect(errors('.dbg sym, "s", "0G", auto, 0\n'))
+        .toEqual(['Type value contains invalid characters']);
+    expect(errors('.dbg sym, "s", "00", global, "x"\n'))
+        .toEqual(['Storage class specifier expected']);
+    expect(errors('.dbg line, "nope.c", 1\n'))
+        .toEqual(["File name 'nope.c' not found in file table"]);
+  });
+
+  it('resolves a static asm symbol at the end of the module', () => {
+    expect(errors('.dbg sym, "s", "00", static, "later"\nlater: nop\n')).toEqual([]);
+    expect(errors('.dbg sym, "s", "00", static, "missing"\n'))
+        .toEqual(["Assembler symbol 'missing' not found"]);
+  });
+
+  it('accepts the ca65 boolean forms of .debuginfo', () => {
+    for (const arg of ['', ' on', ' off', ' +', ' -']) {
+      expect(errors(`.debuginfo${arg}\n`)).toEqual([]);
+    }
+    expect(errors('.debuginfo maybe\n')).toEqual(["'on' or 'off' expected"]);
+  });
+});

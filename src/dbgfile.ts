@@ -264,7 +264,7 @@ export function writeDbg(link: DbgLink): string {
     // A statement's own line gets a span each; enclosing lines join theirs.
     const own: Array<Range[]|undefined> = [];
     const outer: Array<Range[]|undefined> = [];
-    module.chunks?.forEach((chunk, c) => {
+    if (!debug.lineOnly) module.chunks?.forEach((chunk, c) => {
       for (const [set, offset, size, type] of chunk.debugRuns ?? []) {
         const lines = debug.lineSets[set];
         place(c, offset, size, type, r => {
@@ -307,9 +307,7 @@ export function writeDbg(link: DbgLink): string {
       let rec = `csym\tid=${base.csym + i},name="${c.name}",scope=${base.scope + c.scope},${
           ''}type=${typeId(c.type)},sc=${c.sc}`;
       if (c.offs) rec += `,offs=${c.offs}`;
-      if (c.sym !== undefined && (c.sc === 'static' || c.sc === 'ext')) {
-        rec += `,sym=${base.sym + c.sym}`;
-      }
+      if (c.sym !== undefined) rec += `,sym=${base.sym + c.sym}`;
       out.csym.push(rec);
     });
 
