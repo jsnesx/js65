@@ -34,11 +34,11 @@ export class DebugBuilder {
   readonly types: string[] = [];
 
   private readonly fileIds = new Map<string, number>();
-  private readonly lineIds = new Map<string, number>();
-  private readonly setIds = new Map<string, number>();
+  /** Per file, line ids keyed by line, type and count. */
+  private readonly lineIds = new Map<string, Map<number, number>>();
+  /** Trie over the line ids of each set. */
+  private readonly setTrie: SetNode = {};
   private readonly typeIds = new Map<string, number>();
-  /** Line set of a source with no parent, keyed by file, line and repeat. */
-  private readonly plainSets = new Map<string, number>();
 
   fileId(name: string): number {
     let id = this.fileIds.get(name);
@@ -50,47 +50,68 @@ export class DebugBuilder {
     return id;
   }
 
-  lineId(src: SourceInfo, depth = ancestors(src)): number {
-    const type = src.parent ? DEBUG_LINE_MACRO : DEBUG_LINE_ASM;
-    const count = depth + (src.repeat ?? 0);
-    const key = `${src.file}\0${src.line}\0${type}\0${count}`;
-    let id = this.lineIds.get(key);
+  private line(file: string, line: number, type: number, count: number): number {
+    let ids = this.lineIds.get(file);
+    if (!ids) this.lineIds.set(file, ids = new Map());
+    const key = (line * 4 + type) * 0x10000 + count;
+    let id = ids.get(key);
     if (id === undefined) {
       id = this.lines.length;
-      this.lines.push({file: this.fileId(src.file), line: src.line, type, count});
-      this.lineIds.set(key, id);
+      this.lines.push({file: this.fileId(file), line, type, count});
+      ids.set(key, id);
     }
     return id;
+  }
+
+  /** The statement's own line. */
+  lineId(src: SourceInfo): number {
+    return this.lineChain(src)[0];
   }
 
   /** Builds out the macro call chain. Basically all the lines that share the same source line */
   lineSet(src: SourceInfo): number {
-    if (!src.parent) {
-      const key = `${src.file}\0${src.line}\0${src.repeat ?? 0}`;
-      let id = this.plainSets.get(key);
-      if (id === undefined) {
-        id = this.internSet([this.lineId(src, 0)]);
-        this.plainSets.set(key, id);
-      }
-      return id;
-    }
+    return this.internSet(this.lineChain(src));
+  }
+
+  /** Every line active at `src`, innermost first, like ca65's `GetFullLineInfo`. */
+  lineChain(src: SourceInfo): number[] {
     const ids: number[] = [];
     let depth = ancestors(src);
     for (let s: SourceInfo|undefined = src; s; s = s.parent, depth--) {
-      ids.push(this.lineId(s, depth));
+      if (s.repeat && s.repeatEnd) {
+        ids.push(this.line(s.file, s.line, DEBUG_LINE_ASM, s.repeat));
+        ids.push(...this.lineChain(s.repeatEnd));
+        break;
+      }
+      ids.push(this.line(s.file, s.line, depth ? DEBUG_LINE_MACRO : DEBUG_LINE_ASM, depth));
     }
-    return this.internSet(ids);
+    return ids;
+  }
+
+  /** The line ca65 last read from the file, like its `GetAsmLineInfo`. */
+  asmLine(src: SourceInfo): number {
+    let root = src;
+    for (;;) {
+      while (root.parent) root = root.parent;
+      if (!root.repeatEnd) break;
+      root = root.repeatEnd;
+    }
+    return this.line(root.file, root.line, DEBUG_LINE_ASM, 0);
   }
 
   private internSet(ids: number[]): number {
-    const key = ids.join(',');
-    let id = this.setIds.get(key);
-    if (id === undefined) {
-      id = this.lineSets.length;
-      this.lineSets.push(ids);
-      this.setIds.set(key, id);
+    let node = this.setTrie;
+    for (const line of ids) {
+      const next = node.next ??= new Map();
+      let child = next.get(line);
+      if (!child) next.set(line, child = {});
+      node = child;
     }
-    return id;
+    if (node.set === undefined) {
+      node.set = this.lineSets.length;
+      this.lineSets.push(ids);
+    }
+    return node.set;
   }
 
   typeId(type: string): number {
@@ -103,18 +124,16 @@ export class DebugBuilder {
     return id;
   }
 
-  /** Adds bytes to a chunk, joining them to the previous untyped run of the same lines. */
+  /** Adds one statement's bytes to a chunk. */
   addRun(chunk: Chunk|{debugRuns?: DebugRun[]}, offset: number, size: number,
          set: number, type: number) {
-    const runs = chunk.debugRuns ??= [];
-    const last = runs[runs.length - 1];
-    if (last && type < 0 && last[3] < 0 && last[0] === set &&
-        last[1] + last[2] === offset) {
-      last[2] += size;
-      return;
-    }
-    runs.push([set, offset, size, type]);
+    (chunk.debugRuns ??= []).push([set, offset, size, type]);
   }
+}
+
+interface SetNode {
+  set?: number;
+  next?: Map<number, SetNode>;
 }
 
 function ancestors(src: SourceInfo): number {
