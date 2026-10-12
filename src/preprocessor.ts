@@ -949,7 +949,7 @@ export class Preprocessor {
   evaluateConstOrDefer(expr: Expr, source?: Token): {value: number}|{deferred: true} {
     const r = this.reduceConst(expr, true);
     if ('value' in r) return r;
-    if (this.canDefer(r.reduced)) return {deferred: true};
+    if (this.asm.opts.lto !== false && this.canDefer(r.reduced)) return {deferred: true};
     this.failNotConstant(r.reduced, source);
   }
 
