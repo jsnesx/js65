@@ -98,6 +98,15 @@ describe('buildLinkTimeEnv', function() {
     expect(env.bank('foo')).toBe(1);
   });
 
+  it('answers bank 0 when no candidate segment declares a bank', function() {
+    const modules = [moduleWith([['UNBANKED']], [exported('foo', 0)])];
+    const segments = new Map<string, Segment>([['UNBANKED', {name: 'UNBANKED'}]]);
+    const env = buildLinkTimeEnv(modules, segments);
+    expect(env.bank('foo')).toBe(0);
+    expect(env.segmentBank(['UNBANKED'])).toBe(0);
+    expect(env.segmentBank(['GHOST'])).toBeUndefined();
+  });
+
   it('returns undefined when a candidate segment is not in the merged table', function() {
     const modules = [moduleWith([['GHOST']], [exported('foo', 0)])];
     const segments = new Map<string, Segment>();

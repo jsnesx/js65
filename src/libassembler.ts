@@ -141,6 +141,8 @@ export interface AssemblerOptions {
   errorLimit?: number;
   /** Lint rule configuration. Lints run by default. */
   lint?: LintOptions;
+  /** Enable the late pass recompilation which can shrink some sizes */
+  lto?: boolean;
   /** Callbacks for every label, ref, and assign seen while assembling. */
   refExtractor?: RefExtractor;
 }
@@ -174,6 +176,8 @@ export interface LinkerOptions {
   outputName?: string;
   /** Enables' `.jspostbegin` blocks to postprocess the final ROM. */
   allowJavascript?: boolean;
+  /** False skips the late assembly pass, keeping pass 1 output. */
+  lto?: boolean;
 }
 
 /** Output format control */
@@ -217,6 +221,8 @@ export interface Js65Options {
   features?: string[];
   /** lint configuration, from `--no-lint` / `-Wno-<rule>` or a project file */
   lint?: LintOptions;
+  /** `--no-lto` sets this false to skip the late assembly pass */
+  lto?: boolean;
 }
 
 /**
@@ -344,6 +350,7 @@ export function assemble(
     symbolIndex: options?.symbolIndex,
     errorLimit: options?.errorLimit,
     lint: options?.lint,
+    lto: options?.lto,
     refExtractor: options?.refExtractor,
     jsActions,
   };
@@ -469,6 +476,7 @@ export function link(
       linkerConfigName: options?.linkerConfigName,
       defines: options?.defines,
       errorCollector: collector,
+      lto: options?.lto,
     });
 
     if (options?.baseRom) {
@@ -733,6 +741,7 @@ export function compile(
       numberSeparators: options.numberSeparators,
       leadingDotInIdentifiers: options.leadingDotInIdentifiers,
       lint: options.lint,
+      lto: options.lto,
     };
     const linkerOpts: LinkerOptions = {
       target: options.target,
@@ -746,6 +755,7 @@ export function compile(
       linkerConfig: options.linkerConfig,
       linkerConfigName: options.linkerConfigName,
       allowJavascript: options.allowJavascript,
+      lto: options.lto,
     };
     const outputFormat: OutputFormat = options.outputFormat ?? 'binary';
     const sourceContents = options.generateDebugInfo ? new SourceContents() : undefined;

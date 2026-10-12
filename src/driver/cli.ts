@@ -163,6 +163,8 @@ const OPTIONS: Option[] = [
    apply(out) { out.options.allowJavascript = true; }},
   {names: ['--no-lint'], arity: 0,
    apply(out) { out.options.lint!.enabled = false; }},
+  {names: ['--no-lto'], arity: 0,
+   apply(out) { out.options.lto = false; }},
   {names: ['-W'], arity: 1, attached: true,
    apply(out, value) {
      const rule = value.startsWith('no-') ? value.substring(3) : '';
@@ -191,6 +193,7 @@ const SUBCOMMANDS = new Map<string, (src: string, cpu: Cpu, prg: Uint8Array) => 
 const BUILD_OPTIONS = new Set([
   '-h', '-V', '-p', '-o', '--dbgfile', '--mlbfile', '-m', DEPFILE_FLAGS[0], '-I',
   '--bin-include-dir', '-D', '--feature', '--allow-javascript', '--no-lint', '-W',
+  '--no-lto',
 ]);
 
 /** The options `js65 init` takes. Scaffolding a folder needs almost nothing. */
@@ -438,6 +441,7 @@ export class Cli {
       features: args.options.features,
       allowJavascript: args.options.allowJavascript,
       lint: args.options.lint,
+      lto: args.options.lto,
       outfile: args.outfile || undefined,
       dbgfile: args.dbgfile || undefined,
       mlbfile: args.mlbfile || undefined,
@@ -690,6 +694,7 @@ optional arguments:
                           default. A project file can set \`allowJavascript\` instead.
   --no-lint               Turn off every lint, whatever the project file's \`lint\` says.
   -Wno-RULE               Turn off a single lint rule. Repeatable.
+  --no-lto                Skip the late assembly pass in every selected project.
   -h/--help               Print this help text and exit.
 
 Exits 0 when every selected project built, 1 when any of them failed, and 8 for a
@@ -812,6 +817,10 @@ ${[...LINT_RULES].map(([id, r]) => `                            ${id.padEnd(24)}
                           A single line can also be exempted from the source with a
                           \`; js65-lint-disable-next-line RULE\` or
                           \`; js65-lint-disable-line RULE\` comment.
+  --no-lto                Skip the late assembly pass. When disabled, js65 behaves like
+                          a single-pass assembler and errors on missing symbols that could
+                          be defined in a different file. Used if you want to verify that
+                          a module can be compiled standalone.
   -t NAME/--target=NAME   Link with a built-in segment layout instead of a linker config.
                           js65 has two: \`sim\` and \`nes-nrom\`.
                           Ignored when a config is given with -C.

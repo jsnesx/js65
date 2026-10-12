@@ -904,6 +904,80 @@ FOO = $42
     });
   });
 
+  describe('lto option', function() {
+    const opts = {lineContinuations: true, target: 'nes-nrom'};
+    // ca65 range errors at 128; the zeropage replay fits at 124.
+    const branchOverImport: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.import UndefZP
+.segment "CODE"
+  beq :+
+  lda UndefZP
+  lda UndefZP
+  lda UndefZP
+  lda UndefZP
+.repeat 116
+  .byte $00
+.endrepeat
+:
+  rts
+`};
+    const zpExport: AssemblyInput = {type: 'source', name: 'zp.s', code: `
+.exportzp UndefZP
+.segment "ZEROPAGE"
+UndefZP: .res 1
+`};
+
+    it('lets the late pass shrink an import to zeropage by default', function() {
+      const result = compile([branchOverImport, zpExport], opts);
+      expect(result.success).toBe(true);
+      const data = result.outputs[0].data;
+      expect([...data.subarray(0x10, 0x14)]).toEqual([0xf0, 0x7c, 0xa5, 0x00]);
+    });
+
+    it('keeps the pass 1 absolute size with lto off', function() {
+      const result = compile([branchOverImport, zpExport], {...opts, lto: false});
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => m.level === 'error' &&
+          m.message.includes('Branch out of range: offset 128'))).toBe(true);
+    });
+
+    it('defers .bank of an import in an unbanked segment', function() {
+      const main: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.import Far
+.segment "CODE"
+.if .bank(Far) = 0
+  lda #1
+.else
+  lda #2
+.endif
+  rts
+`};
+      const far: AssemblyInput = {type: 'source', name: 'far.s', code: `
+.export Far
+.segment "CODE"
+Far: rts
+`};
+      const result = compile([main, far], opts);
+      expect(result.success).toBe(true);
+      expect([...result.outputs[0].data.subarray(0x10, 0x12)]).toEqual([0xa9, 0x01]);
+    });
+
+    it('rejects a link-time .if at pass 1 with lto off', function() {
+      const main: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.import Far
+.segment "CODE"
+.if .bank(Far) = 0
+  lda #1
+.endif
+  rts
+`};
+      const result = compile([main], {...opts, lto: false});
+      expect(result.success).toBe(false);
+      expect(result.messages.some(m => m.level === 'error' &&
+          m.message.startsWith('Expected a constant:'))).toBe(true);
+    });
+  });
+
   describe('IPS patch generation', function() {
     it('should generate valid IPS patch format', function() {
       const source = `

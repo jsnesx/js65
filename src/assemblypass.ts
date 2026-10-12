@@ -76,17 +76,28 @@ function resolveCandidates<T>(segNames: readonly string[],
   return answer;
 }
 
+/** Defaults to bank 0 if we are sure that this segment doesn't have a bank num */
+function bankOrDefault(segNames: readonly string[],
+                       segments: ReadonlyMap<string, Segment>,
+                       bank: number|undefined): number|undefined {
+  if (bank !== undefined || !segNames.length) return bank;
+  return segNames.every(s => segments.has(s)) ? 0 : undefined;
+}
+
 // Helper function for finding info about a sym from the total
 // list of modules and segments known at link time.
 function resolve<T>(name: string, modules: readonly Module[],
                      segments: ReadonlyMap<string, Segment>,
-                     pick: (seg: Segment) => T|undefined): T|undefined {
+                     pick: (seg: Segment) => T|undefined,
+                     fallback?: (segNames: readonly string[], answer: T|undefined) => T|undefined,
+                    ): T|undefined {
   const found = findChunk(name, modules);
   if (!found) return undefined;
-  return resolveCandidates(found.segments, segments, pick, () => {
+  const answer = resolveCandidates(found.segments, segments, pick, () => {
     fail(`${name}: disagreement across segments ${found.segments.join(', ')}`,
          found.expr);
   });
+  return fallback ? fallback(found.segments, answer) : answer;
 }
 
 /** Builds a LinkTimeEnv from the merged segment table and loaded modules. */
@@ -96,11 +107,12 @@ export function buildLinkTimeEnv(
   return {
     addrSize: name => resolve(name, modules, segments,
         seg => seg.addressing === 1 ? 1 : 2),
-    bank: name => resolve(name, modules, segments, seg => seg.bank),
-    segmentBank: segNames => resolveCandidates(segNames, segments,
-        seg => seg.bank, () => {
+    bank: name => resolve(name, modules, segments, seg => seg.bank,
+        (segNames, bank) => bankOrDefault(segNames, segments, bank)),
+    segmentBank: segNames => bankOrDefault(segNames, segments,
+        resolveCandidates(segNames, segments, seg => seg.bank, () => {
           fail(`disagreement across segments ${segNames.join(', ')}`);
-        }),
+        })),
     segmentAddrSize: segNames => resolveCandidates(segNames, segments,
         seg => seg.addressing === 1 ? 1 : 2, () => {
           fail(`disagreement across segments ${segNames.join(', ')}`);

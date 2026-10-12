@@ -203,6 +203,11 @@ describe('CLI', function() {
       expect(cli.parseArgs(['--bin-include-dir=art']).options.binIncludePaths)
           .toEqual(['art']);
     });
+
+    it('turns off the late pass with --no-lto', function() {
+      expect(cli.parseArgs(['main.s']).options.lto).toBeUndefined();
+      expect(cli.parseArgs(['--no-lto', 'main.s']).options.lto).toBe(false);
+    });
   });
 
   describe('resolving includes relative to the input file', function() {

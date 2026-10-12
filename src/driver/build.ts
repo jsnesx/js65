@@ -197,6 +197,8 @@ export interface BuildOverrides {
   /** `--allow-javascript`, which a project file's own setting cannot turn back off. */
   allowJavascript?: boolean;
   lint?: LintOptions;
+  /** `--no-lto` sets this false to skip the late assembly pass */
+  lto?: boolean;
   outfile?: string;
   dbgfile?: string;
   mlbfile?: string;
@@ -372,6 +374,7 @@ export async function projectOptions(
     generateMapFile: Boolean(overrides.mapfile ?? project.mapfile),
     generateDbgFile: Boolean(overrides.dbgfile ?? project.dbgfile),
     lint: mergeLint(config.lint, overrides.lint),
+    lto: overrides.lto,
   };
   // Read through the session so a config parse error gets a source snippet like any
   // other file would.

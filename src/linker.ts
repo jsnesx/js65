@@ -86,7 +86,7 @@ export class Linker {
 
   constructor(opts: LinkerOptions = {}) {
     this.opts = opts;
-    this._link = new Link(opts.errorCollector, linkerDefines(opts.defines));
+    this._link = new Link(opts.errorCollector, linkerDefines(opts.defines), opts.lto ?? true);
   }
 
   read(file: Module): Linker {
@@ -1390,7 +1390,8 @@ class Link {
 
   constructor(readonly errorCollector?: ErrorCollector,
               /** `-D` overrides for config `SYMBOLS`, already reduced to numbers. */
-              private readonly defines: CfgSymbols = new Map()) {}
+              private readonly defines: CfgSymbols = new Map(),
+              private readonly lto = true) {}
 
   fail(msg: string, at?: {source?: SourceInfo}): never {
     if (!this.errorCollector) Tokens.fail(msg, at);
@@ -1845,6 +1846,7 @@ class Link {
   /** Replays modules whose late-assembly guesses disagree with `linkEnv`. */
   private lateAssemblyPass(merged: Map<string, Segment>,
                             signal?: {readonly aborted: boolean}): boolean {
+    if (!this.lto) return false;
     if (!this.rawModules.some(m => m.lateAssembly?.sizeQueries.length ||
                                     m.lateAssembly?.condQueries.length)) return false;
     const linkEnv = buildLinkTimeEnv(this.rawModules, merged);
