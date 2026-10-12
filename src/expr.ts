@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {type Token} from './token.ts'
-import { Symbol } from './assembler.ts'
+import { Symbol } from './frontend/scope.ts'
 import * as Tokens from './token.ts'
 
 // export interface Expr {

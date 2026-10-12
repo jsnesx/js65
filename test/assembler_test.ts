@@ -5,7 +5,7 @@ import {describe, it, expect} from 'bun:test';
 import {Cpu} from '../src/cpu.ts';
 import {type Expr} from '../src/expr.ts';
 import {type Module} from '../src/module.ts';
-import {Assembler} from '../src/assembler.ts';
+import {Assembler} from '../src/frontend/assembler.ts';
 import {FEATURE_NAMES, type TokenizerOptions} from '../src/options.ts';
 import {assemble as libAssemble, compile, deserializeObjectFile, serializeObjectFile,
         type AssemblyInput} from '../src/libassembler.ts';

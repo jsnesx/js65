@@ -4,7 +4,7 @@
 import {describe, it, expect} from 'bun:test';
 import {type AssemblerMessage} from '../src/error.ts';
 import {compile, type AssemblyInput} from '../src/libassembler.ts';
-import {LINT_RULE_CLASSES, LINT_RULES, LintPragmas, LintRule} from '../src/lint.ts';
+import {LINT_RULE_CLASSES, LINT_RULES, LintPragmas, LintRule} from '../src/frontend/lint.ts';
 import {type LintOptions} from '../src/options.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 

@@ -1,7 +1,7 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import { Assembler } from './assembler.ts';
+import { Assembler } from './frontend/assembler.ts';
 import { Cpu } from './cpu.ts';
 import { type ErrorCollector, FatalError, RecoverableError } from './error.ts';
 import type { Expr } from './expr.ts';
@@ -11,7 +11,7 @@ import { type Assertion, type Chunk, DEBUG_RUN_CODE, type Debug, type DebugRun, 
 import { buildLinkTimeEnv, replayModules } from './assemblypass.ts';
 import { type DbgLink, type DbgModule, type DbgSegment, writeDbg } from './dbgfile.ts';
 import { Targets } from "./preamble.ts";
-import { Preprocessor } from './preprocessor.ts';
+import { Preprocessor } from './frontend/preprocessor.ts';
 import * as Tokens from './token.ts';
 import { type SourceInfo } from './token.ts';
 import { Tokenizer } from './tokenizer.ts';

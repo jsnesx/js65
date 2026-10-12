@@ -6,7 +6,7 @@ import {type Token} from './token.ts'
 import * as Tokens from './token.ts';
 import { SourceContents } from './tokenstream.ts';
 import { ErrorCollector } from './error.ts';
-import { reportLint, SUSPICIOUS_LINE_CONTINUATION } from './lint.ts';
+import { reportLint, SUSPICIOUS_LINE_CONTINUATION } from './frontend/lint.ts';
 import { type TokenizerOptions } from './options.ts';
 
 export type { TokenizerOptions as Options };

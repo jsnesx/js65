@@ -7,7 +7,7 @@ import { createHash } from "sha1-uint8array";
 import { Base64 } from '../base64.ts';
 import { compile, type AssemblyInput, type Js65Options } from '../libassembler.ts';
 import * as Tokens from '../token.ts';
-import { LINT_RULES } from '../lint.ts';
+import { LINT_RULES } from '../frontend/lint.ts';
 import { dirOf, joinDir } from '../util.ts';
 import { VERSION } from '../version.ts';
 import { Builder, BuildSession, selectProjects, STDIN, STDOUT,
