@@ -7,9 +7,9 @@
  * when a frontend passes one in, so plain builds don't pay for it.
  */
 
-import { Symbol } from './assembler.ts';
-import type {Define} from './define.ts';
-import type {Macro} from './macro.ts';
+import { Symbol } from './frontend/scope.ts';
+import type {Define} from './frontend/define.ts';
+import type {Macro} from './frontend/macro.ts';
 import type {SourceInfo} from './error.ts';
 import * as Tokens from './token.ts';
 

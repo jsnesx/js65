@@ -3,13 +3,13 @@
 
 import {describe, it, expect} from 'bun:test';
 import {Base64} from '../src/base64.ts';
-import {Preprocessor} from '../src/preprocessor.ts';
+import {Preprocessor} from '../src/frontend/preprocessor.ts';
 import * as Tokens from '../src/token.ts';
 import {TokenStream} from '../src/tokenstream.ts';
 import {searchFiles} from '../src/libassembler.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
-import { Assembler } from '../src/assembler.ts';
+import { Assembler } from '../src/frontend/assembler.ts';
 
 const [_] = [util];
 

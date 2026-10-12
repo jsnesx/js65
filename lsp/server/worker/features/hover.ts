@@ -4,10 +4,10 @@ import type {Hover, HoverParams, MarkupContent} from 'vscode-languageserver-prot
 import {MarkupKind} from 'vscode-languageserver-protocol';
 
 import {Cpu} from '../../../../src/cpu.ts';
-import {Macro} from '../../../../src/macro.ts';
+import {Macro} from '../../../../src/frontend/macro.ts';
 import {Tokenizer} from '../../../../src/tokenizer.ts';
 import type {Token} from '../../../../src/token.ts';
-import type {Symbol} from '../../../../src/assembler.ts';
+import type {Symbol} from '../../../../src/frontend/scope.ts';
 import type {Chunk} from '../../../../src/module.ts';
 import type {Analyzer, ProjectAnalysis} from '../analyzer.ts';
 import {findSymbolAt, projectForDoc} from './navigation.ts';

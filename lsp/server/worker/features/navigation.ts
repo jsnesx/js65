@@ -13,7 +13,7 @@ import type {
 import {SymbolKind} from 'vscode-languageserver-protocol';
 
 import type {Analyzer, ProjectAnalysis} from '../analyzer.ts';
-import type {Symbol} from '../../../../src/assembler.ts';
+import type {Symbol} from '../../../../src/frontend/scope.ts';
 import type {Token} from '../../../../src/token.ts';
 import {Tokenizer} from '../../../../src/tokenizer.ts';
 import {dirOf, joinDir} from '../../../../src/util.ts';

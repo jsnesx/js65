@@ -7,7 +7,7 @@ import { type Token } from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import {Tokenizer, type Options} from '../src/tokenizer.ts';
 import * as util from '../src/util.ts';
-import { ErrorCollector } from '../src/assembler.ts';
+import { ErrorCollector } from '../src/frontend/assembler.ts';
 
 const [_] = [util];
 

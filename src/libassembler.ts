@@ -18,7 +18,7 @@
  */
 
 import { assembleInput, type InputSetup } from './assemblypass.ts';
-import { Assembler, type RefExtractor } from './assembler.ts';
+import { Assembler, type RefExtractor } from './frontend/assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
 import { diffRom, jsPostprocess, jsPreprocess } from './jspreprocessor.ts';
@@ -30,7 +30,7 @@ import { applyFeatures,
          type LintOptions,
          type SymbolDefine,
          type TokenizerOptions } from './options.ts';
-import { LintPragmas } from './lint.ts';
+import { LintPragmas } from './frontend/lint.ts';
 import { SourceContents, type ResolvedFile } from './tokenstream.ts';
 import { MODULE_FORMAT_VERSION, type LateAssemblyInput, type Module, type Segment } from "./module.ts";
 import { parseModule, parseRequest, staleModuleVersion } from "./validate_modules.ts";

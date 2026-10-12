@@ -1,25 +1,25 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import { runActions, type CodeRunner } from './actions.ts';
-import { Assembler } from './assembler.ts';
+import { runActions, type CodeRunner } from './frontend/actions.ts';
+import { Assembler } from './frontend/assembler.ts';
 import { Cpu } from './cpu.ts';
 import { ErrorCollector, fail, type AssemblerMessage } from './error.ts';
 import type { Expr } from './expr.ts';
 import type { JsPreprocessResult } from './jspreprocessor.ts';
-import { LintPragmas } from './lint.ts';
+import { LintPragmas } from './frontend/lint.ts';
 import { lowerLinkerConfig, parseLinkerConfig } from './linkerconfig.ts';
 import { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
 import { Segment, type LateAssemblyInput, type Module } from './module.ts';
 import { JsActionTable, type AssemblerOptions, type SymbolDefine,
          type TokenizerOptions } from './options.ts';
 import { Targets } from './preamble.ts';
-import { Preprocessor } from './preprocessor.ts';
+import { Preprocessor } from './frontend/preprocessor.ts';
 import * as Tokens from './token.ts';
 import { Tokenizer } from './tokenizer.ts';
 import { newSourceLog, sourceLogKey, SourceContents, TokenStream, type ResolvedFile,
          type SourceLog } from './tokenstream.ts';
-import { utf8Length } from './debugtables.ts';
+import { utf8Length } from './frontend/debugtables.ts';
 import { joinDir } from './util.ts';
 import type { CancelSignal, FileCallbacks } from './libassembler.ts';
 

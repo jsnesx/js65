@@ -12,7 +12,7 @@
  * `build.ts` with `Callbacks`.
  */
 
-import {LINT_RULES} from '../lint.ts';
+import {LINT_RULES} from '../frontend/lint.ts';
 import type {LintLevel, LintOptions, SymbolDefine} from '../options.ts';
 import type {OutputFormat} from '../libassembler.ts';
 import {dirOf, joinDir} from '../util.ts';

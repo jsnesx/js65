@@ -3,9 +3,9 @@
 
 import { RecoverableError, type AssemblerMessage, type ErrorCollector } from './error.ts';
 import type { OverwriteMode } from './module.ts';
-import type { RefExtractor } from './assembler.ts';
+import type { RefExtractor } from './frontend/assembler.ts';
 import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
-import type { LintPragmas } from './lint.ts';
+import type { LintPragmas } from './frontend/lint.ts';
 import type { AssemblyAction } from './libassembler.ts';
 
 

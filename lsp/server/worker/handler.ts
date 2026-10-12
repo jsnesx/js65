@@ -2,7 +2,7 @@
 
 
 import type {WorkerPort} from '../../../src/worker/port.ts';
-import type {Symbol} from '../../../src/assembler.ts';
+import type {Symbol} from '../../../src/frontend/scope.ts';
 import {Analyzer} from './analyzer.ts';
 import {computeDefinition, computeDocumentSymbols, computeReferences,
         computeWorkspaceSymbols, projectForDoc} from './features/navigation.ts';

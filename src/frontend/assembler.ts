@@ -17,8 +17,12 @@ import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
 import type { LinkTimeEnv } from '../assemblypass.ts';
 import { runActions } from './actions.ts';
 import { IntervalSet, assertNever, MaxKeySizeCacheMap } from '../util.ts';
-import { createHash } from 'sha1-uint8array';
 import { DATA_ELEMENTS, DebugBuilder, type ExtLine, arrayType } from './debugtables.ts';
+import { CheapScope, RE_SCOPE_SPLIT, SIZE_NAME, SIZE_SUFFIX, Scope, type Symbol,
+         firstRef, isSizeOfSymbol, parseSymbol } from './scope.ts';
+import { CharMap, type CharMapping, writeString } from './charmap.ts';
+import { LocalLabels } from './locallabels.ts';
+import { SegmentParser } from './segmentparser.ts';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
@@ -29,42 +33,12 @@ type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;
 
 /**
- * Symbol tag used to store the size of something in the symbol table while
- * keeping it inaccessible to the user. When a scope is closed, or
- * the label's chunk ends, we can create this size symbol in case the user
- * decides to query the size with `.sizeof` later.
- */
-const SIZE_NAME = '.size';
-const SIZE_SUFFIX = `::${SIZE_NAME}`;
-
-const RE_SCOPE_SPLIT = /::/g;
-
-/** Whether a symbol name is one of the internal size entries described above. */
-function isSizeOfSymbol(name: string): boolean {
-  return name === SIZE_NAME || name.endsWith(SIZE_SUFFIX);
-}
-
-/**
  * ca65 has some predefined segments, and normally this doesn't matter except for
  * using the .code/.bss shortcuts, but for zeropage, we need to also set the
  * addressing mode to `zp` as well.
  */
 const PREDECLARED_SEGMENTS = new Map<string, mod.Segment>([
   ['ZEROPAGE', {name: 'ZEROPAGE', addressing: 1}],
-]);
-
-const ANON_SEGMENT_ATTR_REASONS = new Map<string, string>([
-  ['off', `output offset is determined by the position in the file`],
-  ['mem', `PC address is determined by the segment value`],
-  ['out', `anon ROM segments always goes to the main output file`],
-  ['load', ''],
-  ['run', ''],
-  ['alignload', ''],
-  ['optional', ''],
-  ['dedupe', ''],
-  ['default', `cannot write to a default segment`],
-  ['align', `a segment starts where the previous one ended. Use .align instead`],
-  ['define', ''],
 ]);
 
 /** Any operation that forces the expr to be linker derived */
@@ -77,39 +51,6 @@ const DEFERRABLE_LINK_OPS = new Set(['^', '.bankbyte', '.addrsize']);
 const SUPPORTED_CPUS = new Set(['6502', '6502x']);
 
 const DEFAULT_CPU_NAME = '6502';
-
-export class Symbol {
-  /**
-   * Index into the global symbol array used at link time.
-   * Mutable syms aren't kept for link time, so they use -1 here
-   */
-  id?: number;
-  /** Whether the symbol has been explicitly scoped. */
-  scoped?: boolean;
-  /**
-   * The expression for the symbol. Must be a statically-evaluatable constant
-   * for mutable symbols. Undefined for forward-referenced symbols.
-   */
-  expr?: Expr;
-  /** Name this symbol is exported as. */
-  export?: string;
-  /** Whether this symbol denotes a location rather than a plain constant */
-  isLabel?: boolean;
-  /** 
-   * Where the symbol was defined (label/assignment).
-   * Populated only when `AssemblerOptions.collectReferences` is set.
-   */
-  def?: Tokens.SourceInfo;
-  /**
-   * List of places this symbol was referenced. We only keep the first 
-   * reference, unless we are running the LSP where we need all references. 
-   */
-  refs?: Tokens.SourceInfo[];
-}
-
-function firstRef(sym?: Symbol): Tokens.SourceInfo|undefined {
-  return sym?.refs?.[0];
-}
 
 function chainDepth(source?: Tokens.SourceInfo): number {
   let depth = 0;
@@ -131,9 +72,6 @@ function deepestSource(tokens: Token[]): Tokens.SourceInfo|undefined {
   }
   return best;
 }
-
-/** What to do when a qualified name mentions a scope that doesn't exist yet. */
-type MissingScope = 'fail'|'undefined'|'create';
 
 type GlobalKind = 'export'|'import'|'global';
 
@@ -183,222 +121,6 @@ const SYM_CLASSES = new Map<string, mod.DebugCSym['sc']>([
 interface GlobalDecl {
   scope: Scope;
   kind: GlobalKind;
-}
-
-interface ResolveOpts {
-  // Whether to create a forward reference for missing symbols.
-  allowForwardRef?: boolean;
-  // Reference Tokens.
-  ref?: {source?: Tokens.SourceInfo};
-  // How to handle a name whose scope hasn't been declared yet.
-  missingScope?: MissingScope;
-}
-
-interface FwdRefResolveOpts extends ResolveOpts {
-  allowForwardRef: true;
-}
-
-abstract class BaseScope {
-  //closed = false;
-  readonly symbols = new Map<string, Symbol>();
-  /** Whether to record reference+defintion sites on the symbols in this scope. */
-  collectRefs?: boolean;
-
-  protected pickScope(name: string,
-                      _at?: {source?: Tokens.SourceInfo},
-                      _missing?: MissingScope): [string, BaseScope]|undefined {
-    return [name, this];
-  }
-
-  // TODO - may need additional options:
-  //   - lookup constant - won't return a mutable value or a value from
-  //     a parent scope, implies no forward ref
-  //   - shallow - don't recurse up the chain, for assignment only??
-  // Might just mean allowForwardRef is actually just a mode string?
-  //  * ca65's .definedsymbol is more permissive than .ifconst
-  resolve(name: string, opts: FwdRefResolveOpts): Symbol;
-  resolve(name: string, opts?: ResolveOpts): Symbol|undefined;
-  resolve(name: string, opts: ResolveOpts = {}):
-      Symbol|undefined {
-    const {allowForwardRef = false, ref} = opts;
-    const missingScope = opts.missingScope ??
-        (allowForwardRef ? 'create' : 'fail');
-    const picked = this.pickScope(name, ref, missingScope);
-    if (!picked) return undefined;
-    const [tail, scope] = picked;
-    const sym = scope.symbols.get(tail);
-//console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
-    if (sym) {
-      if (tail !== name) sym.scoped = true;
-      // Keep the first reference site so error messages can point at it. Only
-      // keep the rest when this scope tree opted in, so plain builds stay at one
-      // array element per symbol to save RAM.
-      if (ref?.source && (scope.collectRefs || !sym.refs)) {
-        (sym.refs ??= []).push(ref.source);
-      }
-      return sym;
-    }
-    if (!allowForwardRef) return undefined;
-    // if (scope.closed) throw new Error(`Could not resolve symbol: ${name}`);
-    // make a new symbol - but only in an open scope
-    //const symbol = {id: this.symbolArray.length};
-//console.log('created:',symbol);
-    //this.symbolArray.push(symbol);
-    const symbol: Symbol = ref?.source ? {refs: [ref.source]} : {};
-    scope.symbols.set(tail, symbol);
-    if (tail !== name) symbol.scoped = true;
-    return symbol;
-  }
-
-  /** Insert a brand new symbol into the table, scoped if there is one open */
-  declare(name: string, symbol: Symbol, at?: {source?: Tokens.SourceInfo}): Symbol {
-    const [tail, scope] = this.pickScope(name, at ?? {source: firstRef(symbol)})!;
-    scope.symbols.set(tail, symbol);
-    if (tail !== name) symbol.scoped = true;
-    return symbol;
-  }
-}
-
-class Scope extends BaseScope {
-  readonly global: Scope;
-  readonly children = new Map<string, Scope>();
-  readonly anonymousChildren: Scope[] = [];
-
-  /** Position when the scope was entered, for sizing it on exit. */
-  startPc?: Expr;
-  /** Name of the label this scope belongs to */
-  label?: string;
-  /** Created by a forward reference, before its `.scope`/`.proc` was seen. */
-  forwardDeclared?: boolean;
-  /** This scope's own name, unset for the global and anonymous scopes. */
-  name?: string;
-  /** Set for `.struct`/`.union`/`.enum` scopes, for debug info. */
-  dbgType?: 'struct'|'enum';
-  /** 1-based number of an unnamed scope, for debug info. */
-  anonId?: number;
-  /** Bytes emitted directly in this scope, not counting nested scopes. */
-  debugRuns?: mod.DebugScopeRun[];
-
-  /** Find the scope prefix without the name of the label */
-  qualifiedPrefix(): string {
-    const parts: string[] = [];
-    for (let scope: Scope|undefined = this; scope?.parent; scope = scope.parent) {
-      if (scope.name) parts.unshift(scope.name);
-    }
-    return parts.length ? `${parts.join('::')}::` : '';
-  }
-
-  constructor(readonly parent?: Scope, public kind?: 'scope'|'proc') {
-    super();
-    this.global = parent ? parent.global : this;
-    this.collectRefs = parent?.collectRefs;
-  }
-
-  /**
-   * Walks through the scope tree to find the child scope that matches.
-   * Returns an object {scope: found} or {missing: index} if not found
-   */
-  private walkScopes(parts: string[]): {scope: Scope}|{missing: number} {
-    // deno-lint-ignore no-this-alias
-    let scope: Scope = this;
-    for (let i = 0; i < parts.length; i++) {
-      if (!i && !parts[i]) { // leading `::` - global
-        scope = scope.global;
-        continue;
-      }
-      let child = scope.children.get(parts[i]);
-      while (!i && scope.parent && !child) {
-        child = (scope = scope.parent).children.get(parts[i]);
-      }
-      if (!child) return {missing: i};
-      scope = child;
-    }
-    return {scope};
-  }
-
-  /** Look up a scope by (possibly qualified) name. Undefined if there is none. */
-  findScope(name: string): Scope|undefined {
-    const found = this.walkScopes(name.split(RE_SCOPE_SPLIT));
-    return 'scope' in found ? found.scope : undefined;
-  }
-
-  /** Splits a qualified symbol name into its unqualified tail and owning scope. */
-  pickScope(name: string, at?: {source?: Tokens.SourceInfo},
-            missing: MissingScope = 'fail'): [string, Scope]|undefined {
-    const split = name.split(RE_SCOPE_SPLIT);
-    const tail = split.pop()!;
-    const found = this.walkScopes(split);
-    // If the name has an explicit scope, this is an error?
-    if ('missing' in found) {
-      // A scope declared later in the file isn't an error for a query, and a
-      // reference can forward-declare it the same way a bare name does.
-      if (missing === 'undefined') return undefined;
-      if (missing === 'create') return [tail, this.createScopes(split)];
-      Tokens.fail(
-          `Could not resolve scope ${split.slice(0, found.missing + 1).join('::')}`,
-          at);
-    }
-    return [tail, found.scope];
-  }
-
-  /** Fills in placeholders for a qualified name whose scopes aren't open yet. */
-  private createScopes(parts: string[]): Scope {
-    // deno-lint-ignore no-this-alias
-    let scope: Scope = this;
-    for (let i = 0; i < parts.length; i++) {
-      if (!i && !parts[i]) {
-        scope = scope.global;
-        continue;
-      }
-      let child = scope.children.get(parts[i]);
-      while (!i && scope.parent && !child) {
-        child = (scope = scope.parent).children.get(parts[i]);
-      }
-      if (!child) {
-        child = new Scope(scope);
-        child.forwardDeclared = true;
-        child.name = parts[i];
-        scope.children.set(parts[i], child);
-      }
-      scope = child;
-    }
-    return scope;
-  }
-
-  // close() {
-  //   if (!this.parent) throw new Error(`Cannot close global scope`);
-  //   this.closed = true;
-  //   // Any undefined identifiers in the scope are automatically
-  //   // promoted to the parent scope.
-  //   for (const [name, sym] of this.symbols) {
-  //     if (sym.expr) continue; // if it's defined in the scope, do nothing
-  //     const parentSym = this.parent.symbols.get(sym);
-  //   }
-  // }
-}
-
-class CheapScope extends BaseScope {
-
-  /** Clear everything out, making sure everything was defined. */
-  clear(collector?: ErrorCollector) {
-    this.validate(collector);
-    this.symbols.clear();
-  }
-  /**
-   * Given a collector, records every still-undefined cheap label and returns
-   * normally; without one it throws on the first, which is what the mid-line
-   * callers want (`line()` records and resyncs for them).
-   */
-  validate(collector?: ErrorCollector) {
-    for (const [name, sym] of this.symbols) {
-      if (!sym.expr) {
-        // The location rides on `.source` rather than being baked into the text.
-        const msg = `Cheap local label never defined: ${name}`;
-        if (!collector) Tokens.fail(msg, {source: firstRef(sym)});
-        collector.add('error', msg, firstRef(sym));
-      }
-    }
-  }
 }
 
 const NO_INLINE_LOOKUP: Exprs.SymbolLookup = {get: () => undefined};
@@ -475,10 +197,7 @@ export class Assembler {
   /** Enum members and labels on a macro call line, which ca65 gives no size. */
   private readonly unsizedSyms = new Set<Symbol>();
 
-  /** Mapping for any string to byte array  */
-  private charMapping = new MaxKeySizeCacheMap<string, number[]>();
-  /** Saved charmaps for `.pushcharmap`/`.popcharmap`. */
-  private charmapStack: Array<MaxKeySizeCacheMap<string, number[]>> = [];
+  private readonly chars = new CharMap(msg => this.fail(msg));
 
   /**
    * We don't have any CPUs to switch to, so this is just there to make sure the
@@ -492,23 +211,9 @@ export class Assembler {
   /** A scope for cheap local labels. */
   private cheapLocals = new CheapScope();
 
-  /** List of global symbol indices used by forward refs to anonymous labels. */
-  private anonymousForward: number[] = [];
-
-  /** List of chunk/offset positions of previous anonymous labels. */
-  private anonymousReverse: Expr[] = [];
-
-  /** Map of global symbol incides used by forward refs to relative labels. */
-  private relativeForward: (number|undefined)[] = [];
-
-  /** Map of chunk/offset positions of back-referable relative labels. */
-  private relativeReverse: Expr[] = [];
-
-  /** List of global symbol indices used by forward refs to rts statements. */
-  private rtsRefsForward: number[] = [];
-
-  /** List of chunk/offset positions of back-referable rts statements. */
-  private rtsRefsReverse: Expr[] = [];
+  private readonly localLabels = new LocalLabels(
+      () => this.allocSymbol(), msg => this.fail(msg),
+      i => this.linter?.rtsBackref(i));
 
   /** All the chunks so far. */
   private chunks: Chunk[] = [];
@@ -540,9 +245,6 @@ export class Assembler {
    * the `.align` in that segment, this is the chunk that gets padded.
    */
   private _alignChunk: Chunk|undefined = undefined;
-
-  /** Prefix to prepend to all segment names. */
-  private _segmentPrefix = '';
 
   /** Current source location, for error messages. */
   private _source?: Tokens.SourceInfo;
@@ -619,11 +321,7 @@ export class Assembler {
   /** Supports refExtractor. */
   private _exprMap?: WeakMap<Expr, Expr> = undefined;
 
-  /** 
-   * When defining segments, this tracks the current offset in the output file
-   * That way users don't have to define segment offsets if they are sequential
-   */
-  private _segmentOffset = 0;
+  private readonly segParser: SegmentParser;
 
   /** Returns an early error in assembling if you mix segment modes */
   private _segmentMode?: 'named'|'anon';
@@ -648,18 +346,13 @@ export class Assembler {
       this.linter = new Linter(this.errorCollector, opts.lint,
                                opts.tokenizerOptions?.lintPragmas);
     }
-  }
-
-  private generateAnonSegmentName(memory: number, size: number): string {
-    // reuse _segmentOffset for a count of segments used in this file to help make the hash unique.
-    // Prefer the tokenizer's file name over the module name
-    // For an `.include`d file that's the file the user actually wrote the `.segment` in.
-    const file = this._source?.file ?? this.opts.moduleName ?? '';
-    const line = this._source?.line;
-    const input = [file, String(line ?? ''), String(this._segmentOffset++),
-                   String(memory), String(size)].join('\0');
-    const hash = createHash().update(input).digest('hex').slice(0, 12);
-    return mod.anonSegmentName(file, line, hash);
+    this.segParser = new SegmentParser({
+      fail: (msg, at) => this.fail(msg, at),
+      parseConst: (tokens, start) => this.parseConst(tokens, start),
+      parseStr: (tokens, start) => this.parseStr(tokens, start),
+      parseOptionalStr: (tokens, start) => this.parseOptionalStr(tokens, start),
+      source: () => this._source,
+    }, opts.moduleName);
   }
 
   /** Sets the current source location for debug info from an external source. */
@@ -1113,51 +806,21 @@ export class Assembler {
     return pc.num! - (pc.meta?.rel ? 0 : this.chunks[chunk].org ?? 0);
   }
 
+  /** Gives `sym` the next link-time symbol id. */
+  private allocSymbol(sym: Symbol = {}): Symbol {
+    sym.id = this.symbols.length;
+    this.symbols.push(sym);
+    return sym;
+  }
+
   resolveSymbol(symbol: Expr): Expr {
     const name = symbol.sym!;
     const parsed = parseSymbol(name);
     if (parsed.type === 'pc') {
       return this.pc();
-    } else if (parsed.type === 'anon' && parsed.num > 0) {
-      // anonymous forward ref
-      const i = parsed.num - 1;
-      let num = this.anonymousForward[i];
-      if (num != null) return {op: 'sym', num};
-      this.anonymousForward[i] = num = this.symbols.length;
-      this.symbols.push({id: num});
-      return {op: 'sym', num};
-    } else if (parsed.type === 'rts' && parsed.num > 0) {
-      // rts forward ref
-      const i = parsed.num - 1;
-      let num = this.rtsRefsForward[i];
-      if (num != null) return {op: 'sym', num};
-      this.rtsRefsForward[i] = num = this.symbols.length;
-      this.symbols.push({id: num});
-      return {op: 'sym', num};
-    } else if (parsed.type === 'rel' && parsed.num > 0) {
-      // relative forward ref
-      let num = this.relativeForward[parsed.num - 1];
-      if (num != null) return {op: 'sym', num};
-      this.relativeForward[name.length - 1] = num = this.symbols.length;
-      this.symbols.push({id: num});
-      return {op: 'sym', num};
-    } else if (parsed.type === 'anon' && parsed.num < 0) {
-      // anonymous back ref
-      const i = this.anonymousReverse.length + parsed.num;
-      if (i < 0) this.fail(`Bad anonymous backref: ${name}`);
-      return this.anonymousReverse[i];
-    } else if (parsed.type === 'rts' && parsed.num < 0) {
-      // rts back ref
-      const i = this.rtsRefsReverse.length + parsed.num;
-      if (i < 0) this.fail(`Bad rts backref: ${name}`);
-      // That `rts` is a branch target now, so it can't be linted away.
-      this.linter?.rtsBackref(i);
-      return this.rtsRefsReverse[i];
-    } else if (parsed.type === 'rel' && parsed.num < 0) {
-      // relative back ref
-      const expr = this.relativeReverse[name.length - 1];
-      if (expr == null) this.fail(`Bad relative backref: ${name}`);
-      return expr;
+    } else if (parsed.type !== 'none') {
+      const local = this.localLabels.resolve(name, parsed);
+      if (local) return local;
     }
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
     // A nested term carries no source, but the debug info still wants its line.
@@ -1184,12 +847,9 @@ export class Assembler {
     }
     // if the expression is not yet known then refer to the symbol table,
     // adding it if necessary.
-    if (sym.id == null) {
-      sym.id = this.symbols.length;
-      this.symbols.push(sym);
-    }
+    if (sym.id == null) this.allocSymbol(sym);
 
-    const out: Expr = {op: 'sym', num: sym.id};
+    const out: Expr = {op: 'sym', num: sym.id!};
     if (symbol.meta?.zeropage) out.meta = {zeropage: true};
     return out;
   }
@@ -1975,29 +1635,10 @@ export class Assembler {
     // Something may branch here, so the instruction above no longer simply
     // falls into the one below - but it may have been jumping right here.
     this.linter?.label(ident);
-    if (ident === ':') {
-      // anonymous label - shift any forward refs off, and push onto the backs.
-      this.anonymousReverse.push(expr);
-      const sym = this.anonymousForward.shift();
-      if (sym != null) this.symbols[sym].expr = expr;
+    const dir = this.localLabels.label(ident, expr);
+    if (dir) {
       if (this.opts.generateDebugInfo) {
-        this.debugLabels.push({name: '@p', expr});
-      }
-      return;
-    } else if (/^\++$/.test(ident)) {
-      // relative forward ref - fill in global symbol we made earlier
-      const sym = this.relativeForward[ident.length - 1];
-      this.relativeForward[ident.length - 1] = undefined;
-      if (sym != null) this.symbols[sym].expr = expr;
-      if (this.opts.generateDebugInfo) {
-        this.debugLabels.push({name: '@p', expr});
-      }
-      return;
-    } else if (/^-+$/.test(ident)) {
-      // relative backref - store the expr for later
-      this.relativeReverse[ident.length - 1] = expr;
-      if (this.opts.generateDebugInfo) {
-        this.debugLabels.push({name: '@m', expr});
+        this.debugLabels.push({name: dir === '+' ? '@p' : '@m', expr});
       }
       return;
     }
@@ -2200,11 +1841,7 @@ export class Assembler {
     if (mnemonic === 'rts') {
       // NOTE: we special-case this in both the tokenizer and here so that
       // `rts:+` and `rts:-` work for pointing to an rts instruction.
-      const expr = this.pc();
-      const index = this.rtsRefsReverse.push(expr) - 1;
-      const sym = this.rtsRefsForward.shift();
-      if (sym != null) this.symbols[sym].expr = expr;
-      rtsAnchor = {index, claimed: sym != null};
+      rtsAnchor = this.localLabels.rts(this.pc());
     }
     // may need to size the arg, depending.
     // cpu will take 'add', 'a,x', and 'a,y' and indicate which it actually is.
@@ -2712,16 +2349,15 @@ export class Assembler {
   }
 
   charMap(code: number, target: number) {
-    if (code < 0 || code > 255) this.fail(`.charmap index out of range: ${code}`);
-    this.charMapping.set(String.fromCodePoint(code), [target & 0xff]);
+    this.chars.set(code, target);
   }
 
   pushCharmap() {
-    this.charmapStack.push(new MaxKeySizeCacheMap(this.charMapping));
+    this.chars.push();
   }
 
   popCharmap() {
-    this.charMapping = this.charmapStack.pop() ?? this.charMapping;
+    this.chars.pop();
   }
 
   // Our own custom string based mapping, which allows any N input bytes to M output bytes
@@ -2748,7 +2384,7 @@ export class Assembler {
     } else if (valueToks.length === 1 && valueToks[0].token === 'str' && !valueToks[0].char) {
       // If its a string, parse it using the current charmapping values (to match ca65 behavior)
       bytes = [];
-      writeString(bytes, valueToks[0].str, this.charMapping);
+      writeString(bytes, valueToks[0].str, this.chars.mapping);
       if (!bytes.length) this.fail(`.strmap value must not be empty`, valueToks[0]);
     } else {
       // Otherwise, its probaly some constant value or something.
@@ -2758,15 +2394,13 @@ export class Assembler {
   }
 
   strMap(key: string, bytes: number[]) {
-    if (!key) this.fail(`.strmap key must not be empty`);
-    if (!bytes.length) this.fail(`.strmap value must not be empty`);
-    this.charMapping.set(key, bytes.map(b => b & 0xff));
+    this.chars.strMap(key, bytes);
   }
 
   // the `charMap` parameter defaults to the current charMap, but for `.literal`
   // we pass in an empty map to disable the charMapping for this string.
   byteInternal(args: Array<Expr|string|number>,
-               charmap: MaxKeySizeCacheMap<string, number[]> = this.charMapping) {
+               charmap: CharMapping = this.chars.mapping) {
     const {chunk} = this;
     this.markWritten(args.length);
 
@@ -2912,7 +2546,7 @@ export class Assembler {
 
   segmentPrefix(prefix: string) {
     // TODO - make more of a todo about changing this?
-    this._segmentPrefix = prefix;
+    this.segParser.setPrefix(prefix);
   }
 
   /**
@@ -3415,19 +3049,7 @@ export class Assembler {
     return wrapped;
   }
 
-  /**
-   * Converts the character to the numerical value for the output.
-   * This assumes that it is not multimapped to multiple output bytes to keep
-   * ca65 compatibility.
-   */
-  readonly encodeChar = (char: string): number|undefined => {
-    const bytes = this.charMapping.get(char);
-    if (!bytes) return undefined;
-    if (bytes.length !== 1) {
-      this.fail(`Character literal '${char}' maps to ${bytes.length} bytes`);
-    }
-    return bytes[0];
-  };
+  readonly encodeChar = this.chars.encodeChar;
   // parseStringList(tokens: Token[], start = 1): string[] {
   //   return Tokens.parseArgList(tokens, 1).map(ts => {
   //     const str = Tokens.expectString(ts[0]);
@@ -3448,226 +3070,28 @@ export class Assembler {
     return undefined;
   }
 
-  /**
-   * A boolean segment attribute. If a param is not provided, it defaults to true
-   * otherwise is uses the value after it (as a const value).
-   */
   parseFlag(tokens: Token[], key: string): boolean {
-    if (!tokens.length) return true;
-    const val = this.parseConst(tokens, 0);
-    if (val !== 0 && val !== 1) {
-      this.fail(`Segment attr ${key} must be 0 or 1: ${val}`, tokens[0]);
-    }
-    return val !== 0;
+    return this.segParser.parseFlag(tokens, key);
   }
 
-  /** An alignment segment attribute which must be a positive power of two. */
   parseAlign(tokens: Token[], key: string): number {
-    if (!tokens.length) this.fail(`Segment attr ${key} needs a value`);
-    const val = this.parseConst(tokens, 0);
-    if (val < 1 || (val & (val - 1)) !== 0) {
-      this.fail(`Segment attr ${key} must be a power of two: ${val}`, tokens[0]);
-    }
-    return val;
+    return this.segParser.parseAlign(tokens, key);
   }
 
   parseSegmentList(tokens: Token[], start: number, allowEmptySegmentList: boolean): Array<string|mod.Segment> {
-    if (tokens.length < start + 1) {
-      if (allowEmptySegmentList) {
-        return [];
-      }
-      this.fail(`Expected a segment list`, tokens[start - 1]);
-    }
-    if (tokens.find(t => t.token == 'op' && t.str == '&')) {
-      return this.parseShorthandMirroredSegment(tokens);
-    }
-
-    return Tokens.parseArgList(tokens, 1).map((ts, _i, all) => {
-      // `.segment $8000 :size $4000` - an address rather than a name.
-      if (ts[0]?.token === 'num') return this.parseAnonSegment(ts, all.length);
-      const str = this._segmentPrefix + Tokens.expectString(ts[0]);
-      // Check the composed name so `.segmentprefix "@"` can't smuggle one in.
-      if (str.startsWith(mod.RESERVED_SEGMENT_PREFIX)) {
-        this.fail(
-            `Segment name may not start with '${mod.RESERVED_SEGMENT_PREFIX}', which is reserved: ${str}`,
-            ts[0]);
-      }
-      if (ts.length === 1) return str;
-      if (!Tokens.eq(ts[1], Tokens.COLON)) {
-        this.fail(`Expected comma or colon: ${Tokens.name(ts[1])}`, ts[1]);
-      }
-      let nonCompositeAttrSeen = false;
-      const seg = {name: str} as mod.Segment;
-      // TODO - parse expressions...
-      const attrs = Tokens.parseAttrList(ts, 1); // : ident [...]
-      for (const [key, val] of attrs) {
-        if (key !== 'mirror' && key !== 'pool') {
-          nonCompositeAttrSeen = true;
-        }
-        switch (key) {
-          case 'bank': seg.bank = this.parseConst(val, 0); break;
-          case 'size': seg.size = this.parseConst(val, 0); break;
-          case 'off': seg.offset = this.parseConst(val, 0); break;
-          case 'mem': seg.memory = this.parseConst(val, 0); break;
-          // `:fill` with no value fills with zeros, like ld65's `fill = yes`.
-          case 'fill': seg.fill = val.length ? this.parseConst(val, 0) : 0; break;
-          case 'out': seg.out = this.parseOptionalStr(val, 0) ?? '%O'; break;
-          case 'align': seg.align = this.parseAlign(val, key); break;
-          case 'alignload': seg.alignLoad = this.parseAlign(val, key); break;
-          case 'load': seg.load = this.parseStr(val, 0); break;
-          case 'run': seg.run = this.parseStr(val, 0); break;
-          // ld65's `type = zp` is both an addressing size and a bss segment.
-          case 'zp': case 'zeropage': seg.addressing = 1; seg.bss = true; break;
-          case 'bss': seg.bss = this.parseFlag(val, key); break;
-          case 'define': seg.define = this.parseFlag(val, key); break;
-          case 'optional': seg.optional = this.parseFlag(val, key); break;
-          case 'dedupe': seg.dedupe = this.parseFlag(val, key); break;
-          case 'default': seg.default = this.parseFlag(val, key); break;
-          // js65 has no read-only concept, so accept and ignore ld65's types.
-          case 'ro': case 'rw': break;
-          case 'mirror':
-            seg.mirror = this.parseSegmentNameList(val, key, ts[1]);
-            break;
-          case 'pool':
-            seg.pool = this.parseSegmentNameList(val, key, ts[1]);
-            break;
-          default: this.fail(`Unknown segment attr: ${key}`);
-        }
-      }
-      if (seg.mirror && seg.pool) {
-        this.fail(`A segment may not have both \`:mirror\` and \`:pool\``, ts[1]);
-      }
-      if (nonCompositeAttrSeen && (seg.mirror || seg.pool)) {
-        this.fail(`Cannot use other segment attributes when \`:${
-            seg.mirror ? 'mirror' : 'pool'}\` is used`, ts[1]);
-      }
-      // Only auto-assign offset if segment has an output file specified
-      // Segments without :out and without :off are RAM segments (no file output)
-      if (seg.offset === undefined && seg.size !== undefined && seg.out !== undefined) {
-        seg.offset = this._segmentOffset;
-        this._segmentOffset += seg.size;
-      }
-      if (seg.fill !== undefined && seg.size !== undefined) {
-        seg.free = [[seg.memory ?? 0, (seg.memory ?? 0) + seg.size]];
-      }
-      return seg;
-    });
+    return this.segParser.parseSegmentList(tokens, start, allowEmptySegmentList);
   }
 
   parseSegmentNameList(val: Token[], key: string, at?: Token): string[] {
-    const grp = val.length === 1 && val[0].token === 'grp' ? val[0] : undefined;
-    if (!grp) {
-      this.fail(`Segment attr ${key} expects a braced list: :${key} {"A", "B"}`,
-                at);
-    }
-    const names: string[] = [];
-    for (const tok of grp.inner) {
-      if (Tokens.eq(tok, Tokens.COMMA)) continue;
-      if (tok.token !== 'str') {
-        this.fail(`Segment attr ${key} expects a list of segment name strings`,
-                  tok);
-      }
-      names.push(tok.str);
-    }
-    return this.checkCompositeMembers(names, key, at);
+    return this.segParser.parseSegmentNameList(val, key, at);
   }
 
-  private checkCompositeMembers(names: string[], key: string,
-                              at?: Token): string[] {
-    if (names.length < 2) {
-      this.fail(`Segment attr ${key} needs at least two segments: ${
-          names.length ? names.join(', ') : '(empty)'}`, at);
-    }
-    const prefixed = names.map(n => this._segmentPrefix + n);
-    if (new Set(prefixed).size !== prefixed.length) {
-      this.fail(`Segment attr ${key} contains a duplicate segment: ${
-          prefixed.join(', ')}`, at);
-    }
-    return prefixed;
-  }
-
-  /**
-   * Parses an anonymous segment: `.segment $8000 :size $4000 [:fill <$ff>]`.
-   *
-   * The positional address is the segment's `memory`. There is deliberately no
-   * `offset` parameter. Anonymous segments are laid out sequentially by the
-   * linker in module-read order.
-   */
   parseAnonSegment(ts: Token[], argCount: number): mod.Segment {
-    if (argCount > 1) {
-      this.fail(`An anonymous .segment may not appear in a comma-separated list`,
-                ts[0]);
-    }
-    const colon = Tokens.find(ts, Tokens.COLON, 0);
-    if (colon < 0) {
-      this.fail(`An anonymous .segment requires :size`, ts[0]);
-    }
-    // allow math expressions in the PC address
-    const memory = this.parseConst(ts.slice(0, colon), 0);
-
-    let size: number|undefined;
-    let fill: number|undefined;
-    let bank: number|undefined;
-    let bss = false;
-    let addressing: number|undefined;
-    for (const [key, val] of Tokens.parseAttrList(ts, colon)) {
-      const rejected = ANON_SEGMENT_ATTR_REASONS.get(key);
-      if (rejected != null) {
-        this.fail(`Segment attr ${key} is not allowed on an anonymous .segment` +
-                  (rejected ? `: ${rejected}` : ''), ts[0]);
-      }
-      switch (key) {
-        case 'size': size = this.parseConst(val, 0); break;
-        // `:fill` with no value fills with zeros, like ld65's `fill = yes`.
-        case 'fill': fill = val.length ? this.parseConst(val, 0) : 0; break;
-        // Pure metadata, for `^` bank-byte exprs and LinkSegment.bank.
-        case 'bank': bank = this.parseConst(val, 0); break;
-        case 'zp': case 'zeropage': addressing = 1; bss = true; break;
-        case 'bss': bss = this.parseFlag(val, key); break;
-        // js65 has no read-only concept, so accept and ignore ld65's types.
-        case 'ro': case 'rw': break;
-        default: this.fail(`Unknown segment attr: ${key}`, ts[0]);
-      }
-    }
-    if (size === undefined) {
-      this.fail(`An anonymous .segment requires :size`, ts[0]);
-    }
-    if (bss && fill !== undefined) {
-      this.fail(`Segment attr fill is not allowed on an anonymous ram ` +
-                `segment: a ram segment writes nothing to the file`, ts[0]);
-    }
-
-    const seg: mod.Segment = {
-      name: this.generateAnonSegmentName(memory, size), memory, size,
-    };
-    if (bss) seg.bss = true;
-    if (addressing !== undefined) seg.addressing = addressing;
-    if (bank !== undefined) seg.bank = bank;
-    if (fill !== undefined) {
-      seg.fill = fill;
-      seg.free = [[memory, memory + size]];
-    }
-
-    return seg;
+    return this.segParser.parseAnonSegment(ts, argCount);
   }
 
-  /**
-   * .segment "A" & "B" & ... "Z" ; is shorthand for
-   * .segment "A&B&...&Z" :mirror {"A", "B", ... "Z"}
-   * No commas are allowed in this as the data should be mirrored into all segments listed
-   * Loads or creates a segment with the `:mirrored` attribute and returns just that one segment
-   */
   parseShorthandMirroredSegment(ts: Token[]): Array<string|mod.Segment> {
-    // Find the list of named segments and reject if we have any attributes or commas
-    // skipping over the first `.segment` token
-    const segnames = ts.slice(1).filter(t => !(t.token === 'op' && t.str === '&'))
-                                .map( t => Tokens.expectString(t) ).sort();
-    const mirror = this.checkCompositeMembers(segnames, 'mirror', ts[0]);
-    const seg: mod.Segment = {
-      name: mirror.join('&'),
-      mirror,
-    };
-    return [seg];
+    return this.segParser.parseShorthandMirroredSegment(ts);
   }
 
   parseResArgs(tokens: Token[]): [number, number?] {
@@ -3869,31 +3293,6 @@ export class Assembler {
   }
 }
 
-function writeString(data: number[], str: string, charmap: MaxKeySizeCacheMap<string, number[]>) {
-  // Split into Unicode code points (not js string UTF-16 code units) so a multi-byte
-  // character is one unit for both matching and the unmapped fallback.
-  const chars = Array.from(str);
-  const maxKeyLen = charmap.getLargestKeySize();
-  for (let i = 0; i < chars.length; ) {
-    // Greedy longest-match, so a `.strmap` key beats the single-character
-    // `.charmap` entries it overlaps.
-    let bytes: number[]|undefined;
-    let len = Math.min(maxKeyLen, chars.length - i);
-    for (; len >= 1; len--) {
-      bytes = charmap.get(chars.slice(i, i + len).join(''));
-      if (bytes) break;
-    }
-    if (bytes) {
-      data.push(...bytes);
-      i += len;
-    } else {
-      // Unmapped: emit the code point/character itself
-      data.push(chars[i].codePointAt(0)! & 0xff);
-      i++;
-    }
-  }
-}
-
 type ArgMode =
     'add' | 'a,x' | 'a,y' | // pseudo modes
     'abs' | 'abx' | 'aby' |
@@ -3901,24 +3300,6 @@ type ArgMode =
     'rel' | 'zpg' | 'zpx' | 'zpy';
 
 export type Arg = ['acc' | 'imp'] | [ArgMode, Expr];
-
-
-type ParsedSymbol = {type: 'pc'|'none'}|{type: 'anon'|'rel'|'rts', num: number};
-function parseSymbol(name: string): ParsedSymbol {
-  if (name === '*') return {type: 'pc'};
-
-  if (/^:\++$/.test(name)) return {type: 'anon', num: name.length - 1};
-  if (/^:\+\d+$/.test(name)) return {type: 'anon', num: parseInt(name.substring(2))};
-  if (/^:-+$/.test(name)) return {type: 'anon', num: 1 - name.length};
-  if (/^:-\d+$/.test(name)) return {type: 'anon', num: -parseInt(name.substring(2))};
-
-  if (/^:>*rts$/.test(name)) return {type: 'rts', num: Math.max(name.length - 4, 1)};
-  if (/^:<+rts$/.test(name)) return {type: 'rts', num: 4 - name.length};
-
-  if (/^\++$/.test(name)) return {type: 'rel', num: name.length};
-  if (/^-+$/.test(name)) return {type: 'rel', num: -name.length};
-  return {type: 'none'};
-}
 
 const ADDR_SIZE_KEYWORDS = new Set([
   'direct', 'zeropage', 'zp', 'absolute', 'abs', 'near', 'far', 'long', 'dword',

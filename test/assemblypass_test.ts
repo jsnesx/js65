@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect, beforeAll, afterAll} from 'bun:test';
-import {Assembler} from '../src/assembler.ts';
+import {Assembler} from '../src/frontend/assembler.ts';
 import {Cpu} from '../src/cpu.ts';
 import {setJsEngine} from '../src/driver/js/engine.ts';
 import {functionEngine} from '../src/driver/js/function.ts';

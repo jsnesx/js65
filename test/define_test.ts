@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {describe, it, expect} from 'bun:test';
-import {Define} from '../src/define.ts';
+import {Define} from '../src/frontend/define.ts';
 import {type Token} from '../src/token.ts';
 import * as Tokens from '../src/token.ts';
 import {Tokenizer} from '../src/tokenizer.ts';
