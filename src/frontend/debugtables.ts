@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import type {Chunk, DebugFile, DebugLine, DebugRun} from './module.ts';
-import {DEBUG_LINE_ASM, DEBUG_LINE_EXT, DEBUG_LINE_MACRO} from './module.ts';
-import type {SourceInfo} from './token.ts';
+import type {Chunk, DebugFile, DebugLine, DebugRun} from '../module.ts';
+import {DEBUG_LINE_ASM, DEBUG_LINE_EXT, DEBUG_LINE_MACRO} from '../module.ts';
+import type {SourceInfo} from '../token.ts';
 
 /** Element types of the data directives, as ld65 spells them. */
 export const DATA_ELEMENTS = new Map<string, {size: number, type: string}>([
