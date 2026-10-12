@@ -1,29 +1,29 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import { Base64 } from './base64.ts';
-import { Cpu } from './cpu.ts';
-import { type Expr } from './expr.ts';
-import * as Exprs from './expr.ts';
-import * as mod from './module.ts';
-import { ErrorCollector, FatalError, RecoverableError } from './error.ts';
-import type { AssemblerMessage, ErrorLevel } from './error.ts';
-import { type Token } from './token.ts'
-import * as Tokens from './token.ts';
-import { Tokenizer } from './tokenizer.ts';
+import { Base64 } from '../base64.ts';
+import { Cpu } from '../cpu.ts';
+import { type Expr } from '../expr.ts';
+import * as Exprs from '../expr.ts';
+import * as mod from '../module.ts';
+import { ErrorCollector, FatalError, RecoverableError } from '../error.ts';
+import type { AssemblerMessage, ErrorLevel } from '../error.ts';
+import { type Token } from '../token.ts'
+import * as Tokens from '../token.ts';
+import { Tokenizer } from '../tokenizer.ts';
 import { Linter, type RtsAnchor } from './lint.ts';
-import type { SymbolKind } from './lspindex.ts';
+import type { SymbolKind } from '../lspindex.ts';
 import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
-         type AssemblerOptions } from './options.ts';
-import type { LinkTimeEnv } from './assemblypass.ts';
+         type AssemblerOptions } from '../options.ts';
+import type { LinkTimeEnv } from '../assemblypass.ts';
 import { runActions } from './actions.ts';
-import { IntervalSet, assertNever, MaxKeySizeCacheMap } from './util.ts';
+import { IntervalSet, assertNever, MaxKeySizeCacheMap } from '../util.ts';
 import { createHash } from 'sha1-uint8array';
 import { DATA_ELEMENTS, DebugBuilder, type ExtLine, arrayType } from './debugtables.ts';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
-export { ErrorCollector, RecoverableError } from './error.ts';
-export type { AssemblerOptions as Options } from './options.ts';
+export { ErrorCollector, RecoverableError } from '../error.ts';
+export type { AssemblerOptions as Options } from '../options.ts';
 
 type Chunk = mod.ChunkNum; //<number[]>;
 type Module = mod.Module;

@@ -3,15 +3,15 @@
 
 import {vsprintf} from './sprintf.ts';
 import {Define} from './define.ts';
-import type { Expr } from './expr.ts';
-import * as Exprs from './expr.ts';
+import type { Expr } from '../expr.ts';
+import * as Exprs from '../expr.ts';
 import {Macro} from './macro.ts';
-import type { Token } from './token.ts';
-import * as Tokens from './token.ts';
-import {TokenStream} from './tokenstream.ts';
-import { ErrorCollector, FatalError, RecoverableError, SourceError } from './error.ts';
-import type { SourceInfo } from './error.ts';
-import type {InactiveRegionIndex, MacroIndex} from './lspindex.ts';
+import type { Token } from '../token.ts';
+import * as Tokens from '../token.ts';
+import {TokenStream} from '../tokenstream.ts';
+import { ErrorCollector, FatalError, RecoverableError, SourceError } from '../error.ts';
+import type { SourceInfo } from '../error.ts';
+import type {InactiveRegionIndex, MacroIndex} from '../lspindex.ts';
 import type {Assembler} from './assembler.ts';
 
 // TODO - figure out how to actually keep track of stack depth?

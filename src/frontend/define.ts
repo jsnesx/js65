@@ -1,8 +1,8 @@
 
 // SPDX-License-Identifier: MPL-2.0
 
-import {type Token} from './token.ts'
-import * as Tokens from './token.ts';
+import {type Token} from '../token.ts'
+import * as Tokens from '../token.ts';
 
 const DEBUG = false;
 

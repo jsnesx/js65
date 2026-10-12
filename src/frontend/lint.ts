@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type {Arg} from './assembler.ts';
-import type {AddressingMode} from './cpu.ts';
-import {type ErrorCollector, type MessageFix, type SourceInfo} from './error.ts';
-import {type Expr} from './expr.ts';
-import {type LintLevel, type LintOptions} from './options.ts';
-import {type Token} from './token.ts';
-import * as Tokens from './token.ts';
+import type {AddressingMode} from '../cpu.ts';
+import {type ErrorCollector, type MessageFix, type SourceInfo} from '../error.ts';
+import {type Expr} from '../expr.ts';
+import {type LintLevel, type LintOptions} from '../options.ts';
+import {type Token} from '../token.ts';
+import * as Tokens from '../token.ts';
 
 /**
  * Lints are constructs that assemble cleanly but are almost certainly not what

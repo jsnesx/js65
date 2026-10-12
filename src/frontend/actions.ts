@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { Assembler } from './assembler.ts';
-import type { SourceInfo } from './error.ts';
-import * as Exprs from './expr.ts';
-import type { Expr } from './expr.ts';
-import type { ActionSource, AssemblyAction } from './libassembler.ts';
-import { MaxKeySizeCacheMap } from './util.ts';
+import type { SourceInfo } from '../error.ts';
+import * as Exprs from '../expr.ts';
+import type { Expr } from '../expr.ts';
+import type { ActionSource, AssemblyAction } from '../libassembler.ts';
+import { MaxKeySizeCacheMap } from '../util.ts';
 
 /** Callback to run a `code` action's source through the full tokenize/preprocess pipeline. */
 export type CodeRunner = (asm: Assembler, code: string, name?: string) => void;
