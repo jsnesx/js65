@@ -16,13 +16,14 @@ import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from '../options.ts';
 import type { LinkTimeEnv } from '../assemblypass.ts';
 import { runActions } from './actions.ts';
-import { IntervalSet, assertNever, MaxKeySizeCacheMap } from '../util.ts';
-import { DATA_ELEMENTS, DebugBuilder, type ExtLine, arrayType } from './debugtables.ts';
+import { IntervalSet, MaxKeySizeCacheMap } from '../util.ts';
 import { CheapScope, RE_SCOPE_SPLIT, SIZE_NAME, SIZE_SUFFIX, Scope, type Symbol,
          firstRef, isSizeOfSymbol, parseSymbol } from './scope.ts';
 import { CharMap, type CharMapping, writeString } from './charmap.ts';
 import { LocalLabels } from './locallabels.ts';
 import { SegmentParser } from './segmentparser.ts';
+import { GlobalTable, type GlobalKind } from './globals.ts';
+import { AssemblyDebug, type PendingCSym, chainDepth } from './asmdebug.ts';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
@@ -52,29 +53,6 @@ const SUPPORTED_CPUS = new Set(['6502', '6502x']);
 
 const DEFAULT_CPU_NAME = '6502';
 
-function chainDepth(source?: Tokens.SourceInfo): number {
-  let depth = 0;
-  for (let s = source?.parent; s; s = s.parent) depth++;
-  return depth;
-}
-
-/** A macro argument keeps its call site, so prefer a token from the macro body. */
-function deepestSource(tokens: Token[]): Tokens.SourceInfo|undefined {
-  let best: Tokens.SourceInfo|undefined;
-  let bestDepth = -1;
-  for (const {source} of tokens) {
-    if (!source) continue;
-    const depth = chainDepth(source);
-    if (depth > bestDepth) {
-      best = source;
-      bestDepth = depth;
-    }
-  }
-  return best;
-}
-
-type GlobalKind = 'export'|'import'|'global';
-
 export type AssertAction = mod.AssertAction;
 
 const ASSERT_ACTIONS = new Map<string, AssertAction>([
@@ -98,30 +76,12 @@ interface PendingAssert {
   pc?: number;
 }
 
-/** A `.dbg func` or `.dbg sym`, kept until the module ends. */
-interface PendingCSym {
-  name: string;
-  type: string;
-  sc: mod.DebugCSym['sc'];
-  scope: Scope;
-  offs?: number;
-  asmName?: string;
-  func?: boolean;
-  source?: Tokens.SourceInfo;
-}
-
 const FUNC_CLASSES = new Map<string, mod.DebugCSym['sc']>([
   ['extern', 'ext'], ['static', 'static'],
 ]);
 const SYM_CLASSES = new Map<string, mod.DebugCSym['sc']>([
   ['auto', 'auto'], ['extern', 'ext'], ['register', 'reg'], ['static', 'static'],
 ]);
-
-/** `.export`/`.import`/`.global` calls along with the scope it appeared in. */
-interface GlobalDecl {
-  scope: Scope;
-  kind: GlobalKind;
-}
 
 const NO_INLINE_LOOKUP: Exprs.SymbolLookup = {get: () => undefined};
 
@@ -162,21 +122,6 @@ export class Assembler {
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
 
-  /**
-   * `.export`/`.import`/`.global` declarations
-   * We track what scope they are created in because ca65 allows exports from within a
-   * scope to export the sym as a global without scope.
-   */
-  private globals = new Map<string, GlobalDecl[]>();
-  private resolvedGlobalKinds = new Map<string, 'import'|'export'>();
-  /** Symbols declared zeropage (.importzp/.exportzp/.globalzp) */
-  private zeropageGlobals = new Set<string>();
-  /** Names a command-line `-D` defined, which an `.import` may take over. */
-  private commandLineDefines = new Set<string>();
-  private autoimportEnabled = true;
-  /** Names turned into implicit imports, so we can blame them if unresolved. */
-  private autoImported: mod.AutoImport[] = [];
-
   /** Current state for tracking .struct and .enum members */
   private structContext:
       Array<{kind: 'struct'|'enum', offset: number, name?: string, count: number}> = [];
@@ -194,8 +139,6 @@ export class Assembler {
    * the size after the line ends.
    */
   private pendingLabel?: {name: string, startPc: Expr, depth: number};
-  /** Enum members and labels on a macro call line, which ca65 gives no size. */
-  private readonly unsizedSyms = new Set<Symbol>();
 
   private readonly chars = new CharMap(msg => this.fail(msg));
 
@@ -249,37 +192,8 @@ export class Assembler {
   /** Current source location, for error messages. */
   private _source?: Tokens.SourceInfo;
 
-  /** Debug labels for anonymous/temp labels that aren't in normal symbol tables. */
-  private debugLabels: Array<{name: string, expr: Expr}> = [];
-
   /** Debug tables for the `.dbg` writer, present when debug info is on. */
-  private readonly dbg?: DebugBuilder;
-  /** Element type of the data directive being assembled, for span types. */
-  private dataElement?: {size: number, type: string};
-  /** Whether the statement being assembled emitted an instruction. */
-  private emittedCode = false;
-  /** Symbols defined in this module, as opposed to references that resolved. */
-  private readonly definedSyms = new Set<Symbol>();
-  private readonly cheapSyms: Array<{name: string, sym: Symbol, parent?: Symbol}> = [];
-  /** Token of every assignment of a `.set` symbol. */
-  private readonly setDefs = new Map<Symbol, Tokens.SourceInfo[]>();
-  /** Statement each definition came from, with the `.dbg line` open there. */
-  private readonly defLines = new Map<Symbol, Array<{src: Tokens.SourceInfo, ext?: ExtLine}>>();
-  /** The current statement's source with the deepest macro chain. */
-  private _dbgSource?: Tokens.SourceInfo;
-  /** Where each `.import`/`.global` name was first declared, its def for ca65. */
-  private readonly globalDecls = new Map<string, Tokens.SourceInfo>();
-  /** Each `.export` of a name, which ca65 counts as a ref. */
-  private readonly exportSites = new Map<string, Tokens.SourceInfo[]>();
-  /** Conditional refs to names not defined yet. */
-  private readonly pendingCondRefs: Array<{name: string, scope: Scope, source: Tokens.SourceInfo}> = [];
-  /** The last non-cheap label, which owns the cheap locals after it. */
-  private lastLabel?: Symbol;
-  private anonScopeCount = 0;
-  /** `.dbg func`/`.dbg sym` entries, whose asm symbols resolve at the end. */
-  private readonly csyms: PendingCSym[] = [];
-  /** ca65 `.debuginfo`; the value at the end of the module wins. */
-  private debugSyms = true;
+  private readonly dbg?: AssemblyDebug;
 
   /** Token for reporting errors. */
   private errorToken?: Token;
@@ -323,6 +237,8 @@ export class Assembler {
 
   private readonly segParser: SegmentParser;
 
+  private readonly globals = new GlobalTable(this, this.lateAssemblyQueries);
+
   /** Returns an early error in assembling if you mix segment modes */
   private _segmentMode?: 'named'|'anon';
 
@@ -336,8 +252,13 @@ export class Assembler {
       this.cheapLocals.collectRefs = true;
     }
     if (opts.generateDebugInfo) {
-      this.dbg = new DebugBuilder();
-      if (opts.moduleName) this.dbg.fileId(opts.moduleName);
+      this.dbg = new AssemblyDebug(opts.moduleName, {
+        lookupSymbol: name => this.lookupSymbol(name),
+        resolve: expr => this.resolve(expr),
+        isZeropageGlobal: name => this.globals.isZeropage(name),
+        isImport: name => this.globals.hasGlobalKind(name, 'import'),
+        errorCollector: this.errorCollector,
+      });
     }
     if (opts.errorLimit != null) {
       this.errorCollector.limit = opts.errorLimit;
@@ -422,7 +343,7 @@ export class Assembler {
   definedSymbol(sym: string): boolean {
     // In this case, it's okay to traverse up the scope chain since if we
     // were to reference the symbol, it's guaranteed to be defined somehow.
-    if (this.hasGlobalKind(sym, 'import')) return true;
+    if (this.globals.hasGlobalKind(sym, 'import')) return true;
     const s = this.walkSymbolTree(sym);
     if (s !== undefined) return Boolean(s);
     return false;
@@ -436,26 +357,12 @@ export class Assembler {
    */
   /** Keeps a line record for a line ca65 holds on to, such as a conditional. */
   noteLine(src?: Tokens.SourceInfo) {
-    if (this.dbg && src) this.dbg.lineChain(src);
+    this.dbg?.noteLine(src);
   }
 
   /** ca65 counts every symbol in a conditional as a ref, even forward ones. */
   conditionRefs(expr: Expr, at?: Tokens.SourceInfo) {
-    if (!this.dbg) return;
-    const walk = (e: Expr) => {
-      if (e.op === '.sizeof') return;
-      const source = e.source ?? at;
-      if (e.op === 'sym' && e.sym && e.sym !== '*' && source) {
-        const sym = this.lookupSymbol(e.sym);
-        if (sym) {
-          (sym.refs ??= []).push(source);
-        } else if (!e.sym.startsWith('@') && !e.sym.includes('::')) {
-          this.pendingCondRefs.push({name: e.sym, scope: this.currentScope, source});
-        }
-      }
-      e.args?.forEach(walk);
-    };
-    walk(expr);
+    this.dbg?.conditionRefs(expr, at, this.currentScope);
   }
 
   definedValue(sym: string): Expr|undefined {
@@ -824,27 +731,15 @@ export class Assembler {
     }
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
     // A nested term carries no source, but the debug info still wants its line.
-    const ref = symbol.source || !this.dbg ? symbol : {source: this._dbgSource};
+    const ref = symbol.source || !this.dbg ? symbol : {source: this.dbg.source};
     const sym = scope.resolve(name, {allowForwardRef: true, ref});
     if (sym.expr) {
       // console.log(`sometging: ${JSON.stringify(sym)}`);
       return sym.expr;
     }
     // If this is a late pass, we can resolve import and globalimport now
-    const declared = this.globals.has(name);
-    if (this.linkEnv && (this.hasGlobalKind(name, 'import') ||
-        (this.hasGlobalKind(name, 'global') &&
-            this.globalKinds?.[name] === 'import') ||
-        (!declared && this.autoImportNames?.has(name)))) {
-      const expr: Expr = {op: 'im', sym: name};
-      const at = firstRef(sym);
-      if (at) expr.source = at;
-      if (this.zeropageGlobals.has(name) || this.linkEnv.addrSize(name) === 1) {
-        expr.meta = {size: 1};
-      }
-      sym.expr = expr;
-      return expr;
-    }
+    const imported = this.globals.lateImport(name, sym);
+    if (imported) return imported;
     // if the expression is not yet known then refer to the symbol table,
     // adding it if necessary.
     if (sym.id == null) this.allocSymbol(sym);
@@ -887,7 +782,7 @@ export class Assembler {
           const parentSym = scope.parent.symbols.get(name);
           // check if this is already recorded multiple times from different scopes
           // and don't double define it if it is.
-          const multiScopeGlobal = (this.globals.get(name)?.length ?? 0) > 1;
+          const multiScopeGlobal = this.globals.isMultiScope(name);
           if (!parentSym) {
             // just alias it directly in the parent scope
             if (!multiScopeGlobal) scope.parent.symbols.set(name, sym);
@@ -920,75 +815,8 @@ export class Assembler {
     }
     close(this.currentScope);
 
-    const globalScope = this.currentScope.global;
-    for (const [name, decls] of this.globals) {
-      // Resolve the symbol in each scope the declaration appeared in - the
-      // same name can be imported from multiple sibling scopes, and each
-      // occurrence needs its own resolution against its own local symbol.
-      for (const {scope, kind: global} of decls) {
-        let sym = scope.symbols.get(name);
-        // Try to walk the sym scope looking for the sym, but ONLY while we don't
-        // already have something. This lets it choose a scoped import over an import
-        // with the same name in the parent scope.
-        for (let s = scope.parent; s && sym == null; s = s.parent) {
-          const outer = s.symbols.get(name);
-          if (outer?.expr) sym = outer;
-        }
-        // `.global` is import-or-export depending on whether it got defined here.
-        // Don't treat an eagerly resolved global export in the late pass as global if
-        // we already know whether it was import or export from the first pass
-        const kind = global === 'global' ?
-            (sym?.expr && sym.expr.op !== 'im' ? 'export' : 'import') : global;
-        if (global === 'global') this.resolvedGlobalKinds.set(name, kind);
-        if (kind === 'export') {
-          if (!sym?.expr) {
-            collector.add('error', `Exported symbol '${name}' undefined`, firstRef(sym));
-            continue;
-          }
-          if (sym.id == null) {
-            sym.id = this.symbols.length;
-            this.symbols.push(sym);
-          }
-          sym.export = name;
-          // An `.export` inside a `.proc`/`.scope` publishes the name for the
-          // whole module, so a reference from outside that scope - which by now
-          // has been floated up to the global scope - names this symbol.
-          const outer = globalScope.symbols.get(name);
-          if (outer && outer !== sym && !outer.expr) {
-            outer.expr = {op: 'sym', num: sym.id};
-          }
-        } else if (kind === 'import') {
-          if (!sym) continue; // okay to import but not use.
-          // TODO - record both positions?
-          // Already resolved by resolveSymbol during the latepass is not a redefinition
-          if (sym.expr && sym.expr.op !== 'im') {
-            collector.add('error', `Symbol '${name}' already defined`, firstRef(sym));
-            continue;
-          }
-          if (!sym.expr) {
-            // Zeropage imports carry a one-byte size so references pick zp modes.
-            const expr: Expr = {op: 'im', sym: name};
-            // Carry the reference site so the linker can point at something if the
-            // import turns out never to have been exported.
-            const at = firstRef(sym);
-            if (at) expr.source = at;
-            if (this.zeropageGlobals.has(name)) expr.meta = {size: 1};
-            sym.expr = expr;
-          }
-        } else {
-          assertNever(kind);
-        }
-      }
-    }
-
-    for (const [name, sym] of this.currentScope.symbols) {
-      if (sym.expr) continue;
-      if (this.autoimportEnabled) {
-        this.autoImport(name, sym);
-      } else {
-        collector.add('error', `Symbol '${name}' undefined`, firstRef(sym));
-      }
-    }
+    this.globals.resolve(sym => this.allocSymbol(sym), collector);
+    this.globals.importUndefined(this.currentScope, collector);
 
     this.resolveDeferredOps();
   }
@@ -1070,253 +898,19 @@ export class Assembler {
     const segments: mod.Segment[] = [...this.segmentData.values()];
 
     // Collect all symbols from all scopes for debug purposes
-    let debugSymbols: mod.Symbol[] | undefined = undefined;
-    if (this.opts.generateDebugInfo) {
-      debugSymbols = [];
-      let tempLabelCounter = 0;
-      const usedNames = new Set<string>();
-
-      // Helper to create unique name with _<IDX> suffix for temp/anonymous labels
-      const makeUniqueName = (baseName: string): string => {
-        let uniqueName = `${baseName}_${tempLabelCounter}`;
-        while (usedNames.has(uniqueName)) {
-          tempLabelCounter++;
-          uniqueName = `${baseName}_${tempLabelCounter}`;
-        }
-        usedNames.add(uniqueName);
-        tempLabelCounter++;
-        return uniqueName;
-      };
-
-      const collectSymbols = (scope: Scope) => {
-        for (const [name, sym] of scope.symbols) {
-          // skip adding size symbols to the exported module since its not really a symbol
-          if (isSizeOfSymbol(name)) continue;
-          // skip adding syms defined with `=` and not `:=`
-          if (!sym.isLabel) continue;
-          if (sym.expr != null) {
-            const expr = {...sym.expr};
-
-            // De-anonymize temp labels by creating unique names with _<IDX> suffix
-            if (name.startsWith('@')) {
-              const baseName = name.substring(1).replace(':', '');
-              expr.sym = makeUniqueName(baseName);
-            } else {
-              if (!expr.sym) {
-                expr.sym = name;
-              }
-              // Track global names to avoid conflicts with temp labels
-              usedNames.add(expr.sym);
-            }
-
-            debugSymbols!.push({expr});
-          }
-        }
-        for (const child of scope.children.values()) {
-          collectSymbols(child);
-        }
-        for (const child of scope.anonymousChildren) {
-          collectSymbols(child);
-        }
-      };
-      collectSymbols(this.currentScope.global);
-
-      // Add cheap local and anonymous labels from debugLabels array
-      for (const {name, expr: originalExpr} of this.debugLabels) {
-        const expr = {...originalExpr};
-        // All entries in debugLabels start with @ (temp labels like @loop, anonymous like @p/@m)
-        const baseName = name.substring(1).replace(':', ''); // Remove @ prefix and any colons
-        expr.sym = makeUniqueName(baseName);
-        debugSymbols.push({expr});
-      }
-    }
+    const debugSymbols = this.dbg?.mlbSymbols(this.currentScope.global);
 
     // Only modules with a link-time-dependent query need to re-assemble.
     const lateAssembly: mod.LateAssembly | undefined =
         this.lateAssemblyQueries.length || this.lateAssemblyCondQueries.length ?
         {sizeQueries: this.lateAssemblyQueries, condQueries: this.lateAssemblyCondQueries,
-         globalKinds: Object.fromEntries(this.resolvedGlobalKinds), opts: this.opts} :
+         globalKinds: this.globals.resolvedKinds(), opts: this.opts} :
         undefined;
 
-    const autoImports = this.autoImported.length ? this.autoImported : undefined;
+    const autoImports = this.globals.autoImported.length ? this.globals.autoImported : undefined;
 
-    const debug = this.buildDebug();
+    const debug = this.dbg?.build(this.currentScope.global);
     return {chunks, symbols, segments, debugSymbols, debug, lateAssembly, autoImports};
-  }
-
-  /** Assembles the scope, symbol and line tables the `.dbg` writer reads. */
-  private buildDebug(): mod.Debug|undefined {
-    const dbg = this.dbg;
-    if (!dbg) return undefined;
-    for (const {name, scope, source} of this.pendingCondRefs) {
-      for (let s: Scope|undefined = scope; s; s = s.parent) {
-        const sym = s.symbols.get(name);
-        if (!sym?.expr) continue;
-        (sym.refs ??= []).push(source);
-        break;
-      }
-    }
-    const scopes: mod.DebugScope[] = [];
-    const syms: mod.DebugSym[] = [];
-    const scopeIds = new Map<Scope, number>();
-    const symIds = new Map<Symbol, number>();
-    const order: Scope[] = [];
-
-    const sizeOf = (expr?: Expr): number|undefined => {
-      if (!expr) return undefined;
-      try {
-        const r = this.resolve(expr);
-        return r.op === 'num' ? r.num : undefined;
-      } catch {
-        return undefined;
-      }
-    };
-
-    // A scope's bytes include everything in the scopes nested inside it.
-    const gather = (scope: Scope, out: mod.DebugScopeRun[]) => {
-      if (scope.debugRuns) out.push(...scope.debugRuns);
-      for (const child of scope.children.values()) {
-        if (!child.forwardDeclared) gather(child, out);
-      }
-      for (const child of scope.anonymousChildren) gather(child, out);
-    };
-    const merged = (runs: mod.DebugScopeRun[]) => {
-      runs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-      const out: mod.DebugScopeRun[] = [];
-      for (const run of runs) {
-        const last = out[out.length - 1];
-        if (last && last[0] === run[0] && last[1] + last[2] === run[1]) {
-          last[2] += run[2];
-        } else {
-          out.push([run[0], run[1], run[2]]);
-        }
-      }
-      return out;
-    };
-    const visit = (scope: Scope, parent?: number) => {
-      const id = scopes.length;
-      scopeIds.set(scope, id);
-      order.push(scope);
-      const data = !scope.dbgType;
-      const runs = data ? merged((() => {
-        const all: mod.DebugScopeRun[] = [];
-        gather(scope, all);
-        return all;
-      })()) : [];
-      const entry: mod.DebugScope = {
-        name: scope.name ??
-            (scope.anonId ?
-                `$anon-SCOPE-${scope.anonId.toString(16).toUpperCase().padStart(4, '0')}` : ''),
-        size: scope.dbgType === 'enum' ? 0 :
-            sizeOf(scope.symbols.get(SIZE_NAME)?.expr) ??
-            runs.reduce((n, r) => n + r[2], 0),
-        runs,
-      };
-      if (parent !== undefined) {
-        entry.parent = parent;
-        entry.type = scope.dbgType ?? 'scope';
-      }
-      scopes.push(entry);
-      for (const child of scope.children.values()) {
-        if (!child.forwardDeclared) visit(child, id);
-      }
-      for (const child of scope.anonymousChildren) visit(child, id);
-    };
-    visit(this.currentScope.global);
-
-    const addrSize = (name: string, sym: Symbol): mod.DebugAddrSize => {
-      const expr = sym.expr!;
-      if (expr.op === 'im') return this.zeropageGlobals.has(name) ? 'zeropage' : 'absolute';
-      if (expr.op === 'num' && !expr.meta?.rel) {
-        const n = expr.num!;
-        if (n >= 0 && n < 0x100) return 'zeropage';
-        if (n >= 0 && n < 0x10000) return 'absolute';
-        return n >= 0 && n < 0x1000000 ? 'far' : 'long';
-      }
-      return expr.meta?.zeropage || expr.meta?.size === 1 ? 'zeropage' : 'absolute';
-    };
-    const entryFor = (name: string, sym: Symbol): mod.DebugSym => {
-      const expr = sym.expr!;
-      const out: mod.DebugSym = {
-        name,
-        addrsize: addrSize(name, sym),
-        expr,
-        kind: expr.op === 'im' ? 'imp' : sym.isLabel ? 'lab' : 'equ',
-      };
-      if (sym.export != null) out.export = true;
-      const decl = expr.op === 'im' ? this.globalDecls.get(name) : undefined;
-      const defLines = this.defLines.get(sym) ??
-          (sym.def ? [{src: sym.def}] : decl ? [{src: decl}] : []);
-      const defs = defLines.flatMap(({src, ext}) => dbg.fullChain(src, ext));
-      if (defs.length) out.defs = defs;
-      // A definition resolves its own name, which ca65 does not count as a ref.
-      const defTokens = this.setDefs.get(sym) ?? (sym.def ? [sym.def] : []);
-      const refs = [
-        ...(sym.refs ?? []).filter(r => !defTokens.some(
-            d => d.file === r.file && d.line === r.line && d.column === r.column)),
-        ...(sym.export != null ? this.exportSites.get(name) ?? [] : []),
-      ].map(r => dbg.asmLine(r));
-      if (refs.length) out.refs = refs;
-      return out;
-    };
-
-    for (const scope of order) {
-      const scopeId = scopeIds.get(scope)!;
-      for (const [name, sym] of scope.symbols) {
-        if (isSizeOfSymbol(name) || !sym.expr || symIds.has(sym)) continue;
-        if (!this.definedSyms.has(sym) && sym.expr.op !== 'im') continue;
-        const entry = entryFor(name, sym);
-        entry.scope = scopeId;
-        const size = this.unsizedSyms.has(sym) ? undefined :
-            sizeOf(scope.symbols.get(`${name}${SIZE_SUFFIX}`)?.expr);
-        if (size) entry.size = size;
-        symIds.set(sym, syms.length);
-        syms.push(entry);
-      }
-    }
-    for (const {name, sym, parent} of this.cheapSyms) {
-      const parentId = parent && symIds.get(parent);
-      if (parentId === undefined || !sym.expr) continue;
-      const entry = entryFor(name, sym);
-      entry.parent = parentId;
-      syms.push(entry);
-    }
-    // A `.proc` names the label it hangs off.
-    for (const scope of order) {
-      if (!scope.label || !scope.parent) continue;
-      const label = scope.parent.symbols.get(scope.label);
-      const id = label && symIds.get(label);
-      if (id !== undefined) scopes[scopeIds.get(scope)!].label = id;
-    }
-
-    const hll = this.csyms.map(c => {
-      const out: mod.DebugCSym = {
-        name: c.name, scope: scopeIds.get(c.scope) ?? 0, type: c.type, sc: c.sc,
-      };
-      if (c.offs) out.offs = c.offs;
-      const sym = c.asmName === undefined ? undefined : c.func ?
-          c.scope.parent?.symbols.get(c.asmName) : this.findAnySymbol(c);
-      const id = sym && symIds.get(sym);
-      if (id !== undefined) out.sym = id;
-      return out;
-    });
-
-    const files = dbg.files, lines = dbg.lines, lineSets = dbg.lineSets, types = dbg.types;
-    if (!this.debugSyms) {
-      return {files, lines, lineSets, types, scopes: [], syms: [], hll: [], lineOnly: true};
-    }
-    return {files, lines, lineSets, types, scopes, syms, hll};
-  }
-
-  private findAnySymbol(c: PendingCSym): Symbol|undefined {
-    for (let s: Scope|undefined = c.scope; s; s = s.parent) {
-      const sym = s.symbols.get(c.asmName!);
-      if (sym?.expr) return sym;
-    }
-    // An import nothing uses exists, but has no debug sym.
-    if (this.hasGlobalKind(c.asmName!, 'import')) return undefined;
-    this.errorCollector.add('error', `Assembler symbol '${c.asmName}' not found`, c.source);
-    return undefined;
   }
 
   /**
@@ -1346,7 +940,7 @@ export class Assembler {
 
   // Assemble from a list of tokens
   line(tokens: Token[]) {
-    if (this.dbg) this._dbgSource = deepestSource(tokens);
+    this.dbg?.startLine(tokens);
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
@@ -1354,7 +948,7 @@ export class Assembler {
       return;
     }
     this._source = tokens[0].source;
-    const before = this.dbg && this.markEmitted();
+    const before = this.dbg?.markEmitted(this._chunk, this.chunks.length);
     const isLabel =
         tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON) &&
         !(tokens[0].token === 'ident' && this.isMnemonic(tokens[0].str) &&
@@ -1377,40 +971,8 @@ export class Assembler {
     } finally {
       if (!isLabel) this.closeLabelSpan();
     }
-    if (before) this.recordRun(before);
-  }
-
-  /** Where the next byte will land, to compare against after a statement. */
-  private markEmitted(): {chunk?: Chunk, length: number, chunks: number} {
-    this.dataElement = undefined;
-    this.emittedCode = false;
-    return {chunk: this._chunk, length: this._chunk?.data.length ?? 0,
-            chunks: this.chunks.length};
-  }
-
-  /** Attributes the bytes a statement emitted to its source lines. */
-  private recordRun(before: {chunk?: Chunk, length: number, chunks: number}) {
-    const chunk = this._chunk;
-    const src = this._source;
-    if (!chunk || !src) return;
-    // A chunk that already existed and was not current before is a `.popseg`.
-    if (chunk !== before.chunk && this._chunkIndex < before.chunks) return;
-    const start = chunk === before.chunk ? before.length : 0;
-    const size = chunk.data.length - start;
-    if (size <= 0) return;
-    const dbg = this.dbg!;
-    const elem = this.dataElement;
-    const type = elem && size % elem.size === 0 ?
-        dbg.typeId(arrayType(size / elem.size, elem.type)) :
-        this.emittedCode ? mod.DEBUG_RUN_CODE : mod.DEBUG_RUN_UNTYPED;
-    if (start === 0 && !chunk.source) chunk.source = src;
-    dbg.addRun(chunk, start, size, dbg.lineSet(this._dbgSource ?? src), type);
-    const runs = this.currentScope.debugRuns ??= [];
-    const last = runs[runs.length - 1];
-    if (last && last[0] === this._chunkIndex && last[1] + last[2] === start) {
-      last[2] += size;
-    } else {
-      runs.push([this._chunkIndex, start, size]);
+    if (before) {
+      this.dbg!.recordRun(before, this._chunk, this._chunkIndex, this._source, this.currentScope);
     }
   }
 
@@ -1464,7 +1026,7 @@ export class Assembler {
   directive(tokens: Token[]) {
     // TODO - record line information, rewrap error messages?
     this.errorToken = tokens[0];
-    if (this.dbg) this.dataElement = DATA_ELEMENTS.get(Tokens.str(tokens[0]));
+    this.dbg?.directive(Tokens.str(tokens[0]));
     // Conservatively end the sequence since many directives can emit bytes or change org/seg, so
     // the instructions on either side of it are no longer adjacent.
     this.linter?.endInstructionSequence();
@@ -1536,7 +1098,11 @@ export class Assembler {
         case '.fatal': return this.log('error', tokens, true);
         case '.feature': return this.feature(tokens);
         case '.dbg': return this.dbgDirective(tokens);
-        case '.debuginfo': return void (this.debugSyms = this.parseBoolOption(tokens));
+        case '.debuginfo': {
+          const on = this.parseBoolOption(tokens);
+          if (this.dbg) this.dbg.debugSyms = on;
+          return;
+        }
         case '.autoimport': return this.autoimport(tokens);
 
         case '.a8':
@@ -1614,10 +1180,7 @@ export class Assembler {
     const pending = this.pendingLabel;
     if (!pending) return;
     this.pendingLabel = undefined;
-    if (this.dbg && chainDepth(this._dbgSource) > pending.depth) {
-      const sym = this.currentScope.symbols.get(pending.name);
-      if (sym) this.unsizedSyms.add(sym);
-    }
+    this.dbg?.closeLabelSpan(pending.depth, this.currentScope.symbols.get(pending.name));
     this.defineSizeOfSymbol(
         this.currentScope, pending.name, this.sizeSpan(pending.startPc, this.pc()));
   }
@@ -1637,9 +1200,7 @@ export class Assembler {
     this.linter?.label(ident);
     const dir = this.localLabels.label(ident, expr);
     if (dir) {
-      if (this.opts.generateDebugInfo) {
-        this.debugLabels.push({name: dir === '+' ? '@p' : '@m', expr});
-      }
+      this.dbg?.anonLabel(dir, expr);
       return;
     }
 
@@ -1649,7 +1210,7 @@ export class Assembler {
       // so we need to collect the data here into `pendingLabel` and end that when the next
       // line starts. If there's nothing on the line, then the size of the label is zero.
       if (token && (token as Tokens.StringToken).labelsData) {
-        this.pendingLabel = {name: ident, startPc: this.pc(), depth: chainDepth(this._dbgSource)};
+        this.pendingLabel = {name: ident, startPc: this.pc(), depth: chainDepth(this.dbg?.source)};
       } else {
         this.defineSizeOfSymbol(this.currentScope, ident, 0);
       }
@@ -1665,7 +1226,7 @@ export class Assembler {
     }
     this.assignSymbol(ident, false, expr, token, /* isLabel= */ true);
     if (this.dbg && !ident.startsWith('@')) {
-      this.lastLabel = this.currentScope.symbols.get(ident);
+      this.dbg.setLastLabel(this.currentScope.symbols.get(ident));
     }
     // const symbol = this.scope.resolve(str, true);
     // if (symbol.expr) throw new Error(`Already defined: ${label}`);
@@ -1737,7 +1298,7 @@ export class Assembler {
    */
   commandLineSet(ident: string, expr: Expr|number) {
     this.set(ident, expr);
-    this.commandLineDefines.add(ident);
+    this.globals.markCommandLineDefine(ident);
   }
 
   assignSymbol(ident: string, mut: boolean, expr: Expr|number, token?: Token,
@@ -1784,29 +1345,8 @@ export class Assembler {
     if (scope.collectRefs && token?.source) {
       sym.def = token.source;
     }
-    if (this.dbg) {
-      this.definedSyms.add(sym);
-      const at = this._dbgSource ?? token?.source;
-      if (at) {
-        const def = {src: at, ext: this.dbg.ext};
-        this.defLines.set(sym, mut ? [...this.defLines.get(sym) ?? [], def] : [def]);
-      }
-      if (mut && token?.source) {
-        const defs = this.setDefs.get(sym) ?? [];
-        defs.push(token.source);
-        this.setDefs.set(sym, defs);
-      }
-      if (isCheapLocal && isLabel && !mut) {
-        this.cheapSyms.push({name: ident, sym, parent: this.lastLabel});
-      }
-    }
+    this.dbg?.define(ident, sym, expr, mut, isLabel, token?.source);
     this.opts.symbolIndex?.recordSymbol(sym, ident, this.opts.moduleName, kind);
-
-    // Add cheap locals to debugLabels for MLB output.  Constant assignments
-    // (`@temp = $05`) aren't positions, so they'd only add bogus entries.
-    if (isCheapLocal && isLabel && this.opts.generateDebugInfo) {
-      this.debugLabels.push({name: ident, expr});
-    }
   }
 
   instruction(mnemonic: string, arg?: Arg|string): void;
@@ -1861,7 +1401,7 @@ export class Assembler {
         // In a compound expression like foo+1, we still need to carry
         // the addrsize through for foo in the latepass.
         if (expr.meta?.size == null && !expr.meta?.zeropage) {
-          const name = this.unresolvedImportIn(expr);
+          const name = this.globals.unresolvedImportIn(expr);
           if (name) {
             const answer = this.linkEnv?.addrSize(name);
             if (answer != null) {
@@ -2017,7 +1557,7 @@ export class Assembler {
     if (arglen) expr = this.resolve(expr); // BEFORE opcode (in case of *)
     const {chunk} = this;
     this.markWritten(1 + arglen);
-    if (this.dbg) this.emittedCode = true;
+    if (this.dbg) this.dbg.emittedCode = true;
 
     chunk.data.push(op);
     if (arglen) {
@@ -2253,8 +1793,7 @@ export class Assembler {
     const ctx = this.structContext[this.structContext.length - 1];
     this.assign(name, value, false, token, 'enumMember');
     this.defineSizeOfSymbol(this.currentScope, name, 1);
-    const sym = this.dbg && this.currentScope.symbols.get(name);
-    if (sym) this.unsizedSyms.add(sym);
+    this.dbg?.markUnsized(this.currentScope.symbols.get(name));
     ctx.offset = value + 1;
     ctx.count++;
   }
@@ -2555,38 +2094,16 @@ export class Assembler {
    * so we can properly size it.
    */
   private isZeropageRef(name: string): boolean {
-    if (this.zeropageGlobals.has(name)) return true;
+    if (this.globals.isZeropage(name)) return true;
     const zp = Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
     // A plain `.import` should be abs, but maybe they meant .importzp
     // the linker may know better once every module is loaded, so query it.
-    if (!zp && this.isImportRef(name)) {
+    if (!zp && this.globals.isImportRef(name)) {
       const answer = this.linkEnv?.addrSize(name);
       if (answer != null) return answer === 1;
       this.lateAssemblyQueries.push({name, guess: 2, source: this._source});
     }
     return zp;
-  }
-
-  /** True if explicitly imported or autoimported */
-  private isImportRef(name: string): boolean {
-    return this.hasGlobalKind(name, 'import') ||
-        Boolean(this.autoImportNames?.has(name));
-  }
-
-  /** The name of an unresolved `.import` reachable through +/- from `expr`, if any. */
-  private unresolvedImportIn(expr: Expr): string|undefined {
-    if (expr.op === 'sym' || expr.op === 'im') {
-      const name = expr.sym;
-      return name && this.isImportRef(name) && !this.zeropageGlobals.has(name) ?
-          name : undefined;
-    }
-    if (expr.op === '+' || expr.op === '-') {
-      for (const a of expr.args ?? []) {
-        const name = this.unresolvedImportIn(a);
-        if (name) return name;
-      }
-    }
-    return undefined;
   }
 
   /**
@@ -2618,57 +2135,9 @@ export class Assembler {
         name, {allowForwardRef: false, missingScope: 'undefined'});
   }
 
-  /** Converts undefined syms into imports */
-  private autoImport(name: string, sym: Symbol) {
-    const expr: Expr = {op: 'im', sym: name};
-    const at = firstRef(sym);
-    if (at) expr.source = at;
-    const answer = this.linkEnv?.addrSize(name);
-    if (answer != null) {
-      if (answer === 1) expr.meta = {size: 1};
-    } else {
-      // First pass: the operands referencing this name were already emitted at
-      // the abs guess, so ask the linker to re-run us if it knows better.
-      this.lateAssemblyQueries.push({name, guess: 2, source: at});
-    }
-    sym.expr = expr;
-    this.autoImported.push({name, source: at});
-  }
-
-  /** True if any declaration of `name` anywhere in the module has this kind. */
-  private hasGlobalKind(name: string, kind: GlobalKind): boolean {
-    return this.globals.get(name)?.some(d => d.kind === kind) ?? false;
-  }
-
   private declareGlobal(ident: string, kind: GlobalKind, weak = false) {
-    const decls = this.globals.get(ident);
-    const existing = decls?.find(d => d.scope === this.currentScope);
-    // .global is replaced by an explicit .import/.export if they are in the same scope,
-    // but if the .global is in an outer scope and .export is in an inner scope, they are
-    // different. The .global should turn into an .import at close, and .export should still
-    // export that sym.
-    if (existing && weak) return;
-    this.noteLine(this._dbgSource);
-    if (this.dbg && this._source) {
-      if (kind === 'export') {
-        const sites = this.exportSites.get(ident) ?? [];
-        sites.push(this._source);
-        this.exportSites.set(ident, sites);
-      } else if (!this.globalDecls.has(ident)) {
-        this.globalDecls.set(ident, this._source);
-      }
-    }
-    // Use the linker version of the -D cli define instead of the global .set version
-    if (kind === 'import' && this.commandLineDefines.delete(ident)) {
-      this.currentScope.global.symbols.delete(ident);
-    }
-    if (existing) {
-      existing.kind = kind;
-    } else if (decls) {
-      decls.push({scope: this.currentScope, kind});
-    } else {
-      this.globals.set(ident, [{scope: this.currentScope, kind}]);
-    }
+    if (!this.globals.declare(ident, kind, this.currentScope, weak)) return;
+    this.dbg?.declareGlobal(ident, kind, this._source);
   }
 
   import(...idents: string[]) {
@@ -2694,7 +2163,7 @@ export class Assembler {
   importzpInternal(idents: string[]) {
     for (const ident of idents) {
       this.declareGlobal(ident, 'import');
-      this.zeropageGlobals.add(ident);
+      this.globals.markZeropage(ident);
     }
   }
 
@@ -2705,7 +2174,7 @@ export class Assembler {
   exportzpInternal(idents: string[]) {
     for (const ident of idents) {
       this.declareGlobal(ident, 'export');
-      this.zeropageGlobals.add(ident);
+      this.globals.markZeropage(ident);
     }
   }
 
@@ -2725,7 +2194,7 @@ export class Assembler {
   globalzpInternal(idents: string[]) {
     for (const ident of idents) {
       this.declareGlobal(ident, 'global', true);
-      this.zeropageGlobals.add(ident);
+      this.globals.markZeropage(ident);
     }
   }
 
@@ -2768,7 +2237,7 @@ export class Assembler {
     }
     const child = new Scope(this.currentScope, kind);
     child.startPc = this.pc();
-    if (this.dbg && !name) child.anonId = ++this.anonScopeCount;
+    if (this.dbg && !name) child.anonId = this.dbg.nextAnonScope();
     if (name) {
       child.name = name;
       this.currentScope.children.set(name, child);
@@ -2790,7 +2259,7 @@ export class Assembler {
     if (kind === 'proc') this.linter?.exitProc(at);
     const scope = this.currentScope;
     const end = at ?? this._source;
-    if (end && scope.dbgType !== 'enum') this.dbg?.lineId(end);
+    if (end && scope.dbgType !== 'enum') this.dbg?.tables.lineId(end);
     if (scope.startPc && !scope.symbols.has(SIZE_NAME)) {
       this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.pc()));
     }
@@ -2926,19 +2395,19 @@ export class Assembler {
         const name = str(1);
         const size = this.parseConst(args[2], 0);
         const mtime = this.parseConst(args[3], 0);
-        this.dbg?.declareFile(name, size, mtime);
+        this.dbg?.tables.declareFile(name, size, mtime);
         return;
       }
       case 'line': {
-        if (this.dbg) this.dbg.ext = undefined;
+        if (this.dbg) this.dbg.tables.ext = undefined;
         if (args.length === 1) return;
         want(3);
         const file = str(1);
         const line = this.parseConst(args[2], 0);
         if (line < 0) this.fail(`Line number is out of valid range`, args[2][0]);
         if (!this.dbg) return;
-        if (!this.dbg.hasFile(file)) this.fail(`File name '${file}' not found in file table`, args[1][0]);
-        this.dbg.ext = {file, line};
+        if (!this.dbg.tables.hasFile(file)) this.fail(`File name '${file}' not found in file table`, args[1][0]);
+        this.dbg.tables.ext = {file, line};
         return;
       }
       case 'func': {
@@ -2954,13 +2423,13 @@ export class Assembler {
         if (scope.kind !== 'proc' || !scope.label) {
           this.fail(`Functions can only be tagged to .PROC scopes`, tokens[0]);
         }
-        if (this.csyms.some(c => c.func && c.scope === scope)) {
+        if (this.dbg?.hasFunc(scope)) {
           this.fail(`Only one HLL symbol per asm symbol is allowed`, tokens[0]);
         }
         if (scope.label !== csym.asmName) {
           this.fail(`Scope label and asm name for function must match`, args[4][0]);
         }
-        if (this.dbg) this.csyms.push(csym);
+        this.dbg?.addCSym(csym);
         return;
       }
       case 'sym': {
@@ -2977,7 +2446,7 @@ export class Assembler {
           csym.asmName = str(4);
           if (csym.sc === 'reg') csym.offs = this.parseConst(args[5], 0);
         }
-        if (this.dbg) this.csyms.push(csym);
+        this.dbg?.addCSym(csym);
         return;
       }
     }
@@ -2989,7 +2458,7 @@ export class Assembler {
   }
 
   autoimport(tokens: Token[]) {
-    this.autoimportEnabled = this.parseBoolOption(tokens);
+    this.globals.autoimportEnabled = this.parseBoolOption(tokens);
   }
 
   /** `on`, `off`, `+`, `-`, or nothing for on. */
