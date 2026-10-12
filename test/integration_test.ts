@@ -937,8 +937,8 @@ UndefZP: .res 1
     it('keeps the pass 1 absolute size with lto off', function() {
       const result = compile([branchOverImport, zpExport], {...opts, lto: false});
       expect(result.success).toBe(false);
-      expect(result.messages.some(m => m.level === 'error' &&
-          m.message.includes('Branch out of range: offset 128'))).toBe(true);
+      expect(result.messages.filter(m => m.level === 'error').map(m => m.message))
+          .toEqual(['Branch out of range: offset 128 (valid range: -128 to 127)']);
     });
 
     it('defers .bank of an import in an unbanked segment', function() {

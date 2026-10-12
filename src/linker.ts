@@ -1232,9 +1232,10 @@ class LinkChunk {
     // See if we can do it immediately.
     let del = false;
     if (sub.expr.op === 'num' && !sub.expr.meta?.rel) {
+      // Drop it now so a range error is not reported again each phase.
+      this.subs.delete(sub) || this.selfSubs.delete(sub);
       this.writeValue(sub.offset, sub.expr.num!, sub.size, sub.expr.meta?.branch,
                       sub.expr.source, sub.forceRange);
-      del = true;
     } else if (sub.expr.op === '.move') {
       if (sub.expr.args!.length !== 1) throw new Error(`bad .move`);
       const child = sub.expr.args![0];
@@ -1274,10 +1275,9 @@ class LinkChunk {
     // `force_range` says to truncate whatever we're given, which the masking
     // loop at the bottom already does, so the feature is just a skipped check.
     if (!forceRange && val != null && !Exprs.fits(val, size, isBranch)) {
-      this.linker.fail(
-          Exprs.rangeErrorMessage(val, size, isBranch,
-                                  ` at $${(this.org! + offset).toString(16)}`),
-          source && {source});
+      const at = this.org != null ? ` at $${(this.org + offset).toString(16)}` : '';
+      this.linker.fail(Exprs.rangeErrorMessage(val, size, isBranch, at),
+                       source && {source});
     }
     const bytes = new Uint8Array(size);
     for (let i = 0; i < size; i++) {
