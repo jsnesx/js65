@@ -3478,27 +3478,115 @@ ${body}`;
 .org $8000
 `;
 
-      it('should reject `*=` without the feature', function() {
-        expect(assembleErrors('*= $8100\n'))
+      it('should be on by default', function() {
+        expect(assemble('* = $6000\n.word *\n')).toEqual([0x00, 0x60]);
+      });
+
+      it('should reject `*=` with the feature off', function() {
+        expect(assembleErrors('.feature pc_assignment off\n*= $8100\n'))
             .toEqual([expect.stringMatching(/requires the pc_assignment feature/)]);
       });
 
-      it('should move the pc like .org', function() {
+      it('should set the pc for labels without moving placement', function() {
         const m = assembleModule(`${preamble}.feature pc_assignment
 lda #$01
-* = $8100
-lda #$02
+* = $6e1d
+label:
+jmp label
 `);
-        expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8100]);
+        expect(m.chunks!.map(c => [c.org, Array.from(c.data)])).toEqual(
+            [[0x8000, [0xa9, 0x01, 0x4c, 0x1d, 0x6e]]]);
       });
 
       it('should accept it with no space before the `=`', function() {
+        expect(assemble(`.feature pc_assignment
+*=$6000
+.word *
+`)).toEqual([0x00, 0x60]);
+      });
+
+      it('should shift labels after it in a .reloc chunk', function() {
+        expect(assemble(`.feature pc_assignment
+.org $8010
+.free $10
+.reloc
+first: nop
+* = $6000
+second: .word first, second
+`).slice(0x10, 0x15)).toEqual([0xea, 0x10, 0x80, 0x00, 0x60]);
+      });
+
+      it('should encode a branch in the shifted region', function() {
+        expect(assemble(`.feature pc_assignment
+* = $6000
+loop: dex
+  bne loop
+  jmp loop
+`)).toEqual([0xca, 0xd0, 0xfd, 0x4c, 0x00, 0x60]);
+      });
+
+      it('should free the physical range with FREE_UNTIL', function() {
         const m = assembleModule(`${preamble}.feature pc_assignment
-lda #$01
-*=$8100
-lda #$02
+.macpack common
+nop
+* = $6000
+nop
+FREE_UNTIL $6003
+.word *
 `);
-        expect(m.chunks!.map(c => c.org)).toEqual([0x8000, 0x8100]);
+        expect(m.segments!.find(s => s.name === 'CODE')!.free)
+            .toEqual([[0x8002, 0x8004]]);
+        expect(m.chunks!.map(c => [c.org, Array.from(c.data)])).toEqual(
+            [[0x8000, [0xea, 0xea]], [0x8004, [0x03, 0x60]]]);
+      });
+
+      it('should be cleared by .org and .reloc', function() {
+        expect(assemble(`.feature pc_assignment
+* = $6000
+.org $8000
+.word *
+.free $10
+* = $6000
+.reloc
+.word *
+`).slice(0, 4)).toEqual([0x00, 0x80, 0x02, 0x80]);
+      });
+
+      it('should be saved and restored per segment', function() {
+        const m = assembleModule(`.feature pc_assignment
+.segment "A" :bank 0 :size $100 :mem $8000 :off 0
+.segment "B" :bank 0 :size $100 :mem $8100 :off $100
+.segment "A"
+.org $8000
+* = $6000
+nop
+.segment "B"
+.org $8100
+.word *
+.segment "A"
+.word *
+.pushseg
+.segment "B"
+.word *
+.popseg
+.word *
+`);
+        expect(m.chunks!.map(c => [c.org, Array.from(c.data)])).toEqual([
+          [0x8000, [0xea]],
+          [0x8100, [0x00, 0x81]],
+          [0x8001, [0x01, 0x60, 0x03, 0x60]],
+          [0x8102, [0x02, 0x81]],
+        ]);
+      });
+
+      it('should require a constant value', function() {
+        expect(assembleErrors('.feature pc_assignment\n.import foo\n* = foo\n'))
+            .toEqual([expect.stringMatching(/not constant/)]);
+      });
+
+      it('should reject .align while shifted', function() {
+        expect(assembleErrors('.feature pc_assignment\n* = $6001\n.align 2\n'))
+            .toEqual([expect.stringMatching(/\.align cannot be used after/)]);
       });
 
       it('should still read `*` as the pc in an expression', function() {

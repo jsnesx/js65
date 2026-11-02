@@ -533,3 +533,18 @@ describe('.dbg directive errors', () => {
     expect(errors('.debuginfo maybe\n')).toEqual(["'on' or 'off' expected"]);
   });
 });
+
+describe('dbg writer with `* =`', () => {
+  it('gives a shifted label its logical address', () => {
+    const code = '.feature pc_assignment\n.segment "CODE"\n  nop\n* = $6000\nshifted:\n  rts\n';
+    const r = compile([{type: 'source', code, name: 'a.s'}],
+        {generateDebugInfo: true, generateDbgFile: true, outputName: 'ld.bin',
+         linkerConfig: `
+    MEMORY { ROM: start=$8000, size=$100, file=%O; }
+    SEGMENTS { CODE: load=ROM, type=ro; }`, lint: {enabled: false}});
+    expect(r.messages.filter(m => m.level === 'error')).toEqual([]);
+    const text = new TextDecoder().decode(findOutput(r, 'debug')!.data);
+    expect(checkDbgSyntax(text)).toEqual([]);
+    expect(parseDbg(text).syms.find(s => s.name === 'shifted')!.val).toBe(0x6000);
+  });
+});

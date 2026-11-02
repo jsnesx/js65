@@ -229,15 +229,14 @@ export class Preprocessor {
         }
 
         case 'op':
-          // `* = $8000`, which is just another spelling of `.org $8000`.
+          // `* = $8000` sets the PC for later labels and `*`
           if (front.str === '*' && Tokens.eq(line[1], Tokens.ASSIGN)) {
             if (!this.asm.allowsPcAssignment()) {
               Tokens.fail(
                   `\`*=\` requires the pc_assignment feature`, front);
             }
-            // Rewrite it as `.org` and let the loop dispatch it as a directive.
-            line.splice(0, 2, {token: 'cs', str: '.org', source: front.source});
-            break;
+            this.asm.line(line);
+            return;
           }
           // Probably an anonymous label...
           if (/^[-+]+$/.test(front.str)) {
