@@ -28,6 +28,11 @@ for (const name of readdirSync(outDir)) {
   }
 }
 
+// Original specifier -> dist specifier. Bun ignores the `path` an onResolve
+// returns for an external and emits the original specifier, so the specifiers
+// are rewritten in the output instead.
+const rewrites = new Map<string, string>();
+
 const result = await Bun.build({
   entrypoints: [join(serverSrc, 'entry.ts')],
   outdir: outDir,
@@ -41,7 +46,14 @@ const result = await Bun.build({
         if (args.importer.includes(`${sep}node_modules${sep}`)) return undefined;
         const file = resolve(dirname(args.importer), args.path);
         if (isInlined(file)) return undefined;
-        return { path: distSpecifier(file), external: true };
+        const spec = distSpecifier(file);
+        const prev = rewrites.get(args.path);
+        // The output loses the importer, so one specifier must mean one file.
+        if (prev != null && prev !== spec) {
+          throw new Error(`${args.path} resolves to both ${prev} and ${spec}`);
+        }
+        rewrites.set(args.path, spec);
+        return { path: spec, external: true };
       });
     },
   }],
@@ -50,4 +62,15 @@ const result = await Bun.build({
 if (!result.success) {
   for (const log of result.logs) console.error(log);
   process.exit(1);
+}
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+for (const out of result.outputs) {
+  if (out.kind !== 'entry-point' && out.kind !== 'chunk') continue;
+  let code = await Bun.file(out.path).text();
+  for (const [from, to] of rewrites) {
+    const re = new RegExp(`(\\b(?:from|import)\\s*\\(?\\s*)(["'])${escape(from)}\\2`, 'g');
+    code = code.replace(re, `$1$2${to}$2`);
+  }
+  await Bun.write(out.path, code);
 }
