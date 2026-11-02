@@ -474,6 +474,11 @@ export class Assembler {
       }
       return Exprs.evaluate({op: 'num', num: shifted, meta});
     }
+    return this.chunkPc();
+  }
+
+  /** Get the real PC skipping the PC assignment offset */
+  private chunkPc(): Expr {
     const num = this._chunk?.data.length ?? 0;
     const meta: Exprs.Meta = {
       rel: true,
@@ -1214,7 +1219,7 @@ export class Assembler {
     this.pendingLabel = undefined;
     this.dbg?.closeLabelSpan(pending.depth, this.currentScope.symbols.get(pending.name));
     this.defineSizeOfSymbol(
-        this.currentScope, pending.name, this.sizeSpan(pending.startPc, this.pc()));
+        this.currentScope, pending.name, this.sizeSpan(pending.startPc, this.chunkPc()));
   }
 
   label(label: string|Token) {
@@ -1242,7 +1247,7 @@ export class Assembler {
       // so we need to collect the data here into `pendingLabel` and end that when the next
       // line starts. If there's nothing on the line, then the size of the label is zero.
       if (token && (token as Tokens.StringToken).labelsData) {
-        this.pendingLabel = {name: ident, startPc: this.pc(), depth: chainDepth(this.dbg?.source)};
+        this.pendingLabel = {name: ident, startPc: this.chunkPc(), depth: chainDepth(this.dbg?.source)};
       } else {
         this.defineSizeOfSymbol(this.currentScope, ident, 0);
       }
@@ -1896,7 +1901,13 @@ export class Assembler {
     // ... which we don't have yet. TODO
     if ((boundary & (boundary - 1)) !== 0) this.fail(`.align boundary must be a power of two: ${boundary}`);
     if (boundary === 1) return; // no-op
-    if (this._pcShift) this.fail(`.align cannot be used after \`* =\``);
+    // After `* =` labels read from the assigned PC so that is what to align.
+    const shifted = this.shiftedPc();
+    if (shifted != null) {
+      const pad = (boundary - (shifted % boundary)) % boundary;
+      if (pad) this.res(pad, fill);
+      return;
+    }
     if (this._org != null) {
       // We have an org address, so we are in absolute mode meaning we can
       // do the padding now too.
@@ -2280,7 +2291,7 @@ export class Assembler {
       if (existing.forwardDeclared) {
         existing.forwardDeclared = undefined;
         existing.kind = kind;
-        existing.startPc = this.pc();
+        existing.startPc = this.chunkPc();
         this.currentScope = existing;
         this.opts.symbolIndex?.enterScope(name, kind, at);
         return;
@@ -2293,7 +2304,7 @@ export class Assembler {
       this.fail(`Cannot re-enter scope ${name}`);
     }
     const child = new Scope(this.currentScope, kind);
-    child.startPc = this.pc();
+    child.startPc = this.chunkPc();
     if (this.dbg && !name) child.anonId = this.dbg.nextAnonScope();
     if (name) {
       child.name = name;
@@ -2318,7 +2329,7 @@ export class Assembler {
     const end = at ?? this._source;
     if (end && scope.dbgType !== 'enum') this.dbg?.tables.lineId(end);
     if (scope.startPc && !scope.symbols.has(SIZE_NAME)) {
-      this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.pc()));
+      this.defineSizeOfScope(scope, scope.label, this.sizeSpan(scope.startPc, this.chunkPc()));
     }
     this.currentScope = scope.parent!;
     this.opts.symbolIndex?.exitScope(at);
