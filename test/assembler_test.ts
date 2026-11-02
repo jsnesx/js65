@@ -3584,9 +3584,29 @@ nop
             .toEqual([expect.stringMatching(/not constant/)]);
       });
 
-      it('should reject .align while shifted', function() {
-        expect(assembleErrors('.feature pc_assignment\n* = $6001\n.align 2\n'))
-            .toEqual([expect.stringMatching(/\.align cannot be used after/)]);
+      it('should align the assigned pc in a .reloc chunk', function() {
+        expect(assemble(`.org $8010
+.free $10
+.reloc
+nop
+* = $6001
+.align 4, $ff
+L: .word L
+`).slice(0x10, 0x16)).toEqual([0xea, 0xff, 0xff, 0xff, 0x04, 0x60]);
+      });
+
+      it('should size a .proc that spans the assignment by its bytes', function() {
+        expect(assemble(`.org $8010
+.free $10
+.reloc
+.proc P
+  nop
+* = $6000
+  rts
+.endproc
+.org $8000
+.word .sizeof(P)
+`).slice(0, 2)).toEqual([0x02, 0x00]);
       });
 
       it('should still read `*` as the pc in an expression', function() {
