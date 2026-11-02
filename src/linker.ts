@@ -2176,7 +2176,7 @@ class Link {
       // treat it like we are in patching mode, and give the load segment
       // the full memory space and let the free space handler place it later.
       if (seg.memory == null && seg.size == null && seg.align == null &&
-          seg.alignLoad == null &&
+          seg.alignLoad == null && seg.loadMem == null &&
           this.isPatched(runSeg) && this.isPatched(loadSeg)) {
         sizes.set(seg.name, Math.min(runSeg.size ?? 0, loadSeg.size ?? 0));
         runs.set(seg.name, runSeg.memory ?? 0);
@@ -2186,9 +2186,20 @@ class Link {
         return;
       }
       // An explicit :mem places the run address instead of allocating one.
+      if (seg.loadMem != null) {
+        if (loadSeg === runSeg) {
+          this.fail(`Segment ${seg.name} has :loadmem but loads and runs in ${
+              loadSeg.name}; use :mem instead`);
+        }
+        if (seg.alignLoad != null && seg.loadMem % seg.alignLoad) {
+          this.fail(`Segment ${seg.name} :loadmem $${
+              seg.loadMem.toString(16)} is not aligned to :alignload $${
+              seg.alignLoad.toString(16)}`);
+        }
+      }
       const run = allocate(seg, runSeg, size, align, seg.memory);
       const load = loadSeg === runSeg ?
-          run : allocate(seg, loadSeg, size, seg.alignLoad ?? align);
+          run : allocate(seg, loadSeg, size, seg.alignLoad ?? align, seg.loadMem);
       runs.set(seg.name, run);
       loads.set(seg.name, load);
       this.segmentLoad.set(seg.name, load);

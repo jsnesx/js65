@@ -12,6 +12,7 @@ const ANON_SEGMENT_ATTR_REASONS = new Map<string, string>([
   ['load', ''],
   ['run', ''],
   ['alignload', ''],
+  ['loadmem', ''],
   ['optional', ''],
   ['dedupe', ''],
   ['default', `cannot write to a default segment`],
@@ -125,6 +126,7 @@ export class SegmentParser {
           case 'out': seg.out = this.host.parseOptionalStr(val, 0) ?? '%O'; break;
           case 'align': seg.align = this.parseAlign(val, key); break;
           case 'alignload': seg.alignLoad = this.parseAlign(val, key); break;
+          case 'loadmem': seg.loadMem = this.host.parseConst(val, 0); break;
           case 'load': seg.load = this.host.parseStr(val, 0); break;
           case 'run': seg.run = this.host.parseStr(val, 0); break;
           // ld65's `type = zp` is both an addressing size and a bss segment.
