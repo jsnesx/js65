@@ -741,6 +741,142 @@ describe('Linker', function() {
     expect(() => link(m)).toThrow(/Could not find space/);
   });
 
+  describe(':loadmem', function() {
+    // lozft: code stored in bank 1 at $a500 that the game copies to $6c90.
+    const SEGS = `
+.macpack common
+.segment "BANK1" :bank 1 :size $4000 :mem $8000 :off $0
+FREE "BANK1" [$8100, $8200)
+FREE "BANK1" [$a500, $b770)
+.segment "HIRAM" :size $2000 :mem $6000
+`;
+    const WIN = `.segment "W" :load "BANK1" :run "HIRAM" :mem $6c90 :loadmem $a500 :size $1270 :define\n`;
+    const build = (code: string) => compile(
+        [{type: 'source', name: 'main.s', code: SEGS + code}],
+        {lineContinuations: true});
+    const bytes = (data: Uint8Array, at: number, n: number) =>
+        [...data.slice(at, at + n)];
+    const fileOf = (addr: number) => addr - 0x8000;
+
+    it('should write an .org chunk at the load address', function() {
+      const result = build(WIN + `
+.segment "W"
+.org $6e1d
+Fixed:
+  jmp Fixed
+`);
+      expect(result.messages).toEqual([]);
+      expect(bytes(result.outputs[0].data, fileOf(0xa68d), 3))
+          .toEqual([0x4c, 0x1d, 0x6e]);
+    });
+
+    it('should give a .reloc chunk a run address and a load position',
+       function() {
+      const result = build(WIN + `
+.segment "W"
+.org $6c90
+  .res $100, $11
+.reloc
+Rel:
+  jmp Rel
+.segment "BANK1"
+.org $8000
+  .word Rel
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0, 2)).toEqual([0x90, 0x6d]);
+      expect(bytes(data, fileOf(0xa600), 3)).toEqual([0x4c, 0x90, 0x6d]);
+    });
+
+    it('should let a .reloc chunk use the space FREE_UNTIL gives back',
+       function() {
+      const result = build(WIN + `
+.segment "W"
+.org $6c90
+  .res $100, $11
+FREE_UNTIL $6f00
+  .res $1000, $11
+.reloc
+Rel:
+  .res $160, $77
+.segment "BANK1"
+.org $8000
+  .word Rel
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0, 2)).toEqual([0x90, 0x6d]);
+      expect(bytes(data, fileOf(0xa600), 2)).toEqual([0x77, 0x77]);
+    });
+
+    it('should keep the host\'s free space and .org patches', function() {
+      const result = build(WIN + `
+.segment "BANK1"
+.org $aab6
+  .byte $42
+.reloc
+HostRel:
+  .res $10, $77
+.org $8000
+  .word HostRel
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, fileOf(0xaab6), 1)).toEqual([0x42]);
+      expect(bytes(data, 0, 2)).toEqual([0x00, 0x81]);
+      expect(bytes(data, fileOf(0x8100), 1)).toEqual([0x77]);
+    });
+
+    it('should leave the run area below the window free', function() {
+      const result = build(WIN + `
+.segment "HIRAM"
+.reloc
+Var:
+  .res $200
+.segment "BANK1"
+.org $8000
+  .word Var
+`);
+      expect(result.messages).toEqual([]);
+      expect(bytes(result.outputs[0].data, 0, 2)).toEqual([0x00, 0x60]);
+    });
+
+    it('should define the load and run addresses', function() {
+      const result = build(WIN + `
+.segment "BANK1"
+.org $8000
+  .word __W_LOAD__, __W_RUN__, __W_SIZE__
+`);
+      expect(result.messages).toEqual([]);
+      expect(bytes(result.outputs[0].data, 0, 6))
+          .toEqual([0x00, 0xa5, 0x90, 0x6c, 0x70, 0x12]);
+    });
+
+    it('should reject :loadmem when load and run are the same area',
+       function() {
+      const result = build(
+          `.segment "W" :load "BANK1" :loadmem $a500 :size $10\n`);
+      expect(result.messages.map(m => m.message)).toContain(
+          'Segment W has :loadmem but loads and runs in BANK1; use :mem instead');
+    });
+
+    it('should reject :loadmem outside the load area', function() {
+      const result = build(
+          `.segment "W" :load "BANK1" :run "HIRAM" :loadmem $c000 :size $10\n`);
+      expect(result.messages.map(m => m.message)).toContain(
+          'Segment W ($10 bytes at $c000) does not fit in BANK1');
+    });
+
+    it('should reject :loadmem that is not aligned to :alignload',
+       function() {
+      const result = build(
+          `.segment "W" :load "BANK1" :run "HIRAM" :loadmem $a508 :alignload $10 :size $10\n`);
+      expect(result.messages.map(m => m.message)).toContain(
+          'Segment W :loadmem $a508 is not aligned to :alignload $10');
+    });
+  });
+
   it('should give a bss segment address space but no output', function() {
     const m = {
       chunks: [{

@@ -404,6 +404,8 @@ function validateSegment(v: unknown, path: string): Segment {
   if (align !== undefined) out.align = align;
   const alignLoad = optNumber(v.alignLoad, `${path}.alignLoad`);
   if (alignLoad !== undefined) out.alignLoad = alignLoad;
+  const loadMem = optNumber(v.loadMem, `${path}.loadMem`);
+  if (loadMem !== undefined) out.loadMem = loadMem;
   const bss = optBoolean(v.bss, `${path}.bss`);
   if (bss !== undefined) out.bss = bss;
   const define = optBoolean(v.define, `${path}.define`);

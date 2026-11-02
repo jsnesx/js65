@@ -1697,6 +1697,16 @@ describe('Assembler', function() {
       }]);
     });
 
+    it('should parse :loadmem', function() {
+      const m = assembleModule(`
+.segment "W" :load "ROM" :run "RAM" :mem $6c90 :loadmem $a500 :size $1270
+`);
+      expect(m.segments).toEqual([{
+        name: 'W',
+        load: 'ROM', run: 'RAM', memory: 0x6c90, loadMem: 0xa500, size: 0x1270,
+      }]);
+    });
+
     it('should default :fill to zero', function() {
       const m = assembleModule(`.segment "ROM" :mem $8000 :size $10 :fill\n`);
       expect(m.segments).toEqual([{
@@ -2188,7 +2198,7 @@ lda bar
     });
 
     for (const attr of ['off $0', 'mem $8000', 'out "x.bin"', 'load "A"',
-                        'run "A"', 'alignload $10',
+                        'run "A"', 'alignload $10', 'loadmem $8000',
                         'optional', 'dedupe', 'default', 'align $10',
                         'define']) {
       const key = attr.split(' ')[0];

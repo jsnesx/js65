@@ -134,6 +134,8 @@ export interface Segment {
   align?: number;
   /** Alignment of the load position, when load != run. */
   alignLoad?: number;
+  /** Fixed load address for when load != run */
+  loadMem?: number;
   /** Occupies address space but emits no bytes (ld65 `type = bss`/`zp`). */
   bss?: boolean;
   /** Emit START/SIZE/LAST/LOAD/RUN/FILEOFFS symbols */
