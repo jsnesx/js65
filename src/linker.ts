@@ -780,12 +780,11 @@ class LinkSegment {
   readonly dedupe: boolean;
   readonly isRam: boolean;
   /**
-   * Space reserved by unmapped segments within a mapped segment.
-   * Only applies to a scenario where you have chunks directly written
-   * through an unmapped segment AND chunks written directly to this
-   * mapped segment.
+   * Ranges relative to `memory`, sorted, that this segment's own chunks may be
+   * placed in. Everything but the space handed to segments lowered into it,
+   * which is usually just the one window covering the whole segment.
    */
-  readonly used: number;
+  readonly windows: ReadonlyArray<readonly [number, number]>;
 
   /**
    * A segment is RAM if it emits no bytes, declared `bss`/`zp`, or
@@ -797,7 +796,8 @@ class LinkSegment {
     return segment.bss ?? (!segment.out && segment.offset == null);
   }
 
-  constructor(segment: Segment, used = 0, ramBase = LinkSegment.RAM_OFFSET) {
+  constructor(segment: Segment, windows?: ReadonlyArray<readonly [number, number]>,
+              ramBase = LinkSegment.RAM_OFFSET) {
     const name = this.name = segment.name;
     this.bank = segment.bank ?? 0;
     this.addressing = segment.addressing ?? 2;
@@ -812,7 +812,7 @@ class LinkSegment {
     this.fill = segment.fill;
     this.out = segment.out;
     this.dedupe = segment.dedupe ?? false;
-    this.used = used;
+    this.windows = windows ?? [[0, this.size]];
   }
 
   // offset = org + delta
@@ -975,17 +975,22 @@ class LinkChunk {
     const size = this.size;
     const align = this.align ?? 1;
 
-    let org = Math.max(...linkSegs.map(s => s.memory + s.used));
+    let org = Math.max(...linkSegs.map(s => s.memory + (s.windows[0]?.[0] ?? s.size)));
     let settled;
     do {
       settled = org;
       for (const s of linkSegs) {
         const base = s.isRam ? s.memory + s.delta : s.offset;
         // Search from the candidate org onwards, in this segment's own space.
-        const s0 = Math.max(base + s.used, org + s.delta);
-        const s1 = base + s.size;
-        const start = this.linker.free.firstFit(s0, s1, size, align, s.delta)
-          ?? this.linker.fail(`Cannot place chunk ${this.name} mirrored across ${
+        let start: number|undefined;
+        for (const [lo, hi] of s.windows) {
+          const s0 = Math.max(base + lo, org + s.delta);
+          const s1 = base + hi;
+          if (s0 >= s1) continue;
+          start = this.linker.free.firstFit(s0, s1, size, align, s.delta);
+          if (start != null) break;
+        }
+        start ??= this.linker.fail(`Cannot place chunk ${this.name} mirrored across ${
               this.segments.join(' & ')}. Couldn't find a common free space ${
               ''}in all provided banks.`, this.at());
         // Back into org space, max to make sure we never move backwards.
@@ -1035,7 +1040,8 @@ class LinkChunk {
     if (this._org + this.size > end) {
       const tail = this._org + this.size - end;
       const next = this.segments.map(n => this.linker.segments.get(n)!)
-          .find(s => s.memory === end && s.used === 0 && s.size >= tail);
+          .find(s => s.memory === end && s.windows[0]?.[0] === 0 &&
+                s.windows[0][1] >= tail);
       if (next) return this.placeSplit(this._org, segment, next, this._overwrite);
       this.linker.fail(`Chunk ($${this.size.toString(16)} bytes at $${
           this._org.toString(16)}) does not fit in ${''
@@ -1345,8 +1351,8 @@ class Link {
   private overlapGroups: Map<string, string>|undefined;
   /** Names of mapped segments that other unmapped segments are written to. */
   private segmentMappings = new Set<string>();
-  /** Track the `used` values for each mapped segment */
-  private segmentUsed = new Map<string, number>();
+  /** Track the ranges of used space in each of the mapped segments */
+  private segmentWindows = new Map<string, Array<readonly [number, number]>>();
   /** Org ranges of each mapped segment that placement may still use. */
   private segmentFree = new Map<string, Array<readonly [number, number]>>();
   /**
@@ -1666,7 +1672,7 @@ class Link {
       const ramBase = LinkSegment.isRamSegment(s) ?
           this.ramBase(this.segmentArea.get(name) ?? name) : 0;
       this.segments.set(
-          name, new LinkSegment(s, this.segmentUsed.get(name), ramBase));
+          name, new LinkSegment(s, this.segmentWindows.get(name), ramBase));
     });
     // Everything below needs valid geometry, so stop here if we haven't got it.
     this.stopIfFailed('the segment layout is not valid');
@@ -2042,7 +2048,10 @@ class Link {
       if (size) selfSizes.set(name, size);
     }
 
-    const used = new Map<string, number>(); // mapped seg name -> # of allocated bytes
+    // Mapped seg name -> the run-space ranges handed out in it sorted by start address
+    const claims = new Map<string, Array<[number, number, string]>>();
+    // Mapped seg name -> where the next linker-chosen range is searched from.
+    const cursor = new Map<string, number>();
     const runs = new Map<string, number>(); // mapped seg name -> next start addr for RUN
     const loads = new Map<string, number>(); // mapped seg name -> next start addr for LOAD
     // Helper function to validate and find the mapped segment that backs
@@ -2059,22 +2068,69 @@ class Link {
       this.segmentMappings.add(name);
       return mapped;
     };
-    // Helper function that adds the unmapped segments data to the `used` map for
-    // the mapped segment. We will go through this `used` map later to build out the
-    // :mem and other related fields for mapping the unmapped segment.
-    // The goal is to allocate a chunk of space from the mapped segment so we can place
-    // in this allocated space later (effectively creates a :mem :start pair for this segment)
+    const claimsOf = (name: string) => {
+      let list = claims.get(name);
+      if (!list) claims.set(name, list = []);
+      return list;
+    };
+    const addClaim = (list: Array<[number, number, string]>,
+                      start: number, end: number, owner: string) => {
+      let i = list.length;
+      while (i > 0 && list[i - 1][0] > start) i--;
+      list.splice(i, 0, [start, end, owner]);
+    };
+    const claimedEnd = (seg: Segment): number => {
+      let end = 0;
+      for (const c of claims.get(seg.name) ?? []) end = Math.max(end, c[1]);
+      return end && end - (seg.memory ?? 0);
+    };
+    // Handle alignment and find the next free space that can fit this
+    const nextFree = (mapped: Segment, size: number, align: number): number => {
+      const list = claims.get(mapped.name) ?? [];
+      let start = alignUp(cursor.get(mapped.name) ?? mapped.memory ?? 0, align);
+      for (let i = 0; i < list.length; i++) {
+        const [s, e] = list[i];
+        if (s < start + size && start < e) {
+          start = alignUp(e, align);
+          i = -1;  // claims may nest, so recheck them all from the new start
+        }
+      }
+      return start;
+    };
+    // Helper function that claims a range of the mapped segment for the
+    // unmapped one, which becomes its :mem (or load address) later on.
     const allocate = (seg: Segment, mapped: Segment, size: number, align: number,
                       memory?: number): number => {
       const base = mapped.memory ?? 0;
-      const start = memory ?? alignUp(base + (used.get(mapped.name) ?? 0), align);
+      const list = claimsOf(mapped.name);
+      const start = memory ?? nextFree(mapped, size, align);
       if (start < base ||
           (mapped.size != null && start + size > base + mapped.size)) {
         this.fail(`Segment ${seg.name} ($${size.toString(16)} bytes at $${
              start.toString(16)}) does not fit in ${mapped.name}`);
       }
-      used.set(mapped.name,
-               Math.max(used.get(mapped.name) ?? 0, start + size - base));
+      if (memory != null) {
+        const hit = list.find(([s, e, owner]) =>
+            owner && s < start + size && start < e);
+        if (hit) {
+          this.fail(`Segment ${seg.name} ($${size.toString(16)} bytes at $${
+              start.toString(16)}) overlaps ${hit[2]} ($${
+              hit[0].toString(16)}-$${(hit[1] - 1).toString(16)}) in ${mapped.name}`);
+        }
+      } else {
+        // Claim space from the next available spot from the mapping, and move
+        // the cursor past the end of the new claim.
+        let from = cursor.get(mapped.name) ?? base;
+        for (const [, e] of list) {
+          if (e <= start)
+            from = Math.max(from, e);
+        }
+        if (from < start)
+          addClaim(list, from, start, '');
+        cursor.set(mapped.name, start + size);
+      }
+      if (size > 0)
+        addClaim(list, start, start + size, seg.name);
       return start;
     };
     
@@ -2083,7 +2139,6 @@ class Link {
     // load/run addresses end up at. A mapped segment that holds chunks of its
     // own takes its turn here too, rather than being left whatever the segments
     // lowered into it did not use.
-    const selfStarts = new Map<string, number>();
     // Mapped segments that other segments are lowered into.
     const backing = new Set<string>(
         unmapped.flatMap(s => [s.load, s.run].filter(n => n != null)));
@@ -2107,10 +2162,10 @@ class Link {
         const align = this.segmentAlign.get(name) ?? 1;
         if (!size || !backing.has(name)) return;
         const base = seg.memory ?? 0;
-        const start = alignUp(base + (used.get(name) ?? 0), align);
+        const start = nextFree(seg, size, align);
         const room = base + (seg.size ?? 0) - start;
         if (room <= 0) return;
-        selfStarts.set(name, allocate(seg, seg, Math.min(size, room), align));
+        allocate(seg, seg, Math.min(size, room), align);
         return;
       }
       const size = sizes.get(seg.name)!;
@@ -2144,7 +2199,7 @@ class Link {
     for (const name of order) {
       const seg = merged.get(name);
       if (!seg || needsLowering(seg)) continue;
-      let extent = used.get(name) ?? 0;
+      let extent = claimedEnd(seg);
       for (const c of contents.get(name) ?? []) {
         if (c.org == null) continue;
         extent = Math.max(extent, c.org + c.size - (seg.memory ?? 0));
@@ -2176,7 +2231,7 @@ class Link {
       const extent =
           seg.fill == null && this.segmentMappings.has(name) &&
               !referenced.has(name) ?
-          (used.get(name) ?? 0) : (seg.size ?? 0);
+          claimedEnd(seg) : (seg.size ?? 0);
       fileLocations.set(file, cursor + extent);
     }
 
@@ -2209,22 +2264,21 @@ class Link {
       if (!seg || needsLowering(seg)) continue;
       const memory = seg.memory ?? 0;
       const size = seg.size ?? 0;
-      if (!this.segmentMappings.has(name)) {
-        this.segmentFree.set(name, [[memory, memory + size]]);
-        continue;
+      const windows: Array<[number, number]> = [];
+      let lo = 0;
+      for (const [s, e, owner] of claims.get(name) ?? []) {
+        if (owner === name)
+          continue;
+        if (s - memory > lo)
+          windows.push([lo, s - memory]);
+        lo = Math.max(lo, e - memory);
       }
-      const ranges: Array<readonly [number, number]> = [];
-      const self = selfStarts.get(name);
-      if (self != null) {
-        ranges.push([self, self + selfSizes.get(name)!]);
-        // Chunks are placed from `used` forward, so that is where its own
-        // space starts as far as the placer is concerned.
-        this.segmentUsed.set(name, self - memory);
-      } else {
-        this.segmentUsed.set(name, used.get(name) ?? 0);
-      }
-      ranges.push([memory + (used.get(name) ?? 0), memory + size]);
-      this.segmentFree.set(name, ranges);
+      if (lo < size)
+        windows.push([lo, size]);
+      if (this.segmentMappings.has(name))
+        this.segmentWindows.set(name, windows);
+      this.segmentFree.set(
+          name, windows.map(([s, e]) => [memory + s, memory + e] as const));
     }
   }
 
@@ -2482,19 +2536,23 @@ class Link {
       const aEnd = a.memory + a.delta + a.size;
       // find a segment in our list which starts where this one ends
       const b = segments.find(s => s.memory === a.memory + a.size &&
-                              s.used === 0 && s.isRam === a.isRam);
+                              s.windows[0]?.[0] === 0 && s.isRam === a.isRam);
       if (!b) continue;
+      // The head has to run to the end of a, which it may not have handed
+      // to a segment lowered into it.
+      const last = a.windows[a.windows.length - 1];
+      if (!last || last[1] !== a.size) continue;
       // and that it has free space here
       const r = this.free.rangeAt(aEnd - 1);
       if (!r) continue;
-      const lo = Math.max(r[0], a.memory + a.delta + a.used);
+      const lo = Math.max(r[0], a.memory + a.delta + last[0]);
       const start = alignUp(lo - a.delta, align) + a.delta;
       const n = aEnd - start;
       if (n <= 0 || n >= size) continue;
       // last check to see that the start is free for the spilled segment
       const bStart = b.memory + b.delta;
       const rb = this.free.rangeAt(bStart);
-      if (size - n > b.size || !rb || rb[1] < bStart + size - n) continue;
+      if (size - n > b.windows[0][1] || !rb || rb[1] < bStart + size - n) continue;
       if (!best || n > best.n) best = {head: a, tail: b, start, n};
     }
     if (!best) return false;
@@ -2541,6 +2599,7 @@ class Link {
     for (let i = 0; i < segments.length;) {
       const group = this.overlapGroup(segments[i]);
       let best: {segment: LinkSegment, start: number, slack: number}|undefined;
+      const slack = {value: Infinity};
       // Check each of the segments that this chunk can be in, grouped by the segment group
       // This inner list walks through each segment in the group, and the outer loop
       // handles switching to the next segment group.
@@ -2552,15 +2611,17 @@ class Link {
         // ones lowered into it has to be excluded here rather than left out of
         // `free`.
         const base = segment.isRam ? segment.memory + segment.delta : segment.offset;
-        const s0 = base + segment.used;
-        const s1 = base + segment.size;
+        const windows = segment.windows;
         // Any space skipped over for alignment stays free, so we can use it later.
-        // Slack is used here to determine the best fit in the group.
-        const slack = {value: Infinity};
-        const found = this.free.bestFit(s0, s1, size, align, segment.delta, slack);
-        if (found == null) continue;
-        if (best == null || slack.value < best.slack) {
-          best = {segment, start: found, slack: slack.value};
+        // Slack is used here to determine the best fit in the group, and
+        // across the windows of a segment that lent part of itself out.
+        for (let w = 0; w < windows.length; w++) {
+          const found = this.free.bestFit(base + windows[w][0], base + windows[w][1],
+                                          size, align, segment.delta, slack);
+          if (found == null) continue;
+          if (best == null || slack.value < best.slack) {
+            best = {segment, start: found, slack: slack.value};
+          }
         }
       }
       if (best) {

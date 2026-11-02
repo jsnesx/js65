@@ -611,6 +611,136 @@ describe('Linker', function() {
         .toEqual([[0x10, [0x03, 0x03, 7]], [0x20, [2, 2]]]);
   });
 
+  it('should place a host\'s chunks below a fixed segment lowered into it',
+     function() {
+    const m = {
+      chunks: [
+        {segments: ['BANK1'], data: new Uint8Array(0x80).fill(1)},
+        {segments: ['BANK1'], data: new Uint8Array(0x80).fill(2)},
+        {segments: ['BANK1'], data: new Uint8Array(0x100).fill(3)},
+        {segments: ['WIN'], data: Uint8Array.of(9, 9)},
+      ],
+      segments: [
+        {name: 'BANK1', size: 0x4000, offset: 0, memory: 0x8000, out: '%O',
+         free: [[0x8100, 0x8200], [0xa500, 0xa600], [0xb000, 0xb100]]},
+        {name: 'WIN', load: 'BANK1', memory: 0xa500, size: 0x100},
+      ],
+    };
+    // WIN only takes $a500-$a5ff, so BANK1 keeps the free range below it.
+    expect(chunks(link(m))).toEqual([
+      [0x100, [...new Uint8Array(0x100).fill(3)]],
+      [0x2500, [9, 9]],
+      [0x3000, [...new Uint8Array(0x80).fill(1), ...new Uint8Array(0x80).fill(2)]],
+    ]);
+  });
+
+  it('should place a RAM host\'s chunks below a fixed segment run in it',
+     function() {
+    const m = {
+      chunks: [{
+        segments: ['HIRAM'],
+        data: Uint8Array.of(0, 0),
+      }, {
+        segments: ['PRG'],
+        data: Uint8Array.of(0xff, 0xff),
+        subs: [{offset: 0, size: 2, expr: off(0, 0)}],
+      }, {
+        segments: ['LOW'],
+        data: Uint8Array.of(5),
+      }],
+      segments: [
+        {name: 'HIRAM', size: 0x2000, memory: 0x6000},
+        {name: 'PRG', size: 0x100, offset: 0, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
+        {name: 'LOW', load: 'PRG', run: 'HIRAM', memory: 0x6c90, size: 0x10},
+      ],
+    };
+    expect(chunks(link(m))).toEqual([[0, [5]], [0x10, [0x00, 0x60]]]);
+  });
+
+  it('should fit a linker-placed segment around a fixed one', function() {
+    const m = {
+      chunks: [
+        {segments: ['SMALL'], data: new Uint8Array(8).fill(1)},
+        {segments: ['BIG'], data: new Uint8Array(0x20).fill(2)},
+      ],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
+        {name: 'FIX', load: 'PRG', memory: 0x8010, size: 0x10},
+        {name: 'SMALL', load: 'PRG'},
+        {name: 'BIG', load: 'PRG'},
+      ],
+    };
+    // SMALL fits under FIX at $8000, BIG does not and goes after it.
+    expect(chunks(link(m))).toEqual([
+      [0, [...new Uint8Array(8).fill(1)]],
+      [0x20, [...new Uint8Array(0x20).fill(2)]],
+    ]);
+  });
+
+  it('should reject two fixed lowered segments that overlap', function() {
+    const m = {
+      chunks: [],
+      segments: [
+        {name: 'PRG', size: 0x100, offset: 0, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
+        {name: 'A', load: 'PRG', memory: 0x8010, size: 0x10},
+        {name: 'B', load: 'PRG', memory: 0x8018, size: 0x10},
+      ],
+    };
+    expect(() => link(m)).toThrow(
+        /Segment B \(\$10 bytes at \$8018\) overlaps A \(\$8010-\$801f\) in PRG/);
+  });
+
+  it('should place a reloc mirror around a segment lowered into a host',
+     function() {
+    const m = {
+      chunks: [{
+        placement: 'all' as const,
+        segments: ['A', 'B'],
+        data: new Uint8Array(0x20).fill(1),
+      }, {
+        placement: 'all' as const,
+        segments: ['A', 'B'],
+        data: new Uint8Array(8).fill(2),
+      }],
+      segments: [
+        {name: 'A', size: 0x100, offset: 0x000, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
+        {name: 'B', size: 0x100, offset: 0x100, memory: 0x8000, out: '%O',
+         free: [[0x8000, 0x8100]]},
+        {name: 'W', load: 'A', memory: 0x8010, size: 0x10},
+      ],
+    };
+    // The first mirror is too big for the room below W and skips over it; the
+    // second one fits there.
+    expect(chunks(link(m))).toEqual([
+      [0x000, [...new Uint8Array(8).fill(2)]],
+      [0x020, [...new Uint8Array(0x20).fill(1)]],
+      [0x100, [...new Uint8Array(8).fill(2)]],
+      [0x120, [...new Uint8Array(0x20).fill(1)]],
+    ]);
+  });
+
+  it('should not spill into a segment that lent out its start', function() {
+    const m = {
+      chunks: [
+        {segments: ['B1'], org: 0xa000, data: new Uint8Array(0x1ffe).fill(0xff)},
+        {segments: ['B1', 'B2'], data: Uint8Array.of(1, 2, 3, 4)},
+      ],
+      segments: [
+        {name: 'B1', size: 0x2000, offset: 0x0000, memory: 0xa000, out: '%O',
+         free: [[0xa000, 0xc000]]},
+        {name: 'B2', size: 0x2000, offset: 0x4000, memory: 0xc000, out: '%O',
+         free: [[0xc000, 0xc010]]},
+        {name: 'W', load: 'B2', memory: 0xc000, size: 0x10},
+      ],
+    };
+    // The only free bytes after B1 are W's, which B2 does not own.
+    expect(() => link(m)).toThrow(/Could not find space/);
+  });
+
   it('should give a bss segment address space but no output', function() {
     const m = {
       chunks: [{
