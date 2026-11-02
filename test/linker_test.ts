@@ -877,6 +877,56 @@ Var:
     });
   });
 
+  describe('`* =` (pc_assignment)', function() {
+    // lozft without a load/run segment: the copied code is assembled in
+    // place in bank 1 with `* =` giving its SRAM addresses.
+    const SEGS = `
+.macpack common
+.feature pc_assignment
+.segment "BANK1" :bank 1 :size $4000 :mem $8000 :off $0
+FREE "BANK1" [$a500, $b770)
+`;
+    const build = (code: string) => compile(
+        [{type: 'source', name: 'main.s', code: SEGS + code}],
+        {lineContinuations: true});
+    const bytes = (data: Uint8Array, at: number, n: number) =>
+        [...data.slice(at, at + n)];
+    const fileOf = (addr: number) => addr - 0x8000;
+
+    it('should write at the .org address with labels at the pc', function() {
+      const result = build(`
+.org $a68d
+* = $6e1d
+Shifted:
+  jmp Shifted
+.org $8000
+  .word Shifted
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, fileOf(0xa68d), 3)).toEqual([0x4c, 0x1d, 0x6e]);
+      expect(bytes(data, 0, 2)).toEqual([0x1d, 0x6e]);
+    });
+
+    it('should free the physical range with FREE_UNTIL', function() {
+      const result = build(`
+.org $a500
+* = $6c90
+  .res $10, $11
+FREE_UNTIL $6d90
+.reloc
+Rel:
+  .res $f0, $77
+.org $8000
+  .word Rel
+`);
+      expect(result.messages).toEqual([]);
+      const data = result.outputs[0].data;
+      expect(bytes(data, 0, 2)).toEqual([0x10, 0xa5]);
+      expect(bytes(data, fileOf(0xa510), 1)).toEqual([0x77]);
+    });
+  });
+
   it('should give a bss segment address space but no output', function() {
     const m = {
       chunks: [{

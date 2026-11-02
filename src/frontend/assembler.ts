@@ -117,7 +117,7 @@ export class Assembler {
   /** Stack of segments for .pushseg/.popseg, with the chunk and its index. */
   private segmentStack:
       Array<readonly [/* readonly */ string[], Chunk|undefined, number,
-                      number?]> = [];
+                      number?, {base: number, at: number}?]> = [];
 
   /** All symbols in this object. */
   private symbols: Symbol[] = [];
@@ -178,6 +178,16 @@ export class Assembler {
 
   /** Origin of the currnet chunk, if fixed. */
   private _org: number|undefined = undefined;
+
+  /**
+   * Active `* =` assignment: the PC reads as `base` plus the bytes written to
+   * the current chunk since offset `at`. Always replaced, never mutated, since
+   * `.pushseg` keeps a reference to it.
+   */
+  private _pcShift: {base: number, at: number}|undefined = undefined;
+
+  /** Segment key -> shifted PC when the segment was left, like `segmentOrg`. */
+  private segmentShift = new Map<string, number>();
 
   /** Alignment constraint to stamp on the next chunk, from a pending `.align`. */
   private _pendingAlign: number|undefined = undefined;
@@ -326,6 +336,8 @@ export class Assembler {
 
   /** Ends the current chunk, so the next byte emitted starts a new one. */
   private clearChunk() {
+    // `at` is an offset into the chunk being closed, so rebase onto the next.
+    if (this._pcShift) this._pcShift = {base: this.shiftedPc()!, at: 0};
     this._chunk = undefined;
     this._chunkIndex = -1;
   }
@@ -401,9 +413,12 @@ export class Assembler {
     return this.cpu.names.has(name);
   }
 
-  /** ca65 `pc_assignment`: `* = $8000` is sugar for `.org $8000`. */
+  /**
+   * `* = $8000` updates the PC address for labels and refs without changing the
+   * output location. (.org does both, * = works like how ca65 .org works)
+   */
   allowsPcAssignment(): boolean {
-    return Boolean(this.opts.pcAssignment);
+    return this.opts.pcAssignment ?? true;
   }
 
   allowsLabelWithoutColon(): boolean {
@@ -451,6 +466,14 @@ export class Assembler {
    * will be when it's created.
    */
   pc(): Expr {
+    const shifted = this.shiftedPc();
+    if (shifted != null) {
+      const meta: Exprs.Meta = {};
+      if (this._chunk ? this._chunk.zeropage : this.segmentsAreZeropage()) {
+        meta.zeropage = true;
+      }
+      return Exprs.evaluate({op: 'num', num: shifted, meta});
+    }
     const num = this._chunk?.data.length ?? 0;
     const meta: Exprs.Meta = {
       rel: true,
@@ -462,6 +485,12 @@ export class Assembler {
       meta.zeropage = true;
     }
     return Exprs.evaluate({op: 'num', num, meta});
+  }
+
+  /** The PC set by `* =` or undefined when no assignment is active. */
+  private shiftedPc(): number|undefined {
+    const s = this._pcShift;
+    return s && s.base + (this._chunk?.data.length ?? 0) - s.at;
   }
 
   /** Whether every segment currently selected is a zeropage segment. */
@@ -978,7 +1007,10 @@ export class Assembler {
 
   private assignment(tokens: Token[]) {
     try {
-      if (Tokens.eq(tokens[1], Tokens.SET)) {
+      if (tokens[0].token === 'op' && tokens[0].str === '*') {
+        this._source = tokens[0].source;
+        this.assignPc(this.parseConst(tokens, 2));
+      } else if (Tokens.eq(tokens[1], Tokens.SET)) {
         this.setLine(tokens);
       } else {
         this.assignLine(tokens);
@@ -1216,8 +1248,9 @@ export class Assembler {
       }
       if (!this.chunk.name && !this.chunk.data.length) this.chunk.name = ident;
       if (this.opts.refExtractor?.label && this.chunk.org != null) {
-        this.opts.refExtractor.label(
-            ident, this.chunk.org + this.chunk.data.length, this.chunk.segments);
+        this.opts.refExtractor.label(ident,
+            this.shiftedPc() ?? this.chunk.org + this.chunk.data.length,
+            this.chunk.segments);
       }
       // Add label to debug info
       if (this.opts.generateDebugInfo && this._chunk?.labelIndex) {
@@ -1538,10 +1571,16 @@ export class Assembler {
     // Basic plan here is that we actually want a relative expr.
     // TODO - clean this up to be more efficient.
     // TODO - handle local/anonymous labels separately?
-    const num = this.chunk.data.length + arglen + 1;
-    const meta: Exprs.Meta = {rel: true, chunk: this._chunkIndex};
-    if (this._chunk?.org) meta.org = this._chunk.org;
-    const nextPc = {op: 'num', num, meta};
+    const shifted = this.shiftedPc();
+    let nextPc: Expr;
+    if (shifted != null) {
+      nextPc = {op: 'num', num: shifted + arglen + 1};
+    } else {
+      const num = this.chunk.data.length + arglen + 1;
+      const meta: Exprs.Meta = {rel: true, chunk: this._chunkIndex};
+      if (this._chunk?.org) meta.org = this._chunk.org;
+      nextPc = {op: 'num', num, meta};
+    }
     // Mark the subtraction as a branch for signed range checking
     const rel: Expr = {op: '-', args: [expr, nextPc], meta: {branch: true}};
     if (expr.source) rel.source = expr.source;
@@ -1615,7 +1654,13 @@ export class Assembler {
   ////////////////////////////////////////////////////////////////
   // Directive handlers
 
+  /** `* = addr`: later labels and `*` read from `addr`; placement is unchanged. */
+  assignPc(addr: number) {
+    this._pcShift = {base: addr, at: this._chunk?.data.length ?? 0};
+  }
+
   org(addr: number, name?: string) {
+    this._pcShift = undefined;
     if (this._org != null && this._chunk != null &&
       this._org + this._chunk.data.length === addr) {
       return; // nothing to do?
@@ -1629,6 +1674,7 @@ export class Assembler {
   reloc(name?: string) {
     this.flushPendingAlign();
     this._org = undefined;
+    this._pcShift = undefined;
     this.clearChunk();
     this._name = name;
   }
@@ -1675,6 +1721,8 @@ export class Assembler {
     // `.org` is per-segment, so the previous segment's address doesn't carry
     // over. Pick up this segment's own PC, or `.reloc` if it never had one.
     this._org = this.segmentOrg.get(this.segmentKey());
+    const shift = this.segmentShift.get(this.segmentKey());
+    this._pcShift = shift == null ? undefined : {base: shift, at: 0};
     // An anonymous segment's positional address doubles as an implicit `.org`
     if (this._org == null &&
         segments.length === 1 && typeof segments[0] === 'object' &&
@@ -1689,6 +1737,12 @@ export class Assembler {
 
   private saveSegmentOrg() {
     const key = this.segmentKey();
+    const shift = this.shiftedPc();
+    if (shift == null) {
+      this.segmentShift.delete(key);
+    } else {
+      this.segmentShift.set(key, shift);
+    }
     if (this._org == null) {
       this.segmentOrg.delete(key);
       return;
@@ -1709,7 +1763,8 @@ export class Assembler {
       message,
       chunk: this._chunk,
       source: expr.source ?? this._source,
-      pc: (this._chunk?.org ?? this._org) != null ? this.orgPc() : undefined,
+      pc: this.shiftedPc() ??
+          ((this._chunk?.org ?? this._org) != null ? this.orgPc() : undefined),
     });
   }
 
@@ -1841,6 +1896,7 @@ export class Assembler {
     // ... which we don't have yet. TODO
     if ((boundary & (boundary - 1)) !== 0) this.fail(`.align boundary must be a power of two: ${boundary}`);
     if (boundary === 1) return; // no-op
+    if (this._pcShift) this.fail(`.align cannot be used after \`* =\``);
     if (this._org != null) {
       // We have an org address, so we are in absolute mode meaning we can
       // do the padding now too.
@@ -2065,6 +2121,7 @@ export class Assembler {
     (s.free || (s.free = [])).push([this._org, this._org + size]);
     // Advance past the free space.
     this._org += size;
+    if (this._pcShift) this._pcShift = {base: this._pcShift.base + size, at: 0};
   }
 
   private jsAction(tokens: Token[]) {
@@ -2275,7 +2332,7 @@ export class Assembler {
     this.preventInvalidAnonSegChange('.pushseg');
     this.flushPendingAlign();
     this.segmentStack.push(
-        [this.segments, this._chunk, this._chunkIndex, this._org]);
+        [this.segments, this._chunk, this._chunkIndex, this._org, this._pcShift]);
     // If pushseg was called without any segments, just keep the current segment
     if (segments.length) {
       this.segmentInternal(segments);
@@ -2288,7 +2345,7 @@ export class Assembler {
     this.flushPendingAlign();
     this.saveSegmentOrg();
     let org: number|undefined;
-    [this.segments, this._chunk, this._chunkIndex, org] =
+    [this.segments, this._chunk, this._chunkIndex, org, this._pcShift] =
         this.segmentStack.pop()!;
     this._org = this._chunk?.org ?? org;
   }

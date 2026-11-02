@@ -103,7 +103,10 @@ export interface AssemblerOptions {
   allowBrackets?: boolean;
   /** ca65 name: `labels_without_colons` a leading identifier is a label without a `:`. */
   labelsWithoutColons?: boolean;
-  /** ca65 name: `pc_assignment` `*= $8000` is sugar for `.org $8000`. */
+  /**
+   * ca65 name: `pc_assignment` `* = $8000` sets the PC for later labels and
+   * `*` without changing output placement. On unless explicitly set to false.
+   */
   pcAssignment?: boolean;
   /**
    * ca65 name: `force_range` Passed through onto a symbol to tell the linker
