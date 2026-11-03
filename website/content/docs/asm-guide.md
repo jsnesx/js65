@@ -73,6 +73,7 @@ The full list of `.segment` parameters are as follows:
 * `:default` - Marks this segment as the one used when no segments have been set in a file.
 * `:fill <num>` - If set, fills all data with a specified value. `<num>` is optional, if its not provided, it will fill with 0.
 * `:load <str>` - Segment name to use as a base for this segment. Any code/data for this segment will be added to the other segment's memory space.
+* `:loadmem <num>` - Start address to use inside the base segment. This only works inside a `load/run` segment to set an offset into the parent to use for this segment.
 * `:mem <num>` - Sets the `org` space for what address this memory starts with.
 * `:off <num>` - File offset where this segment's data will be written. Can be used to have multiple segments that overwrite the same location.
 * `:optional` - Unused. We don't currently throw warnings about unused segments. Kept for ca65 compat until we decide if we want it.
@@ -175,6 +176,17 @@ For the most part, the `feature` list matches what `ca65` supports, but there ar
 * `line_continuations` - On by default (off in ca65)
 * `underline_in_numbers` - On by default (off in ca65)
 * `leading_dot_in_identifiers` - On by default (off in ca65)
+* `pc_assignment` - On by default (off in ca65).
+
+`pc_assignment` works the same as it does in ca65 in that it changes JUST the org used for labels and offsets, but it does NOT affect the file offset like `.org` does in js65.
+This can be used for code that should be loaded from ROM into RAM where you need the file offset at a ROM location but use a different address for where it will be loaded into RAM.
+
+```asm6502
+.segment "BANK1"
+.org $a100 ; set both the PC and the output location
+* = $6500 ; but then set JUST the PC without changing the output location
+.proc etc ; Compiled at the offset based on org but the labels are based on *
+```
 
 ### Always ON features (cannot be disabled)
 

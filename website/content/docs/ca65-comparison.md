@@ -141,6 +141,10 @@ DifferentPatchPlacedIndependently:
   rts
 ```
 
+`.org` changes both the file offset AND the pc address for the segment, which works great for code that is run from the address that it is compiled to.
+If you need to create code that is run at a different offset from the file offset, then you can override the current offset (program counter) by assigning to `*` with `* = $8000`.
+This works the same way as the ca65 `.feature pc_assignment`.
+
 ## `.align`
 
 Works similarly to `ca65` overall, but is tweaked a bit to work with placing data with `.reloc`.
