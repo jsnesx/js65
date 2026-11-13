@@ -13,8 +13,8 @@ const source = (code: string, name = 'main.s'): AssemblyInput => ({type: 'source
 const options = {target: 'sim', generateListingFile: true, generateListingIndex: true};
 const decode = (data?: Uint8Array) => new TextDecoder().decode(data);
 
-function listing(inputs: AssemblyInput[], opts: Js65Options = {}) {
-  const result = compile(inputs, {...options, ...opts});
+function listing(inputs: AssemblyInput[], opts: Js65Options = {}, baseRom?: Uint8Array) {
+  const result = compile(inputs, {...options, ...opts}, undefined, baseRom?.slice());
   expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
   expect(result.success).toBe(true);
   const text = decode(findOutput(result, 'listing')?.data);
@@ -259,6 +259,178 @@ example.s:4  CODE[0]  0003r  ?? ??                    .word addr
   });
 });
 
+describe('listing placement edge cases', () => {
+  const banks = '.segment "B0" :bank 0 :size 8 :mem $8000 :off $10 :fill $ff\n' +
+      '.segment "B1" :bank 1 :size 8 :mem $8000 :off $18 :fill $ff\n';
+
+  it('maps pooled chunks to physical banks with either declaration syntax', () => {
+    const body = '.segment "MUSIC"\n.byte 1,1,1,1\n' +
+        '.segment "MUSIC"\n.byte 2,2,2\n.segment "MUSIC"\n.byte 3,3,3\n';
+    const inline = listing([source(banks + '.segment "MUSIC" :pool {"B0", "B1"}\n' + body)],
+                           {target: undefined});
+    const configured = listing([source(body)], {target: undefined, linkerConfig: `
+      MEMORY {
+        HEADER: start = 0, size = $10, file = %O, fill = yes;
+        B0: start = $8000, size = 8, bank = 0, file = %O, fill = yes, fillval = $ff;
+        B1: start = $8000, size = 8, bank = 1, file = %O, fill = yes, fillval = $ff;
+      } SEGMENTS { MUSIC: pool = {B0, B1}; }`});
+    for (const {rows, index} of [inline, configured]) {
+      expect(rows.map(r => [r.segment, r.bank, r.address, r.fileOffset, r.bytes]))
+          .toEqual([
+            ['B0', 0, 0x8000, 0x10, [1, 1, 1, 1]],
+            ['B0', 0, 0x8004, 0x14, [2, 2, 2]],
+            ['B1', 1, 0x8000, 0x18, [3, 3, 3]],
+          ]);
+      expect(index.rows.some(r => r.kind === 'fill' && r.bytes.includes(0xff))).toBe(true);
+    }
+  });
+
+  const spill = '.segment "BANK" :bank 3 :size $10 :mem $bff0 :off $10\n' +
+      '.segment "FIXED" :bank 7 :size 8 :mem $c000 :off $40\n' +
+      '.segment "POOL" :pool {"BANK", "FIXED"}\n' +
+      '.segment "BANK"\n.org $bffe\n.free 2\n' +
+      '.segment "FIXED"\n.org $c000\n.free 4\n';
+
+  it('spills pooled data into fixed memory at a discontinuous ROM offset', () => {
+    const {rows, index} = listing([source(spill +
+        '.reloc\n.segment "POOL"\nhead: .byte 1,2,3,4,5,6\nend:\n')],
+        {target: undefined});
+    expect(rows.filter(r => r.kind === 'data').map(r =>
+        [r.segment, r.bank, r.address, r.fileOffset, r.bytes])).toEqual([
+      ['BANK', 3, 0xbffe, 0x1e, [1, 2]],
+      ['FIXED', 7, 0xc000, 0x40, [3, 4, 5, 6]],
+    ]);
+    expect(index.rows.find(r => r.source?.line === 13))
+        .toMatchObject({address: 0xc004, segment: 'FIXED', fileOffset: 0x44});
+  });
+
+  it('preserves split instruction bytes and labels across the bank boundary', () => {
+    const {rows, index} = listing([source(spill +
+        '.reloc\n.segment "POOL"\njsr tail\ntail: rts\n.byte 1,2\n')],
+        {target: undefined});
+    const instructions = rows.filter(r => r.kind === 'instruction');
+    expect(instructions.map(r => [r.address, r.fileOffset, r.bytes])).toEqual([
+      [0xbffe, 0x1e, [0x20, 0x01]], [0xc000, 0x40, [0xc0]], [0xc001, 0x41, [0x60]],
+    ]);
+    expect(instructions.slice(0, 2).every(r => !r.instruction)).toBe(true);
+    expect(instructions[2].instruction?.mnemonic).toBe('rts');
+    expect(index.rows.find(r => r.source?.line === 13 && !r.authored))
+        .toMatchObject({address: 0xc001, segment: 'FIXED'});
+  });
+
+  it('omits listing outputs when a pool spill cannot fit', () => {
+    const result = compile([source(spill +
+        '.reloc\n.segment "POOL"\n.byte 1,2,3,4,5,6,7\n')],
+        {...options, target: undefined});
+    expect(result.success).toBe(false);
+    expect(result.messages.some(m => m.message.includes('Could not find space'))).toBe(true);
+    expect(result.outputs.some(o => o.type.startsWith('listing'))).toBe(false);
+  });
+
+  it('combines base ROM patching, pooled spills, and multiple input modules', () => {
+    const inputs = [source(spill, 'layout.s'), source(
+        '.segment "POOL"\n.export tail\njsr tail\ntail: rts\n.byte 1,2\n', 'patch.s')];
+    const base = new Uint8Array(0x50).fill(0x5a);
+    const {rows, result, index} = listing(inputs, {target: undefined}, base);
+    expect(rows.map(r => [r.module, r.bank, r.address, r.fileOffset, r.bytes])).toEqual([
+      ['patch.s', 3, 0xbffe, 0x1e, [0x20, 0x01]],
+      ['patch.s', 7, 0xc000, 0x40, [0xc0]],
+      ['patch.s', 7, 0xc001, 0x41, [0x60]],
+      ['patch.s', 7, 0xc002, 0x42, [1, 2]],
+    ]);
+    const binary = findOutput(result, 'binary')!.data;
+    expect(binary.slice(0x20, 0x40)).toEqual(base.slice(0x20, 0x40));
+    expect(index.rows.filter(r => r.kind === 'gap').every(r => !r.authored)).toBe(true);
+    const plain = compile(inputs, {target: undefined}, undefined, base.slice());
+    expect(plain.success).toBe(true);
+    expect(findOutput(plain, 'binary')!.data).toEqual(binary);
+  });
+
+  it('lists base ROM patches without attributing untouched bytes to source', () => {
+    const base = Uint8Array.from({length: 0x60}, (_, i) => i);
+    const original = base.slice();
+    const inputs = [source(banks + '.segment "B0"\n.org $8002\nlda #$42\n' +
+        '.segment "B1"\n.org $8002\n.byte $a5\n')];
+    const {rows, result} = listing(inputs, {target: undefined}, base);
+    expect(rows.map(r => [r.bank, r.address, r.fileOffset, r.bytes])).toEqual([
+      [0, 0x8002, 0x12, [0xa9, 0x42]], [1, 0x8002, 0x1a, [0xa5]],
+    ]);
+    expect(findOutput(result, 'binary')!.data.slice(0, 0x10)).toEqual(original.slice(0, 0x10));
+    expect(findOutput(result, 'binary')!.data.slice(0x20)).toEqual(original.slice(0x20));
+    expect(base).toEqual(original);
+    const ips = compile(inputs, {...options, target: undefined, outputFormat: 'ips'}, undefined, base.slice());
+    expect(ips.success).toBe(true);
+    expect(decode(findOutput(ips, 'binary')!.data.slice(0, 5))).toBe('PATCH');
+    expect(findOutput(ips, 'listing')!.data).toEqual(findOutput(result, 'listing')!.data);
+    expect(findOutput(ips, 'listing-index')!.data).toEqual(findOutput(result, 'listing-index')!.data);
+  });
+
+  it('preserves independent module chunks and linked operands through objects', () => {
+    const inputs = [
+      source('.segment "CODE"\n.import helper\njsr helper\nrts\n', 'caller.s'),
+      source('.segment "CODE"\n.export helper\nhelper: lda #7\nrts\n', 'helper.s'),
+    ];
+    const direct = listing(inputs);
+    const objects: AssemblyInput[] = inputs.map(input => {
+      const result = compile([input], {...options, outputFormat: 'object'});
+      expect(result.success).toBe(true);
+      return {type: 'module', module: deserializeObjectFile(findOutput(result, 'object')!.data)};
+    });
+    expect(direct.rows.map(r => [r.module, r.address, r.bytes])).toEqual([
+      ['caller.s', 0x200, [0x20, 0x04, 0x02]], ['caller.s', 0x203, [0x60]],
+      ['helper.s', 0x204, [0xa9, 7]], ['helper.s', 0x206, [0x60]],
+    ]);
+    expect(listing(objects).index).toEqual(direct.index);
+    expect(listing([inputs[0], objects[1]]).index).toEqual(direct.index);
+  });
+
+  it('shows unmapped objects without guessing instruction tokens', () => {
+    const module = assemble([source('lda #7\n', 'opaque.s')]).modules[0];
+    const {text, rows} = listing([{type: 'module', module}, source('rts\n', 'visible.s')]);
+    expect(text).toContain('Source records unavailable; bytes are unmapped.');
+    expect(rows[0]).toMatchObject({bytes: [0xa9, 7], address: 0x200});
+    expect(rows[0].instruction).toBeUndefined();
+    expect(rows[1]).toMatchObject({module: 'visible.s', bytes: [0x60], address: 0x202});
+  });
+
+  it('keeps mirror offsets local to each output file', () => {
+    const {rows} = listing([source('.segment "BOTH"\n.res 11,$a5\n')], {
+      target: undefined, linkerConfig: `MEMORY {
+        HEADER: start = 0, size = 4, file = %O, fill = yes;
+        A: start = $8000, size = 16, bank = 2, file = %O;
+        B: start = $8000, size = 16, bank = 5, file = "other.bin";
+      } SEGMENTS { BOTH: mirror = {A, B}; }`,
+    });
+    expect(rows.map(r => [r.segment, r.bank, r.output, r.fileOffset, r.address, r.size]))
+        .toEqual([
+          ['A', 2, '%O', 4, 0x8000, 8], ['A', 2, '%O', 12, 0x8008, 3],
+          ['B', 5, 'other.bin', 0, 0x8000, 8], ['B', 5, 'other.bin', 8, 0x8008, 3],
+        ]);
+    expect(rows.map(r => r.continuation)).toEqual([undefined, true, undefined, true]);
+  });
+
+  it('retains both source records when identical chunks share ROM bytes', () => {
+    const {rows} = listing([
+      source('.segment "CODE" :dedupe\n.byte 1,2,3\n', 'first.s'),
+      source('.segment "CODE"\n.byte 1,2,3\n', 'second.s'),
+    ]);
+    expect(rows.map(r => r.source?.file)).toEqual(['first.s', 'second.s']);
+    expect(rows.map(r => r.bytes)).toEqual([[1, 2, 3], [1, 2, 3]]);
+    expect(rows.map(r => r.fileOffset)).toEqual([0, 0]);
+  });
+
+  it('retains empty modules and labels without inventing authored bytes', () => {
+    const {index, rows, text} = listing([
+      source('', 'empty.s'), source('.segment "CODE"\nstart:\n.res 0\n', 'labels.s'),
+      source('nop\n', 'code.s'),
+    ]);
+    expect(text).toContain('MODULE empty.s');
+    expect(rows.map(r => r.bytes)).toEqual([[0xea]]);
+    expect(index.rows.find(r => r.module === 'labels.s' && r.source?.line === 2))
+        .toMatchObject({address: 0x200, bytes: [], size: 0, authored: false});
+  });
+});
+
 describe('generated listing records', () => {
   beforeAll(() => setJsEngine(functionEngine));
   afterAll(() => setJsEngine(undefined));
@@ -285,5 +457,17 @@ describe('generated listing records', () => {
     expect(result.success).toBe(false);
     expect(result.messages.some(m => m.message.includes('postprocessing truncated'))).toBe(true);
     expect(findOutput(result, 'listing')).toBeUndefined();
+  });
+
+  it('lists final IPS postprocessing bytes over a base ROM', () => {
+    const inputs = [source('lda #7\n.jspostbegin\nrom[1] = 9;\n.jspostend\n')];
+    const base = new Uint8Array(16).fill(0xff);
+    const binary = listing(inputs, {allowJavascript: true}, base);
+    const ips = compile(inputs, {...options, allowJavascript: true, outputFormat: 'ips'},
+                        undefined, base.slice());
+    expect(ips.success).toBe(true);
+    expect(binary.rows[0]).toMatchObject({bytes: [0xa9, 9], instruction: {mnemonic: 'lda'}});
+    expect(findOutput(ips, 'listing')!.data).toEqual(findOutput(binary.result, 'listing')!.data);
+    expect(findOutput(ips, 'listing-index')!.data).toEqual(findOutput(binary.result, 'listing-index')!.data);
   });
 });
