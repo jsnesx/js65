@@ -20,6 +20,9 @@ markup:
 
 menu:
   main:
+    - name: Explore
+      pageRef: /explore
+      weight: 2
     - name: Docs
       pageRef: /docs
       weight: 1

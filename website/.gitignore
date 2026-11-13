@@ -1,7 +1,11 @@
 # Hugo build output
 public/
+static/try-me-assets/
 resources/
 .hugo_build.lock
 
 # Hugo Modules vendor (regenerate with `hugo mod vendor`)
 _vendor/
+
+# 6502 instruction reference from the NESDEV wiki
+instructionreference.wiki

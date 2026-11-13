@@ -1,0 +1,68 @@
+<noscript>This workspace needs JavaScript. Use the js65 CLI to assemble offline.</noscript>
+<div id="try-me" data-assets="{{ "try-me-assets/" | relURL }}">
+  <div class="try-toolbar">
+    <label>Target <select aria-label="Target"><option>js65-sim</option></select></label>
+    <button id="load" aria-haspopup="dialog" aria-controls="load-dialog">Load Project</button>
+    <button disabled title="Simulator arrives in stage 3">Run</button>
+    <button disabled title="Simulator arrives in stage 3">Reset</button>
+    <button disabled title="Simulator arrives in stage 3">Step Forward</button>
+    <button disabled title="Simulator arrives in stage 3">Step Back</button>
+  </div>
+  <dialog id="load-dialog" class="try-load-dialog" aria-labelledby="load-title">
+    <div class="try-load-heading"><h2 id="load-title">Load Project</h2><button id="close-load" type="button" aria-label="Close load dialog">Close</button></div>
+    <section aria-labelledby="samples-title">
+      <h3 id="samples-title">Samples</h3>
+      <div id="samples" class="try-load-list"></div>
+    </section>
+    <section aria-labelledby="saved-title">
+      <h3 id="saved-title">Browser storage</h3>
+      <div id="saved-workspaces" class="try-load-list"></div>
+      <form id="save-form" class="try-save-form">
+        <label for="save-name">Save current files as</label>
+        <input id="save-name" name="name" required placeholder="Workspace name" autocomplete="off">
+        <button id="save-workspace" type="submit">Save to browser</button>
+      </form>
+      <p>Saved files stay in this browser on this device.</p>
+    </section>
+    <p id="load-status" role="status" aria-live="polite"></p>
+  </dialog>
+  <p class="try-status" role="status" aria-live="polite">Loading editor...</p>
+  <dialog id="new-file-dialog" class="try-load-dialog" aria-labelledby="new-file-title">
+    <h2 id="new-file-title">New File</h2>
+    <form id="new-file-form" class="try-save-form">
+      <label for="new-file-name">File name</label>
+      <input id="new-file-name" required placeholder="example.inc" autocomplete="off" aria-describedby="new-file-error">
+      <p id="new-file-error" role="alert"></p>
+      <div class="try-dialog-actions"><button id="cancel-new-file" type="button">Cancel</button><button type="submit">Create File</button></div>
+    </form>
+  </dialog>
+  <div class="try-panes">
+    <section aria-label="Source">
+      <div id="files" class="try-files try-tabs" role="tablist" aria-label="Source files"></div>
+      <div id="source-panel" role="tabpanel"><div id="editor" class="try-editor"></div>
+      <textarea id="fallback" class="try-fallback" aria-label="Assembly source" spellcheck="false" hidden></textarea></div>
+    </section>
+    <section aria-label="Output">
+      <div class="try-tabs" role="tablist" aria-label="Output">
+        <button id="display-tab" role="tab" aria-selected="true" aria-controls="display">Display</button>
+        <button id="assembly-tab" role="tab" aria-selected="false" aria-controls="assembly" tabindex="-1">Assembly</button>
+        <button id="output-tab" role="tab" aria-selected="false" aria-controls="output" aria-label="Output (0 errors, 0 warnings, 0 info)" tabindex="-1">Output (<span id="error-count" class="try-count try-count-error" title="Errors">0</span>/<span id="warning-count" class="try-count try-count-warning" title="Warnings">0</span>/<span id="info-count" class="try-count try-count-info" title="Info">0</span>)</button>
+      </div>
+      <div id="assembly" class="try-output" role="tabpanel" aria-labelledby="assembly-tab" hidden>
+        <div id="assembly-listing"></div>
+        <pre class="try-failure" hidden><span class="try-failure-error">&lt;Compilation failed&gt;</span>
+
+<span class="try-failure-comment"># For more information see the output window</span></pre>
+      </div>
+      <div id="display" class="try-output" role="tabpanel" aria-labelledby="display-tab">
+        <p id="display-content">Not implemented yet!</p>
+        <pre class="try-failure" hidden><span class="try-failure-error">&lt;Compilation failed&gt;</span>
+
+<span class="try-failure-comment"># For more information see the output window</span></pre>
+      </div>
+      <div id="output" class="try-output" role="tabpanel" aria-labelledby="output-tab" hidden>
+        <div class="try-diagnostics" aria-label="Compiler diagnostics">Compiler returned: 0</div>
+      </div>
+    </section>
+  </div>
+</div>

@@ -1,0 +1,10 @@
+{{ define "main" }}
+<div class="try-page hx:mx-auto hx:flex hx:max-w-[100rem]">
+{{ partial "sidebar.html" (dict "context" . "disableSidebar" true "displayPlaceholder" false) }}
+<main id="content" class="try-me">
+  <h1>{{ .Title }}</h1>
+  {{ partial "playground/workspace.html" . }}
+</main>
+</div>
+{{ partial "playground/assets.html" . }}
+{{ end }}

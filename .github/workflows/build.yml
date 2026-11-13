@@ -325,7 +325,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       # Get a short-lived NuGet API key
-      - name: NuGet login (OIDC → temp API key)
+      - name: NuGet login (OIDC to temp API key)
         uses: NuGet/login@v1
         id: login
         with:
@@ -541,7 +541,9 @@ jobs:
         # `mod graph` resolves the module tree at the versions go.mod pins,
         # without upgrading them the way `mod get -u` would.
         run: hugo mod graph
-      - name: Build with Hugo
+      - name: Build playground assets
+        run: bun install --frozen-lockfile && bun run website:assets
+      - name: Build website
         working-directory: website
         env:
           HUGO_ENVIRONMENT: production

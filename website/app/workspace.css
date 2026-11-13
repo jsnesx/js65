@@ -1,0 +1,57 @@
+body:has(.try-page) { display: flex; flex-direction: column; min-height: 100dvh; }
+.try-page { flex: 1; width: 100%; align-items: flex-start; }
+.try-me { width: 100%; min-width: 0; max-width: 100rem; margin: 0 auto; padding: 1.5rem; }
+.try-me h1 { font-size: 2rem; font-weight: bold; margin-bottom: 1rem; }
+.try-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: 1rem 0; }
+.try-panes > section { min-width: 0; }
+.try-me button, .try-me select { border: 1px solid #718096; border-radius: .3rem; padding: .35rem .7rem; }
+.try-tabs { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; padding-top: .3rem; background: linear-gradient(#718096, #718096) bottom / 100% 1px no-repeat; }
+.try-tabs button { flex: none; white-space: nowrap; border-radius: .65rem .65rem 0 0; margin-right: .15rem; padding: .5rem .9rem; background: #edf0f4; color: #4a5568; }
+.try-tabs button:hover { background: #e2e8f0; }
+.try-tabs [role=tab][aria-selected=true] { background: #fff; color: #1a202c; border-bottom: 1px solid #fff; }
+.try-tabs :focus-visible { outline-offset: -3px; }
+.dark .try-tabs button { background: #252526; color: #c5c5c5; }
+.dark .try-tabs button:hover { background: #303033; }
+.dark .try-tabs [role=tab][aria-selected=true] { background: #1e1e1e; color: #fff; border-bottom-color: #1e1e1e; }
+#source-panel { border: 1px solid #718096; border-top: 0; }
+.try-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.try-me button:disabled { opacity: .5; }
+.try-me :focus-visible { outline: 3px solid #3182ce; outline-offset: 2px; }
+.try-panes { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 1rem; }
+.try-editor { height: 32rem; }
+.try-fallback { display: block; width: 100%; height: 32rem; border: 0; resize: vertical; background: #fff; color: #1a202c; font: 14px monospace; }
+.dark .try-fallback { background: #1e1e1e; color: #fff; }
+.try-output { height: 32rem; overflow: auto; border: 1px solid #718096; border-top: 0; background: #fff; }
+.dark .try-output { background: #1e1e1e; }
+.try-output pre { margin: 0; padding: .5rem; min-width: max-content; font: 13px/1.6 monospace; }
+.try-output .try-failure { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.try-failure-error { color: #c62828; }
+.try-failure-comment { color: #287a3a; }
+.dark .try-failure-error { color: #ff6b6b; }
+.dark .try-failure-comment { color: #6a9955; }
+.try-row { display: block; white-space: pre; min-height: 1.6em; }
+.try-row:focus, .try-row:hover, .try-row.selected { background: #3182ce33; }
+.try-row mark { background: transparent; color: #2675b5; font-weight: bold; }
+.try-output[hidden], .try-editor[hidden], .try-fallback[hidden] { display: none; }
+.try-highlight { background: #3182ce33; }
+.try-count { font-weight: bold; text-shadow: -1px 0 #333, 1px 0 #333, 0 -1px #333, 0 1px #333; }
+.try-count-error { color: #ff4d4d; }
+.try-count-warning { color: #ffdf00; }
+.try-count-info { color: #fff; }
+.try-diagnostics { padding: .5rem; overflow-wrap: anywhere; font: 13px/1.6 monospace; }
+.try-message { display: block; white-space: pre-wrap; }
+.try-message[role=link] { cursor: pointer; }
+.try-message[role=link]:hover, .try-message[role=link]:focus { background: #3182ce33; }
+.try-status { min-height: 1.5rem; }
+.try-status:empty { display: none; }
+.try-load-dialog { margin: auto; width: min(36rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; padding: 1.25rem; border: 1px solid #718096; border-radius: .5rem; color: inherit; background: #fff; }
+.dark .try-load-dialog { background: #171717; }
+.try-load-dialog::backdrop { background: #0008; }
+.try-load-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.try-load-dialog h2 { font-size: 1.25rem; font-weight: bold; }
+.try-load-dialog h3 { margin: 1rem 0 .5rem; font-weight: bold; }
+.try-load-list, .try-save-form { display: grid; gap: .5rem; }
+.try-load-list button { text-align: left; overflow-wrap: anywhere; }
+.try-save-form { margin: 1rem 0; }
+.try-save-form input { min-width: 0; padding: .35rem .7rem; border: 1px solid #718096; border-radius: .3rem; background: transparent; }
+@media (max-width: 850px) { .try-panes { grid-template-columns: minmax(0,1fr); } }
