@@ -175,9 +175,11 @@ export class TokenStream implements Tokens.Source {
     // path so that two "header.inc" files in different dirs have the correct path.
     const resolved = joinDir(base, path);
     // Nested includes resolve relative to this file's own directory.
-    this.enter(new Tokenizer(code, resolved, this.opts, this.sourceContents,
-                             this.errorCollector),
-               joinDir(base, dirOf(path)));
+    const tokenizer = new Tokenizer(code, resolved, this.opts, this.sourceContents,
+                                    this.errorCollector);
+    const source = this.opts?.generateDebugInfo ? {next: () => tokenizer.next()?.map(t =>
+      t.source ? {...t, source: {...t.source, include: at?.source}} : t)} : tokenizer;
+    this.enter(source, joinDir(base, dirOf(path)));
   }
 
   /** Pushes one of the built-in macro packages onto the stack. */

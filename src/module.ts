@@ -6,6 +6,7 @@ import type { SourceInfo } from './token.ts';
 import type { AssemblerOptions, SymbolDefine } from './options.ts';
 import type { AssemblyAction } from './libassembler.ts';
 import type { SourceLog } from './tokenstream.ts';
+import type { ListingRecord } from './listing.ts';
 
 
 // export interface Substitution {
@@ -209,7 +210,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 6;
+export const MODULE_FORMAT_VERSION = 7;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {
@@ -372,6 +373,7 @@ export interface DebugCSym {
 
 /** Tables that the `.dbg` writer needs. Present only with debug info on. */
 export interface Debug {
+  listing?: ListingRecord[];
   files: DebugFile[];
   lines: DebugLine[];
   /** Each entry lists the `lines` that share a run of bytes. */

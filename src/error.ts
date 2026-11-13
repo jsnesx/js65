@@ -8,6 +8,7 @@ export interface SourceInfo {
   column: number;
   /** macro-expansion / include stack */
   parent?: SourceInfo;
+  include?: SourceInfo;
   // Added for the LSP, so its only used in server mode for now.
   endLine?: number;
   endColumn?: number;

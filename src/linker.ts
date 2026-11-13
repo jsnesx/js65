@@ -18,6 +18,8 @@ import { Tokenizer } from './tokenizer.ts';
 import { TokenStream, SourceContents } from './tokenstream.ts';
 import { type LinkerOptions } from './options.ts';
 import { IntervalSet, SparseByteArray, binaryInsert, lowerBound } from './util.ts';
+import {writeListing, type ListingArtifact, type ListingModule,
+        type ListingPlacement} from './listing.ts';
 
 export type { LinkerOptions as Options };
 
@@ -130,6 +132,10 @@ export class Linker {
   /** ld65 `--dbgfile` text. Only meaningful after `link()`. */
   dbgFile(outputName: string): string {
     return writeDbg(this._link.dbgLink(outputName));
+  }
+
+  listing(mainImage?: Uint8Array): ListingArtifact {
+    return this._link.listing(mainImage);
   }
 
   outputFiles(): Array<{name: string, data: Uint8Array}> {
@@ -2848,6 +2854,51 @@ class Link {
              hex(this.segmentAlign.get(name) ?? 1, 5)}  ${offs}  ${file}\n`;
     }
     return out + '\n';
+  }
+
+  listing(mainImage?: Uint8Array): ListingArtifact {
+    const debug = this.dbgLink('%O');
+    const bytes = (s: LinkSegment, offset: number, size: number) => {
+      const at = offset - this.fileBase(s.out || '%O');
+      if (mainImage && (!s.out || s.out === '%O')) {
+        if (at + size > mainImage.length) {
+          throw new Error(`Cannot generate listing: postprocessing truncated segment ${s.name}`);
+        }
+        return mainImage.slice(at, at + size);
+      }
+      return Uint8Array.from({length: size}, (_, k) => this.output(s.out).get(at + k) ?? 0);
+    };
+    const modules: ListingModule[] = debug.modules.map(({module, pieces}) => ({module,
+      chunks: pieces.map(chunk => chunk.map(p => {
+        const segment = debug.segments[p.seg];
+        const s = this.segments.get(segment.name)!;
+        return {start: p.start, size: p.size, address: segment.start + p.segStart,
+          segment: segment.name, bank: s.bank, output: segment.oname,
+          fileOffset: segment.ooffs == null ? undefined : segment.ooffs + p.segStart,
+          bytes: s.isRam ? new Uint8Array(p.size) :
+              bytes(s, s.offset + p.segStart, p.size), reservation: s.isRam};
+      }))}));
+    const placed = debug.modules.flatMap(m => m.pieces.flat());
+    const synthetic: ListingPlacement[] = [];
+    for (const s of this.segments.values()) {
+      if (s.isRam) continue;
+      const id = debug.segments.findIndex(segment => segment.name === s.name);
+      const ranges = placed.filter(p => p.seg === id).map(p =>
+          [s.offset + p.segStart, s.offset + p.segStart + p.size] as const)
+          .sort((a, b) => a[0] - b[0]);
+      let at = s.offset;
+      const end = s.fill != null ? s.offset + s.size :
+          Math.max(at, ...ranges.map(r => r[1]));
+      for (const [start, stop] of [...ranges, [end, end]]) {
+        if (start > at) synthetic.push({start: 0, size: start - at,
+          address: at - s.delta, segment: s.name, bank: s.bank,
+          output: s.out || '%O', fileOffset: at - this.fileBase(s.out || '%O'),
+          bytes: bytes(s, at, start - at),
+          reservation: s.fill == null});
+        at = Math.max(at, stop);
+      }
+    }
+    return writeListing(modules, true, synthetic);
   }
 
   /** Generates the full context for the dbg writer */

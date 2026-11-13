@@ -4,7 +4,10 @@ import type { Expr } from '../expr.ts';
 import * as mod from '../module.ts';
 import type { ErrorCollector } from '../error.ts';
 import type { Token } from '../token.ts';
-import type * as Tokens from '../token.ts';
+import * as Tokens from '../token.ts';
+import type {Cpu} from '../cpu.ts';
+import type {ListingRecord} from '../listing.ts';
+import type {AssemblyAction} from '../libassembler.ts';
 import { DATA_ELEMENTS, DebugBuilder, type ExtLine, arrayType } from './debugtables.ts';
 import { SIZE_NAME, SIZE_SUFFIX, type Scope, type Symbol, isSizeOfSymbol } from './scope.ts';
 import type { GlobalKind } from './globals.ts';
@@ -29,6 +32,32 @@ function deepestSource(tokens: Token[]): Tokens.SourceInfo|undefined {
   return best;
 }
 
+function formatAction(action: AssemblyAction): string {
+  const value = (v: number|string|Expr): string => {
+    if (typeof v === 'number') return `$${v.toString(16)}`;
+    if (typeof v === 'string') return JSON.stringify(v);
+    if (v.op === 'num') return value(v.num!);
+    if (v.op === 'sym') return v.sym!;
+    return `<${v.op}>`;
+  };
+  switch (action.action) {
+    case 'label': return `${action.label}:`;
+    case 'byte': return `.byte ${action.bytes.map(value).join(', ')}`;
+    case 'word': return `.word ${action.words.map(value).join(', ')}`;
+    case 'hibytes': case 'lobytes': case 'literal':
+      return `.${action.action} ${action.values.map(value).join(', ')}`;
+    case 'org': return `.org ${value(action.addr)}`;
+    case 'segment': return `.segment ${[action.name].flat().map(value).join(', ')}`;
+    case 'res': return `.res ${action.count}${action.value == null ? '' : ', ' + value(action.value)}`;
+    case 'align': return `.align ${action.boundary}${action.fill == null ? '' : ', ' + value(action.fill)}`;
+    case 'assign': case 'set': return `${action.name} ${action.action === 'set' ? '.set' : '='} ${action.value}`;
+    case 'export': return `.export ${action.name}`;
+    case 'exportzp': case 'import': case 'importzp': case 'global': case 'globalzp':
+      return `.${action.action} ${action.names.join(', ')}`;
+    default: return `.${action.action}`;
+  }
+}
+
 /** A `.dbg func` or `.dbg sym`, kept until the module ends. */
 export interface PendingCSym {
   name: string;
@@ -46,9 +75,14 @@ export interface EmitMark {
   chunk?: mod.ChunkNum;
   length: number;
   chunks: number;
+  chunkIndex?: number;
+  listing?: ListingRecord;
+  generation: number;
+  source?: Tokens.SourceInfo;
 }
 
 export interface DebugHost {
+  segments(): readonly string[];
   lookupSymbol(name: string): Symbol|undefined;
   resolve(expr: Expr): Expr;
   isZeropageGlobal(name: string): boolean;
@@ -56,8 +90,12 @@ export interface DebugHost {
   readonly errorCollector: ErrorCollector;
 }
 
-/** Debug-only state of one module, for the `.dbg` and MLB writers. */
+/** Shared source and emission tracking for debug outputs and listings. */
 export class AssemblyDebug {
+  private readonly listing: ListingRecord[] = [];
+  private currentListing?: ListingRecord;
+  private alignmentListing?: ListingRecord;
+  private generation = 0;
   readonly tables = new DebugBuilder();
   /** The current statement's source with the deepest macro chain. */
   source?: Tokens.SourceInfo;
@@ -97,10 +135,32 @@ export class AssemblyDebug {
 
   startLine(tokens: Token[]) {
     this.source = deepestSource(tokens);
+    const last = tokens[tokens.length - 1]?.source;
+    const source = this.source && {...this.source,
+      endLine: last?.endLine, endColumn: last?.endColumn};
+    const text = Tokens.str(tokens[0]) === '.bytestr' ? '.bytestr <binary data>' :
+        Tokens.format(tokens);
+    this.startStatement(text, source);
+  }
+
+  startAction(action: AssemblyAction, source?: Tokens.SourceInfo) {
+    this.startStatement(formatAction(action), source);
+  }
+
+  startStatement(text: string, source?: Tokens.SourceInfo) {
+    this.source = source;
+    const record: ListingRecord = {text, source, kind: /^\.res\b/.test(text) ?
+      'reservation' : 'source', segments: [...this.host.segments()], spans: []};
+    this.listing.push(record);
+    this.currentListing = record;
   }
 
   /** Keeps a line record for a line ca65 holds on to, such as a conditional. */
-  noteLine(src?: Tokens.SourceInfo) {
+  noteLine(src?: Tokens.SourceInfo, tokens?: Token[]) {
+    if (tokens) {
+      this.startStatement(Tokens.format(tokens), src);
+      return;
+    }
     if (src) this.tables.lineChain(src);
   }
 
@@ -108,28 +168,74 @@ export class AssemblyDebug {
     this.dataElement = DATA_ELEMENTS.get(name);
   }
 
-  markEmitted(chunk: mod.ChunkNum|undefined, chunks: number): EmitMark {
+  markEmitted(chunk: mod.ChunkNum|undefined, chunks: number, chunkIndex?: number): EmitMark {
     this.dataElement = undefined;
     this.emittedCode = false;
-    return {chunk, length: chunk?.data.length ?? 0, chunks};
+    return {chunk, length: chunk?.data.length ?? 0, chunks, chunkIndex,
+      listing: this.currentListing, generation: this.generation, source: this.source};
+  }
+
+  instruction(cpu: Cpu, op: number) {
+    this.emittedCode = true;
+    const instruction = this.currentListing && cpu.disasm(op);
+    if (instruction && this.currentListing) {
+      this.currentListing.kind = 'instruction';
+      this.currentListing.instruction = {mnemonic: instruction[0], mode: instruction[1]};
+    }
+  }
+
+  deferAlignment() {
+    this.alignmentListing = this.currentListing;
+  }
+
+  clearAlignment() {
+    this.alignmentListing = undefined;
+  }
+
+  recordPadding(chunk: mod.ChunkNum, chunkIndex: number, start: number, size: number,
+                src: Tokens.SourceInfo|undefined, scope: Scope) {
+    this.recordSpan(chunk, chunkIndex, start, size, this.alignmentListing?.source ?? src, scope,
+                    mod.DEBUG_RUN_UNTYPED, this.alignmentListing);
+    this.clearAlignment();
   }
 
   /** Attributes the bytes a statement emitted to its source lines. */
   recordRun(before: EmitMark, chunk: mod.ChunkNum|undefined, chunkIndex: number,
             src: Tokens.SourceInfo|undefined, scope: Scope) {
-    if (!chunk || !src) return;
+    this.source = before.source;
+    this.currentListing = before.listing;
+    const record = before.listing;
+    if (record) {
+      const anchor = before.chunk ? {chunk: before.chunkIndex!, offset: before.length} :
+          chunk ? {chunk: chunkIndex, offset: 0} : undefined;
+      if (!/^\.(org|segment|reloc)\b/.test(record.text)) record.anchor = anchor;
+      record.segments = [...this.host.segments()];
+    }
+    if (!chunk || (!src && !record) || before.generation !== this.generation) return;
     // A chunk that already existed and was not current before is a `.popseg`.
     if (chunk !== before.chunk && chunkIndex < before.chunks) return;
     const start = chunk === before.chunk ? before.length : 0;
     const size = chunk.data.length - start;
     if (size <= 0) return;
-    const dbg = this.tables;
     const elem = this.dataElement;
     const type = elem && size % elem.size === 0 ?
-        dbg.typeId(arrayType(size / elem.size, elem.type)) :
+        this.tables.typeId(arrayType(size / elem.size, elem.type)) :
         this.emittedCode ? mod.DEBUG_RUN_CODE : mod.DEBUG_RUN_UNTYPED;
+    this.recordSpan(chunk, chunkIndex, start, size, before.source ?? src, scope, type, record);
+  }
+
+  private recordSpan(chunk: mod.ChunkNum, chunkIndex: number, start: number, size: number,
+                     src: Tokens.SourceInfo|undefined, scope: Scope, type: number,
+                     listing?: ListingRecord) {
+    if (!size) return;
     if (start === 0 && !chunk.source) chunk.source = src;
-    dbg.addRun(chunk, start, size, dbg.lineSet(this.source ?? src), type);
+    const run = chunk.debugRuns?.length ?? 0;
+    this.tables.addRun(chunk, start, size, this.tables.lineSet(src), type);
+    this.generation++;
+    if (listing) {
+      if (listing.kind === 'source') listing.kind = 'data';
+      listing.spans.push({chunk: chunkIndex, run});
+    }
     const runs = scope.debugRuns ??= [];
     const last = runs[runs.length - 1];
     if (last && last[0] === chunkIndex && last[1] + last[2] === start) {
@@ -378,9 +484,10 @@ export class AssemblyDebug {
 
     const files = dbg.files, lines = dbg.lines, lineSets = dbg.lineSets, types = dbg.types;
     if (!this.debugSyms) {
-      return {files, lines, lineSets, types, scopes: [], syms: [], hll: [], lineOnly: true};
+      return {files, lines, lineSets, types, scopes: [], syms: [], hll: [], lineOnly: true,
+        listing: this.listing};
     }
-    return {files, lines, lineSets, types, scopes, syms, hll};
+    return {files, lines, lineSets, types, scopes, syms, hll, listing: this.listing};
   }
 
   private findAnySymbol(c: PendingCSym): Symbol|undefined {

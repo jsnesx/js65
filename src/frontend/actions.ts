@@ -24,6 +24,7 @@ export function runActions(asm: Assembler, actions: readonly AssemblyAction[],
                            runCode?: CodeRunner): void {
   for (const action of actions) {
     asm.setSource(toSourceInfo(action.source));
+    const before = action.action === 'code' ? undefined : asm.startAction(action);
 
     switch (action.action) {
       case 'code':
@@ -140,5 +141,6 @@ export function runActions(asm: Assembler, actions: readonly AssemblyAction[],
       default:
         console.warn(`Unknown action type:`, action);
     }
+    asm.endAction(before);
   }
 }

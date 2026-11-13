@@ -17,6 +17,7 @@ export const STDOUT = '//stdout';
 
 /** Where one build's artifacts go. An absent sidecar is simply not written. */
 export interface OutputPaths {
+  listing?: string;
   outfile: string;
   dbgfile?: string;
   mlbfile?: string;
@@ -144,6 +145,10 @@ export class BuildSession {
     }
 
     const dbg = findOutput(result, 'debug');
+    const listing = findOutput(result, 'listing');
+    if (paths.listing && listing) {
+      await this.callbacks.fsWriteBytes('', paths.listing, listing.data);
+    }
     if (paths.dbgfile && dbg) {
       await this.callbacks.fsWriteBytes("", paths.dbgfile, dbg.data);
     }
@@ -187,6 +192,7 @@ export class BuildSession {
  * the CLI checks before it gets here.
  */
 export interface BuildOverrides {
+  listing?: string;
   /** Appended to the project's own `.include` search path. */
   includePaths?: string[];
   /** Appended to the project's own `.incbin` search path. */
@@ -317,6 +323,7 @@ export class Builder {
         dbgfile: overrides.dbgfile ?? project.dbgfile,
         mlbfile: overrides.mlbfile ?? project.mlbfile,
         mapfile: overrides.mapfile ?? project.mapfile,
+        listing: overrides.listing ?? project.listing,
         depfile: overrides.depfile,
       });
       return {name: project.name, success: true, outfile, bytes, errors, warnings};
@@ -373,6 +380,7 @@ export async function projectOptions(
     generateDebugInfo: debugLevel >= 0,
     generateMapFile: Boolean(overrides.mapfile ?? project.mapfile),
     generateDbgFile: Boolean(overrides.dbgfile ?? project.dbgfile),
+    generateListingFile: Boolean(overrides.listing ?? project.listing),
     lint: mergeLint(config.lint, overrides.lint),
     lto: overrides.lto,
   };

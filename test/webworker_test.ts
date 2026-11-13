@@ -603,6 +603,20 @@ describe('file cache', function() {
 });
 
 describe('spawned worker', function() {
+  it('returns the same listing and companion index as the library', async () => {
+    const {client} = spawnWorker();
+    try {
+      const inputs = [source('.org $600\nstart: lda #7\nbne start\n')];
+      const options = {target: 'sim', generateListingFile: true, generateListingIndex: true};
+      const direct = compile(inputs, options);
+      const remote = await client.compile({request: JSON.stringify({inputs, options})});
+      expect(remote.success).toBe(true);
+      expect(remote.outputs.filter(o => o.type.startsWith('listing')))
+          .toEqual(direct.outputs.filter(o => o.type.startsWith('listing')));
+    } finally {
+      await client.terminate();
+    }
+  });
   it('compiles a multi-directory include chain to the same bytes as in-process', async function() {
     const {client} = spawnWorker();
     try {

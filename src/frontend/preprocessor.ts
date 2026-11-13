@@ -892,6 +892,7 @@ export class Preprocessor {
     if (first.token !== 'cs') throw new Error(`impossible`);
     const handler = this.runDirectives[first.str];
     if (!handler) return false;
+    if (this.asm.opts.generateDebugInfo) this.asm.noteLine(first.source, line);
     handler(line);
     return true;
   }

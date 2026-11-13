@@ -38,6 +38,8 @@ import type { Expr } from './expr.ts';
 import { ErrorCollector, SourceError, type AssemblerMessage } from './error.ts';
 import type { InactiveRegionIndex, MacroIndex, SymbolIndex } from './lspindex.ts';
 import { gzipCodec } from './driver/codec/codec.ts';
+import {relativeListingModules, writeListing, type ListingArtifact} from './listing.ts';
+export type {ListingArtifact, ListingIndex, ListingRow, ListingRecord} from './listing.ts';
 
 // Re-export Assembler for direct programmatic use
 export { Assembler, Cpu, SourceContents, Base64 };
@@ -188,6 +190,8 @@ export type OutputFormat = 'binary' | 'ips' | 'object';
  * Each option matches with a similarly named CLI option, so check there for docs.
  */
 export interface Js65Options {
+  generateListingFile?: boolean;
+  generateListingIndex?: boolean;
   includePaths?: string[];
   binIncludePaths?: string[];
   generateDebugInfo?: boolean;
@@ -244,7 +248,8 @@ export interface Js65Request {
  *   - 'map'    : linker map (free space / placed chunks report)
  *   - 'mlb'    : Mesen MLB labels
  */
-export type OutputType = 'source' | 'binary' | 'object' | 'debug' | 'map' | 'mlb';
+export type OutputType = 'source' | 'binary' | 'object' | 'debug' | 'map' | 'mlb' |
+    'listing' | 'listing-index';
 
 /** One named output produced by a compile. */
 export interface OutputFile {
@@ -421,6 +426,7 @@ export function assemble(
 }
 
 export interface LinkResult {
+  listing?: () => ListingArtifact;
   /** Whether linking succeeded (no errors) */
   success: boolean;
   /** Binary output or IPS patch (empty if errors) */
@@ -498,6 +504,7 @@ export function link(
 
     // Generate output based on format
     let binaryData: Uint8Array;
+    let listingImage: Uint8Array|undefined;
     if (outputFormat === 'ips') {
       if (extraOutputs.length) {
         throw new Error(`Cannot write an IPS patch from a linker config with ${
@@ -517,6 +524,7 @@ export function link(
         const before = linker.romImage()?.slice() ?? new Uint8Array(out.length);
         out.apply(before);
         const after = jsPostprocess(posts, before, labelMap);
+        listingImage = after;
         if (after.length < before.length) {
           throw new Error(`rom was shrunk from ${before.length} to ${
                           after.length} bytes, but an IPS patch can only grow the ROM`);
@@ -529,6 +537,7 @@ export function link(
       const data = linker.romImage() ?? new Uint8Array(out.length);
       out.apply(data);
       binaryData = posts.length ? jsPostprocess(posts, data, labelMap) : data;
+      listingImage = binaryData;
     }
 
     const mapFile = options?.generateMapFile ? linker.report(true) : '';
@@ -539,6 +548,13 @@ export function link(
     const hasErrors = allMessages.some(m => m.level === 'error');
 
     return {
+      listing: hasErrors ? undefined : () => {
+        if (!listingImage) {
+          listingImage = linker.romImage()?.slice() ?? new Uint8Array(out.length);
+          out.apply(listingImage);
+        }
+        return linker.listing(listingImage);
+      },
       success: !hasErrors,
       data: binaryData,
       extraOutputs,
@@ -724,10 +740,13 @@ export function compile(
   let collected: AssemblerMessage[] = [];
   try {
     throwIfCancelled(signal);
+    if (options.generateListingIndex && !options.generateListingFile) {
+      throw new Error('generateListingIndex requires generateListingFile');
+    }
     const asmOpts: AssemblerOptions = {
       includePaths: options.includePaths,
       binIncludePaths: options.binIncludePaths,
-      generateDebugInfo: options.generateDebugInfo,
+      generateDebugInfo: options.generateDebugInfo || options.generateListingFile,
       defines: options.defines,
       features: options.features,
       allowJavascript: options.allowJavascript,
@@ -789,9 +808,12 @@ export function compile(
     if (outputFormat === 'object') {
       const outputs: OutputFile[] = asm.modules.map(m => ({
         name: `${m.name || 'module'}.o`,
-        data: serializeObjectFile(m, !!options.generateDebugInfo),
+        data: serializeObjectFile(m, !!(options.generateDebugInfo || options.generateListingFile)),
         type: 'object',
       }));
+      if (options.generateListingFile) {
+        appendListing(outputs, writeListing(relativeListingModules(asm.modules), false), options);
+      }
       return { success: true, outputs, messages: asm.messages };
     }
 
@@ -812,6 +834,7 @@ export function compile(
     if (lr.mapFile) {
       outputs.push({ name: 'out.map', data: new TextEncoder().encode(lr.mapFile), type: 'map' });
     }
+    if (options.generateListingFile && lr.listing) appendListing(outputs, lr.listing(), options);
     return {
       success: lr.success,
       outputs,
@@ -820,6 +843,13 @@ export function compile(
   } catch (err) {
     return failureFromException(err, collected);
   }
+}
+
+function appendListing(outputs: OutputFile[], listing: ListingArtifact, options: Js65Options) {
+  const encoder = new TextEncoder();
+  outputs.push({name: 'out.lst', type: 'listing', data: encoder.encode(listing.text)});
+  if (options.generateListingIndex) outputs.push({name: 'out.lst.json',
+    type: 'listing-index', data: encoder.encode(JSON.stringify(listing.index))});
 }
 
 /**

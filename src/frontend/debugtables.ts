@@ -95,8 +95,8 @@ export class DebugBuilder {
   }
 
   /** Builds out the macro call chain (or just all the lines that share the same source line) */
-  lineSet(src: SourceInfo): number {
-    return this.internSet(this.fullChain(src));
+  lineSet(src?: SourceInfo): number {
+    return this.internSet(src ? this.fullChain(src) : []);
   }
 
   /** The chain plus the `.dbg line` open at the time. */

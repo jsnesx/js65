@@ -283,11 +283,17 @@ describe('Builder', function() {
         'js65.json': JSON.stringify({outDir: 'out', projects: [{
           name: 'game', sources: ['src/a.s'], target: 'sim',
           output: 'game.prg', dbgfile: 'game.dbg', mlbfile: 'game.mlb', mapfile: 'game.map',
+          listing: 'game.lst',
         }]}),
         'src/a.s': 'lda #1\n',
       };
       expect((await runBuild(files)).files)
-          .toEqual(['out/game.dbg', 'out/game.map', 'out/game.mlb', 'out/game.prg']);
+          .toEqual(['out/game.dbg', 'out/game.lst', 'out/game.map', 'out/game.mlb', 'out/game.prg']);
+    });
+
+    it('allows a selected project listing path override', async function() {
+      const {written} = await runBuild(TWO_PROJECTS, ['game'], {listing: 'custom.lst'});
+      expect(new TextDecoder().decode(written.get('custom.lst'))).toContain('lda #$01');
     });
 
     it('passes includePaths and binIncludePaths to the assembler', async function() {

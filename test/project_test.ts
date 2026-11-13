@@ -10,6 +10,12 @@ function parse(config: unknown) {
 }
 
 describe('parseProject', function() {
+  it('resolves and validates the listing output path', () => {
+    expect(parse({outDir: 'out', projects: [{sources: ['main.s'], listing: 'code.lst'}]})
+        .projects[0].listing).toBe('/proj/out/code.lst');
+    expect(() => parse({projects: [{sources: ['main.s'], listing: true}]}))
+        .toThrow(/listing/);
+  });
   it('resolves paths against the project file, not the cwd', function() {
     const config = parse({projects: [{
       name: 'game',

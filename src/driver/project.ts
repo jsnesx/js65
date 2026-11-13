@@ -22,6 +22,7 @@ const LINT_LEVELS: readonly LintLevel[] = ['off', 'info', 'warning'];
 
 /** One independently-assembled program, as declared in `js65.json`'s `projects`. */
 export interface Js65Project {
+  listing?: string;
   /** Human-readable name, and the default stem of every output file. */
   name: string;
   /**
@@ -87,7 +88,7 @@ const CONFIG_KEYS = ['$schema', 'outDir', 'projects', 'lint'];
 const PROJECT_KEYS = [
   'name', 'sources', 'includePaths', 'binIncludePaths', 'linkerConfig', 'target',
   'output', 'dbgfile', 'mlbfile', 'mapfile', 'format', 'baseRom', 'defines', 'features', 'debug',
-  'allowJavascript',
+  'allowJavascript', 'listing',
 ];
 
 /**
@@ -151,6 +152,7 @@ function parseOne(
   const dbgfile = optString(fail, p.dbgfile, `${where}.dbgfile`);
   const mlbfile = optString(fail, p.mlbfile, `${where}.mlbfile`);
   const mapfile = optString(fail, p.mapfile, `${where}.mapfile`);
+  const listing = optString(fail, p.listing, `${where}.listing`);
   const baseRom = optString(fail, p.baseRom, `${where}.baseRom`);
   const target = optString(fail, p.target, `${where}.target`);
   const debug = p.debug === undefined ? undefined :
@@ -174,6 +176,7 @@ function parseOne(
     dbgfile: dbgfile && resolveProjectPath(outDir, dbgfile),
     mlbfile: mlbfile && resolveProjectPath(outDir, mlbfile),
     mapfile: mapfile && resolveProjectPath(outDir, mapfile),
+    listing: listing && resolveProjectPath(outDir, listing),
     format: format as OutputFormat,
     baseRom: baseRom && resolveProjectPath(rootDir, baseRom),
     defines: parseDefines(fail, p.defines, `${where}.defines`),

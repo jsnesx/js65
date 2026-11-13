@@ -17,6 +17,8 @@ import type { NullTok, NullaryToken, NumberToken, SourceInfo, StringTok, StringT
 import type { ActionSource, AssemblyAction, AssemblyInput, Js65Options, Js65Request, OutputFormat } from './libassembler.ts';
 import type { AssemblerOptions, SymbolDefine } from './options.ts';
 import type { ResolvedFile, SourceLog } from './tokenstream.ts';
+import type {ListingRecord, ListingKind} from './listing.ts';
+import {Cpu} from './cpu.ts';
 
 /** The keys of `T` whose value is an optional boolean. */
 type BooleanKeys<T> =
@@ -75,6 +77,11 @@ function validateSourceInfo(v: unknown, path: string): SourceInfo {
   const ident = optString(v.ident, `${path}.ident`);
   if (ident !== undefined) out.ident = ident;
   if (v.parent !== undefined) out.parent = validateSourceInfo(v.parent, `${path}.parent`);
+  if (v.include !== undefined) out.include = validateSourceInfo(v.include, `${path}.include`);
+  if (v.repeatEnd !== undefined) out.repeatEnd = validateSourceInfo(v.repeatEnd, `${path}.repeatEnd`);
+  for (const key of ['endLine', 'endColumn', 'repeat'] as const) {
+    if (v[key] !== undefined) out[key] = reqOffset(v[key], `${path}.${key}`);
+  }
   return out;
 }
 
@@ -650,6 +657,46 @@ export function parseModule(obj: unknown): Validated<Module> {
     if (obj.jsPost !== undefined) {
       out.jsPost = validateJsPost(obj.jsPost, 'module.jsPost');
     }
+    const listing = isObject(obj.debug) ? obj.debug.listing : undefined;
+    if (listing !== undefined) {
+      out.debug!.listing = reqArray(listing, 'module.debug.listing').map((v, i): ListingRecord => {
+        const path = `module.debug.listing[${i}]`;
+        if (!isObject(v)) fail(path, 'expected object');
+        const kind = reqString(v.kind, `${path}.kind`);
+        if (!['source', 'instruction', 'data', 'reservation'].includes(kind)) {
+          fail(`${path}.kind`, 'invalid listing kind');
+        }
+        const position = (p: unknown, at: string) => {
+          if (!isObject(p)) fail(at, 'expected object');
+          const chunk = reqIndex(p.chunk, out.chunks?.length ?? 0, `${at}.chunk`);
+          const offset = reqOffset(p.offset, `${at}.offset`);
+          if (offset > out.chunks![chunk].data.length) fail(at, 'offset outside chunk');
+          return {chunk, offset};
+        };
+        const record: ListingRecord = {text: reqString(v.text, `${path}.text`),
+          kind: kind as ListingKind,
+          segments: reqArray(v.segments, `${path}.segments`).map((s, j) =>
+              reqString(s, `${path}.segments[${j}]`)),
+          spans: reqArray(v.spans, `${path}.spans`).map((s, j) => {
+            const at = `${path}.spans[${j}]`;
+            if (!isObject(s)) fail(at, 'expected object');
+            const chunk = reqIndex(s.chunk, out.chunks?.length ?? 0, `${at}.chunk`);
+            const run = reqIndex(s.run, out.chunks![chunk].debugRuns?.length ?? 0, `${at}.run`);
+            return {chunk, run};
+          })};
+        if (v.source !== undefined) record.source = validateSourceInfo(v.source, `${path}.source`);
+        if (v.anchor !== undefined) record.anchor = position(v.anchor, `${path}.anchor`);
+        if (v.instruction !== undefined) {
+          if (kind !== 'instruction') fail(path, 'instruction metadata on a non-instruction');
+          if (!isObject(v.instruction)) fail(`${path}.instruction`, 'expected object');
+          const mnemonic = reqString(v.instruction.mnemonic, `${path}.instruction.mnemonic`);
+          const mode = reqString(v.instruction.mode, `${path}.instruction.mode`);
+          if (!Object.hasOwn(Cpu.P02.op(mnemonic) ?? {}, mode)) fail(path, 'invalid instruction');
+          record.instruction = {mnemonic, mode: mode as NonNullable<ListingRecord['instruction']>['mode']};
+        }
+        return record;
+      });
+    }
     return { ok: true, value: out };
   } catch (err) {
     if (err instanceof ValidationError) return { ok: false, error: err.message };
@@ -895,6 +942,11 @@ function validateOptions(v: unknown, path: string): Js65Options {
   flag('pcAssignment');
   flag('forceRange');
   flag('generateDbgFile');
+  flag('generateListingFile');
+  flag('generateListingIndex');
+  if (out.generateListingIndex && !out.generateListingFile) {
+    fail(path, 'generateListingIndex requires generateListingFile');
+  }
   const outputName = optString(v.outputName, `${path}.outputName`);
   if (outputName !== undefined) out.outputName = outputName;
   const generateDebugInfo = optBoolean(v.generateDebugInfo, `${path}.generateDebugInfo`);

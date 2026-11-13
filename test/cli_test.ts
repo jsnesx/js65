@@ -53,6 +53,33 @@ describe('CLI', function() {
     });
   });
 
+  describe('listing file', function() {
+    it('writes the requested path with either spelling', async function() {
+      for (const flag of ['-l', '--listing']) {
+        const files = await makeFiles(
+            ['--target', 'sim', '--stdin', flag, 'custom.lst'], 'lda #3');
+        expect(new TextDecoder().decode(files.get('custom.lst'))).toContain('A9 03');
+      }
+    });
+
+    it('supports compile-only unresolved listings', async function() {
+      const files = await makeFiles(['--stdin', '-c', '-l', 'relative.lst'],
+                                   '.import addr\nlda addr');
+      expect(new TextDecoder().decode(files.get('relative.lst'))).toContain('AD ?? ??');
+    });
+
+    it('rejects missing and duplicate paths', async function() {
+      await expect(makeFiles(['--stdin', '-l'], 'nop')).rejects.toThrow();
+      await expect(makeFiles(['--stdin', '-l', 'a.lst', '--listing', 'b.lst'], 'nop'))
+          .rejects.toThrow();
+    });
+
+    it('does not write listing output after a failure', async function() {
+      await expect(makeFiles(['--stdin', '-l', 'bad.lst'], 'unknown_opcode'))
+          .rejects.toThrow();
+    });
+  });
+
   describe('linker config', function() {
     const cli = new Cli({
       fsReadString: () => '',

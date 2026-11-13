@@ -16,6 +16,7 @@ import { applyFeature, UnknownFeatureError, UnsupportedFeatureError,
          type AssemblerOptions } from '../options.ts';
 import type { LinkTimeEnv } from '../assemblypass.ts';
 import { runActions } from './actions.ts';
+import type { AssemblyAction } from '../libassembler.ts';
 import { IntervalSet, MaxKeySizeCacheMap } from '../util.ts';
 import { CheapScope, RE_SCOPE_SPLIT, SIZE_NAME, SIZE_SUFFIX, Scope, type Symbol,
          firstRef, isSizeOfSymbol, parseSymbol } from './scope.ts';
@@ -23,7 +24,7 @@ import { CharMap, type CharMapping, writeString } from './charmap.ts';
 import { LocalLabels } from './locallabels.ts';
 import { SegmentParser } from './segmentparser.ts';
 import { GlobalTable, type GlobalKind } from './globals.ts';
-import { AssemblyDebug, type PendingCSym, chainDepth } from './asmdebug.ts';
+import { AssemblyDebug, type EmitMark, type PendingCSym, chainDepth } from './asmdebug.ts';
 
 // These used to be declared here; keep them exported from this module so
 // existing importers (including tests) don't have to change.
@@ -263,6 +264,7 @@ export class Assembler {
     }
     if (opts.generateDebugInfo) {
       this.dbg = new AssemblyDebug(opts.moduleName, {
+        segments: () => this.segments,
         lookupSymbol: name => this.lookupSymbol(name),
         resolve: expr => this.resolve(expr),
         isZeropageGlobal: name => this.globals.isZeropage(name),
@@ -319,6 +321,7 @@ export class Assembler {
         this._pendingAlign = undefined;
         this._pendingFill = undefined;
         this._alignChunk = undefined;
+        this.dbg?.clearAlignment();
       }
       this._chunk.overwrite = this.overwriteMode;
 
@@ -368,8 +371,8 @@ export class Assembler {
    * if we do math on it later, we can substitute the label again.
    */
   /** Keeps a line record for a line ca65 holds on to, such as a conditional. */
-  noteLine(src?: Tokens.SourceInfo) {
-    this.dbg?.noteLine(src);
+  noteLine(src?: Tokens.SourceInfo, tokens?: Token[]) {
+    this.dbg?.noteLine(src, tokens);
   }
 
   /** ca65 counts every symbol in a conditional as a ref, even forward ones. */
@@ -972,17 +975,33 @@ export class Assembler {
     return out;
   }
 
+  startAction(action: AssemblyAction): EmitMark|undefined {
+    this.dbg?.startAction(action, this._source);
+    const before = this.dbg?.markEmitted(this._chunk, this.chunks.length, this._chunkIndex);
+    this.dbg?.directive(`.${action.action}`);
+    return before;
+  }
+
+  endAction(before?: EmitMark) {
+    if (before) {
+      this.dbg!.recordRun(before, this._chunk, this._chunkIndex, this._source, this.currentScope);
+    }
+  }
+
   // Assemble from a list of tokens
   line(tokens: Token[]) {
     this.dbg?.startLine(tokens);
+    const before = this.dbg?.markEmitted(this._chunk, this.chunks.length, this._chunkIndex);
     if (Tokens.eq(tokens[1], Tokens.ASSIGN) ||
         Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL) ||
         Tokens.eq(tokens[1], Tokens.SET)) {
       this.assignment(tokens);
+      if (before) {
+        this.dbg!.recordRun(before, this._chunk, this._chunkIndex, tokens[0].source, this.currentScope);
+      }
       return;
     }
     this._source = tokens[0].source;
-    const before = this.dbg?.markEmitted(this._chunk, this.chunks.length);
     const isLabel =
         tokens.length < 3 && Tokens.eq(tokens[tokens.length - 1], Tokens.COLON) &&
         !(tokens[0].token === 'ident' && this.isMnemonic(tokens[0].str) &&
@@ -1003,6 +1022,7 @@ export class Assembler {
     } catch (err) {
       this.recoverLine(err);
     } finally {
+      if (before) this.dbg!.source = before.source;
       if (!isLabel) this.closeLabelSpan();
     }
     if (before) {
@@ -1601,7 +1621,7 @@ export class Assembler {
     if (arglen) expr = this.resolve(expr); // BEFORE opcode (in case of *)
     const {chunk} = this;
     this.markWritten(1 + arglen);
-    if (this.dbg) this.dbg.emittedCode = true;
+    this.dbg?.instruction(this.cpu, op);
 
     chunk.data.push(op);
     if (arglen) {
@@ -1919,6 +1939,7 @@ export class Assembler {
     if (this._pendingAlign == null) this._alignChunk = this._chunk;
     this._pendingAlign = Math.max(this._pendingAlign ?? 1, boundary);
     this._pendingFill = fill ?? this._pendingFill;
+    this.dbg?.deferAlignment();
     this.clearChunk();
   }
 
@@ -1942,6 +1963,8 @@ export class Assembler {
     const pad = (boundary - (pc % boundary)) % boundary;
     if (chunk.org == null) chunk.align = Math.max(chunk.align ?? 1, boundary);
     for (let i = 0; i < pad; i++) chunk.data.push(fill ?? 0);
+    if (pad) this.dbg?.recordPadding(chunk, this.chunks.indexOf(chunk),
+        chunk.data.length - pad, pad, this._source, this.currentScope);
   }
 
   // CA65 compatible 1:1 character mapping. Given a single char byte or a byte literal,

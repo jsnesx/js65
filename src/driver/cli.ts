@@ -39,6 +39,7 @@ class Arguments {
   dbgfile = "";
   mlbfile = "";
   mapfile = "";
+  listing = "";
   cfgfile = "";
   depfile = "";
   projectFile = "";
@@ -94,6 +95,8 @@ const OPTIONS: Option[] = [
    apply: once(out => out.mlbfile, (out, v) => { out.mlbfile = v; })},
   {names: ['-m', '--mapfile'], arity: 1,
    apply: once(out => out.mapfile, (out, v) => { out.mapfile = v; })},
+  {names: ['-l', '--listing'], arity: 1,
+   apply: once(out => out.listing, (out, v) => { out.listing = v; })},
   {names: DEPFILE_FLAGS, arity: 1,
    apply: once(out => out.depfile, (out, v) => { out.depfile = v; })},
   {names: ['-C', '--config'], arity: 1,
@@ -193,7 +196,7 @@ const SUBCOMMANDS = new Map<string, (src: string, cpu: Cpu, prg: Uint8Array) => 
 const BUILD_OPTIONS = new Set([
   '-h', '-V', '-p', '-o', '--dbgfile', '--mlbfile', '-m', DEPFILE_FLAGS[0], '-I',
   '--bin-include-dir', '-D', '--feature', '--allow-javascript', '--no-lint', '-W',
-  '--no-lto',
+  '--no-lto', '-l',
 ]);
 
 /** The options `js65 init` takes. Scaffolding a folder needs almost nothing. */
@@ -314,6 +317,7 @@ export class Cli {
 
     if (args.mapfile) args.options.generateMapFile = true;
     if (args.dbgfile) args.options.generateDbgFile = true;
+    if (args.listing) args.options.generateListingFile = true;
 
     if (args.outfile == "--stdout" || (args.op && args.outfile.length === 0)) {
       args.outfile = Cli.STDOUT;
@@ -382,6 +386,7 @@ export class Cli {
         dbgfile: args.dbgfile,
         mlbfile: args.mlbfile,
         mapfile: args.mapfile,
+        listing: args.listing,
         depfile: args.depfile,
       });
     } catch (e) {
@@ -426,7 +431,7 @@ export class Cli {
     // These name one file each. Against several projects they would either be
     // meaningless or let one project clobber another's output, so say so instead.
     const single = ([['-o', args.outfile], ['--dbgfile', args.dbgfile], ['--mlbfile', args.mlbfile],
-                     ['-m', args.mapfile], [DEPFILE_FLAGS[0], args.depfile]] as const)
+                     ['-m', args.mapfile], ['-l', args.listing], [DEPFILE_FLAGS[0], args.depfile]] as const)
         .find(([, value]) => value);
     if (single && selected.length !== 1) {
       return this.buildUsage(8, [new Error(
@@ -446,6 +451,7 @@ export class Cli {
       dbgfile: args.dbgfile || undefined,
       mlbfile: args.mlbfile || undefined,
       mapfile: args.mapfile || undefined,
+      listing: args.listing || undefined,
       depfile: args.depfile || undefined,
     };
     const builder = new Builder(this.session, {
@@ -535,7 +541,7 @@ export class Cli {
       return this.usage(1, [new Error('rehydrate and dehydrate only allow one input')]);
     }
     const src = args.files[0] === Cli.STDIN
-        ? new TextDecoder().decode(await this.callbacks.fsReadStdin()).replace(/^﻿/, '')
+        ? new TextDecoder().decode(await this.callbacks.fsReadStdin()).replace(/^\uFEFF/, '')
         : this.callbacks.fsReadString("", args.files[0]);
     // if (err) this.usage(3, [err]);
     let fullRom: Uint8Array|undefined = undefined;
@@ -676,6 +682,7 @@ optional arguments:
                           own \`output\`. Only valid when one project is selected.
   --dbgfile FILE          Write a ld65 compatible .dbg file here, in place of the project's
                           \`dbgfile\`. Only valid when one project is selected.
+  -l FILE/--listing=FILE  Write a listing here, overriding the project's \`listing\`.
   --mlbfile FILE          Write Mesen MLB labels here, in place of the project's
                           \`mlbfile\`. Only valid when one project is selected.
   -m FILE/--mapfile=FILE  Write the linker map here, in place of the project's
@@ -776,6 +783,7 @@ optional arguments:
   -g                      Add debug info to the assembly that can be used at link time to produce debug symbols (Default ON)
   --no-debuginfo          Disable debug info generation.
   --dbgfile FILE          Output an ld65 .dbg debug file to the specified file. Cannot be used with --compileonly.
+  -l FILE/--listing=FILE  Output a listing file.
   --mlbfile FILE          Output Mesen MLB labels to the specified file.
   -m FILE/--mapfile=FILE  Output a linker map (free space / placed chunks) to the specified file. Cannot be used with --compileonly.
   --create-dep FILE       Write a make dependency file listing every source, \`.include\` and
