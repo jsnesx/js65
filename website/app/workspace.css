@@ -55,3 +55,11 @@ body:has(.try-page) { display: flex; flex-direction: column; min-height: 100dvh;
 .try-save-form { margin: 1rem 0; }
 .try-save-form input { min-width: 0; padding: .35rem .7rem; border: 1px solid #718096; border-radius: .3rem; background: transparent; }
 @media (max-width: 850px) { .try-panes { grid-template-columns: minmax(0,1fr); } }
+.try-debugger { margin-top: 1rem; border: 1px solid #718096; padding: .75rem; min-width: 0; }
+.try-debugger pre { font: 13px/1.6 monospace; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.try-inspection { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 25rem), 1fr)); gap: 1rem; }
+.try-toolbar input, .try-debugger input { max-width: 10rem; border: 1px solid #718096; padding: .2rem; background: transparent; }
+#display-content { padding: 1rem; }
+#screen { display: block; width: min(100%, 24rem); aspect-ratio: 1; image-rendering: pixelated; background: #000; }
+#screen[hidden] { display: none; }
+.try-breakpoint { background: #c62828; border-radius: 50%; margin-left: 4px; width: 10px !important; }

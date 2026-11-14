@@ -29,6 +29,10 @@
       "types": "./dist/src/worker/client.d.ts",
       "default": "./dist/src/worker/client.js"
     },
+    "./sim": {
+      "types": "./dist/src/sim/index.d.ts",
+      "default": "./dist/src/sim/index.js"
+    },
     "./preload-node": {
       "types": "./dist/src/driver/preload-node.d.ts",
       "default": "./dist/src/driver/preload-node.js"

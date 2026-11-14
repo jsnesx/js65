@@ -1,12 +1,14 @@
 <noscript>This workspace needs JavaScript. Use the js65 CLI to assemble offline.</noscript>
 <div id="try-me" data-assets="{{ "try-me-assets/" | relURL }}">
   <div class="try-toolbar">
-    <label>Target <select aria-label="Target"><option>js65-sim</option></select></label>
+    <label>Target <select id="target" aria-label="Target"><option value="sim">js65-sim</option></select></label>
     <button id="load" aria-haspopup="dialog" aria-controls="load-dialog">Load Project</button>
-    <button disabled title="Simulator arrives in stage 3">Run</button>
-    <button disabled title="Simulator arrives in stage 3">Reset</button>
-    <button disabled title="Simulator arrives in stage 3">Step Forward</button>
-    <button disabled title="Simulator arrives in stage 3">Step Back</button>
+    <button id="run" disabled>Run</button>
+    <button id="reset" disabled>Reset</button>
+    <button id="step" disabled>Step Forward</button>
+    <button id="back" disabled title="No retained history">Step Back</button>
+    <label>Speed <select id="speed"><option value="30">30 instructions/s</option><option value="1000">1,000 instructions/s</option><option value="10000" selected>10,000 instructions/s</option><option value="60000">60,000 instructions/s</option></select></label>
+    <label>Work budget <input id="budget" type="number" min="1" max="10000000" value="1000000"></label>
   </div>
   <dialog id="load-dialog" class="try-load-dialog" aria-labelledby="load-title">
     <div class="try-load-heading"><h2 id="load-title">Load Project</h2><button id="close-load" type="button" aria-label="Close load dialog">Close</button></div>
@@ -55,7 +57,10 @@
 <span class="try-failure-comment"># For more information see the output window</span></pre>
       </div>
       <div id="display" class="try-output" role="tabpanel" aria-labelledby="display-tab">
-        <p id="display-content">Not implemented yet!</p>
+        <div id="display-content">
+          <canvas id="screen" width="32" height="32" tabindex="0" aria-label="Simulator screen. Focus for keyboard input. Arrow keys use WASD." role="img"></canvas>
+          <p id="display-hint">Focus the screen for keyboard input. Arrow keys use WASD.</p>
+        </div>
         <pre class="try-failure" hidden><span class="try-failure-error">&lt;Compilation failed&gt;</span>
 
 <span class="try-failure-comment"># For more information see the output window</span></pre>
@@ -65,4 +70,20 @@
       </div>
     </section>
   </div>
+  <section id="debugger" class="try-debugger" aria-label="Processor and debugger">
+    <p id="runtime-status" role="status" aria-live="polite">Waiting for a successful build.</p>
+    <pre id="registers" aria-label="Processor registers"></pre>
+    <pre id="current-instruction" aria-label="Current instruction"></pre>
+    <div class="try-toolbar">
+      <button id="nmi" disabled>Pulse NMI</button>
+      <label><input id="irq" type="checkbox" disabled> Assert IRQ</label>
+      <button id="source-breakpoint" disabled>Toggle source breakpoint</button>
+      <form id="breakpoint-form"><label>Address breakpoint <input id="breakpoint-address" placeholder="0600" pattern="[0-9a-fA-F]{1,4}" required size="5"></label> <button>Toggle</button></form>
+    </div>
+    <p id="breakpoints">No breakpoints.</p>
+    <div class="try-inspection">
+      <div><label>Memory address (hex) <input id="memory-address" value="0200" pattern="[0-9a-fA-F]{1,4}" size="5"></label><pre id="memory" aria-label="Memory inspection"></pre></div>
+      <pre id="stack" aria-label="Stack inspection"></pre>
+    </div>
+  </section>
 </div>

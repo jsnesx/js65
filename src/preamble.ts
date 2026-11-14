@@ -84,5 +84,12 @@ export const NesNrom: Target = {
 
 export const Targets: Map<string|undefined, Target> = new Map([
   ['sim', Sim],
+  ['js65-sim', {segments: [
+    {name: 'ZEROPAGE', addressing: 1, size: 0x100, memory: 0},
+    {name: 'CODE', default: true, offset: 0, size: 0x10000, memory: 0,
+      free: [[0x0600, 0xfff8]]},
+    {name: 'RODATA', offset: 0, size: 0x10000, memory: 0},
+    {name: 'DATA', offset: 0, size: 0x10000, memory: 0},
+  ]}],
   ['nes-nrom', NesNrom],
 ]);

@@ -1,10 +1,11 @@
 import {Js65Worker} from '../../src/worker/client.ts';
 import {browserHostPort} from '../../src/worker/port.ts';
 import type {CompileResult} from '../../src/libassembler.ts';
+import {simulatorTarget, type TargetDescriptor} from './targets.ts';
 
 export interface BuildIdentity {
   workspaceVersion: number;
-  targetId: 'sim';
+  targetId: string;
   requestId: number;
 }
 
@@ -15,11 +16,12 @@ export class BuildService {
 
   constructor(private readonly url: URL, private readonly timeoutMs = 10000) {}
 
-  async build(files: Map<string, string>, workspaceVersion: number): Promise<{
+  async build(files: Map<string, string>, workspaceVersion: number,
+    target: TargetDescriptor = simulatorTarget): Promise<{
     identity: BuildIdentity; result: CompileResult;
   }> {
     this.cancel();
-    const identity: BuildIdentity = {workspaceVersion, targetId: 'sim',
+    const identity: BuildIdentity = {workspaceVersion, targetId: target.id,
       requestId: ++this.requestId};
     const worker = this.worker = new Worker(this.url, {type: 'module'});
     const client = this.client = new Js65Worker(browserHostPort(worker));
@@ -29,7 +31,7 @@ export class BuildService {
         client.compile({files, request: {
           inputs: [{type: 'source', name: '/workspace/main.s',
             code: files.get('/workspace/main.s') ?? ''}],
-          options: {target: 'sim', generateListingFile: true,
+          options: {target: target.compileTarget, generateListingFile: true,
             generateListingIndex: true, allowJavascript: false},
         }}),
         new Promise<never>((_, reject) => {

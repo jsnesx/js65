@@ -5,6 +5,10 @@ import {registerLanguage} from './language.ts';
 import {ListingView} from './listing-view.ts';
 import {setupLoadDialog} from './load-dialog.ts';
 import {samples} from './samples.ts';
+import {DebuggerView, sourceAddresses} from './debugger.ts';
+import {RuntimeClient} from './runtime-client.ts';
+import {targets, simulatorTarget, registerTarget, type TargetDescriptor} from './targets.ts';
+import {readDraft, saveDraft} from './draft.ts';
 import type {ListingIndex, ListingRow} from '../../src/listing.ts';
 import type {AssemblerMessage} from '../../src/error.ts';
 
@@ -14,7 +18,7 @@ const assets = new URL(root.dataset.assets!, location.href);
   getWorker: () => new Worker(new URL('editor-worker.js', assets), {type: 'module'}),
 };
 const language = registerLanguage(monaco);
-const models = new Map([...samples[0].files].map(([file, text]) =>
+const models = new Map([...readDraft(samples[0].files)].map(([file, text]) =>
   [file, monaco.editor.createModel(text, 'js65', monaco.Uri.from({scheme: 'file', path: file}))]));
 
 const get = <T extends HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -26,7 +30,7 @@ let active = '/workspace/main.s';
 const editor = monaco.editor.create(get('editor'), {
   model: models.get(active), automaticLayout: true, minimap: {enabled: false},
   fontSize: 14, scrollBeyondLastLine: false, accessibilitySupport: 'on',
-  ariaLabel: 'Assembly source',
+  ariaLabel: 'Assembly source', glyphMargin: true,
 });
 const highlights = editor.createDecorationsCollection();
 const viewStates = new Map<string, monaco.editor.ICodeEditorViewState>();
@@ -38,6 +42,75 @@ let buildAttempt = 0;
 let debounce: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let replacing = false;
+let target = simulatorTarget;
+let artifact: {version: number; targetId: string; index: ListingIndex; image: unknown} | undefined;
+let running = false;
+let runtimeReady = false;
+const addressBreakpoints = new Set<number>();
+const sourceBreakpoints = new Map<string, {file: string; line: number}>();
+const breakpointDecorations = editor.createDecorationsCollection();
+const debug = new DebuggerView(root, row => associate(row));
+const runtime = new RuntimeClient(assets, response => {
+  if (response.error) { runtimeFailure(response.error); return; }
+  runtimeReady = true;
+  running = response.running;
+  if (response.snapshot) debug.render(response.snapshot, running);
+  if (!target.capabilities.reverse) {
+    get<HTMLButtonElement>('back').disabled = true;
+    get('back').title = 'This target does not support reverse stepping.';
+  }
+}, runtimeFailure);
+
+function runtimeFailure(message: string): void {
+  running = runtimeReady = false;
+  runtime.dispose();
+  controls(!!artifact);
+  get('runtime-status').textContent = message;
+  get('run').textContent = 'Run';
+}
+
+function controls(ready: boolean): void {
+  for (const id of ['run', 'reset', 'step', 'source-breakpoint']) get<HTMLButtonElement>(id).disabled = !ready;
+  get<HTMLButtonElement>('back').disabled = true;
+  get<HTMLButtonElement>('nmi').disabled = !ready || !target.capabilities.interrupts;
+  get<HTMLInputElement>('irq').disabled = !ready || !target.capabilities.interrupts;
+  get('nmi').title = target.capabilities.interrupts ? '' : 'This target does not support interrupts.';
+  get('screen').hidden = !target.capabilities.pixels;
+  get('display-hint').textContent = target.capabilities.pixels ?
+    'Focus the screen for keyboard input. Arrow keys use WASD.' : 'This target has no pixel display.';
+}
+
+function invalidateRuntime(): void {
+  runtime.dispose(); running = runtimeReady = false; artifact = undefined;
+  addressBreakpoints.clear();
+  controls(false); debug.clear();
+  get('run').textContent = 'Run';
+  get('runtime-status').textContent = 'Source changed. Waiting for a successful build.';
+  updateBreakpoints();
+}
+
+function loadRuntime(): void {
+  if (!artifact || artifact.version !== workspaceVersion || artifact.targetId !== target.id) return;
+  runtime.start(workspaceVersion, target.id, target.worker);
+  runtime.send({kind: 'load', image: artifact.image});
+  runtimeReady = true;
+  updateBreakpoints();
+}
+
+function updateBreakpoints(): void {
+  const addresses = new Set(addressBreakpoints);
+  for (const {file, line} of sourceBreakpoints.values()) {
+    for (const address of artifact ? sourceAddresses(artifact.index, file, line) : []) addresses.add(address);
+  }
+  runtime.send({kind: 'breakpoints', addresses: [...addresses]});
+  get('breakpoints').textContent = [
+    ...[...addressBreakpoints].map(a => `$${a.toString(16).padStart(4, '0')}`),
+    ...[...sourceBreakpoints.values()].map(s => `${s.file}:${s.line}${artifact && sourceAddresses(artifact.index, s.file, s.line).length ? '' : ' (unmapped)'}`),
+  ].join(', ') || 'No breakpoints.';
+  breakpointDecorations.set([...sourceBreakpoints.values()].filter(s => s.file === active).map(s => ({
+    range: new monaco.Range(s.line, 1, s.line, 1), options: {glyphMarginClassName: 'try-breakpoint'},
+  })));
+}
 
 function switchFile(file: string): void {
   if (!models.has(file)) return;
@@ -58,6 +131,7 @@ function switchFile(file: string): void {
   const previous = viewStates.get(file);
   if (previous) editor.restoreViewState(previous);
   fallback.value = models.get(file)!.getValue();
+  updateBreakpoints();
 }
 
 function renderFileTabs(): void {
@@ -123,6 +197,10 @@ function invalidate(): void {
   workspaceVersion++;
   buildAttempt++;
   service.cancel();
+  invalidateRuntime();
+  if (!saveDraft(new Map([...models].map(([file, model]) => [file, model.getValue()])), target.id)) {
+    get('runtime-status').textContent += ' Browser draft storage is unavailable.';
+  }
   clearTimeout(debounce);
   debounce = setTimeout(() => void assemble(), 350);
 }
@@ -184,12 +262,13 @@ function showCompilationFailure(failed: boolean): void {
 
 async function assemble(): Promise<void> {
   clearTimeout(debounce);
+  invalidateRuntime();
   const attempt = ++buildAttempt;
   const version = workspaceVersion;
   try {
     const {identity, result} = await service.build(new Map([...models].map(([file, model]) =>
-      [file, model.getValue()])), version);
-    if (disposed || attempt !== buildAttempt || identity.workspaceVersion !== workspaceVersion) return;
+      [file, model.getValue()])), version, target);
+    if (disposed || attempt !== buildAttempt || identity.workspaceVersion !== workspaceVersion || identity.targetId !== target.id) return;
     listing.clear();
     showDiagnostics(result.messages);
     if (!result.success) {
@@ -203,6 +282,15 @@ async function assemble(): Promise<void> {
     listing.render(text, index);
     showCompilationFailure(false);
     status.textContent = '';
+    try {
+      artifact = {version, targetId: target.id, index, image: target.load(index)};
+      debug.artifact(index);
+      controls(true);
+      loadRuntime();
+    } catch (error) {
+      get('runtime-status').textContent = error instanceof Error ? error.message : String(error);
+      showDiagnostics([...result.messages, {level: 'error', message: get('runtime-status').textContent!}]);
+    }
   } catch (error) {
     if (disposed || attempt !== buildAttempt || version !== workspaceVersion) return;
     status.textContent = error instanceof Error ? error.message : String(error);
@@ -221,6 +309,74 @@ function watchModel(model: monaco.editor.ITextModel): monaco.IDisposable {
 }
 const modelSubscriptions = new Map([...models].map(([file, model]) => [file, watchModel(model)]));
 const selectionSubscription = editor.onDidChangeCursorSelection(event => listing.select(active, event.selection));
+function toggleSourceBreakpoint(line = editor.getPosition()?.lineNumber ?? 1): void {
+  const key = `${active}:${line}`;
+  if (sourceBreakpoints.has(key)) sourceBreakpoints.delete(key);
+  else sourceBreakpoints.set(key, {file: active, line});
+  updateBreakpoints();
+}
+const mouseSubscription = editor.onMouseDown(event => {
+  if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && event.target.position) {
+    toggleSourceBreakpoint(event.target.position.lineNumber);
+  }
+});
+editor.addAction({id: 'toggle-breakpoint', label: 'Toggle source breakpoint', keybindings: [monaco.KeyCode.F9],
+  run: () => toggleSourceBreakpoint()});
+get('source-breakpoint').addEventListener('click', () => toggleSourceBreakpoint(plain ?
+  models.get(active)!.getPositionAt(fallback.selectionStart).lineNumber : undefined));
+get('breakpoint-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = get<HTMLInputElement>('breakpoint-address');
+  if (!/^[0-9a-f]{1,4}$/i.test(input.value)) return;
+  const address = parseInt(input.value, 16);
+  if (addressBreakpoints.has(address)) addressBreakpoints.delete(address); else addressBreakpoints.add(address);
+  updateBreakpoints();
+});
+get('run').addEventListener('click', () => {
+  if (!artifact) return;
+  if (!runtimeReady) loadRuntime();
+  const speed = Number(get<HTMLSelectElement>('speed').value);
+  const budget = Math.max(1, Math.min(10000000, Number(get<HTMLInputElement>('budget').value) || 1000000));
+  runtime.send(running ? {kind: 'pause'} : {kind: 'run', speed, budget});
+  running = !running;
+  get('run').textContent = running ? 'Pause' : 'Run';
+});
+for (const [id, kind] of [['reset', 'reset'], ['step', 'step'], ['back', 'back'], ['nmi', 'nmi']] as const) {
+  get(id).addEventListener('click', () => {
+    if (!runtimeReady) loadRuntime();
+    runtime.send({kind});
+  });
+}
+get<HTMLInputElement>('irq').addEventListener('change', event => runtime.send({kind: 'irq',
+  value: (event.target as HTMLInputElement).checked}));
+get('screen').addEventListener('keydown', event => {
+  if (get('display').hidden || event.ctrlKey || event.metaKey || event.altKey || document.activeElement !== get('screen')) return;
+  const key = ({ArrowUp: 'w', ArrowDown: 's', ArrowLeft: 'a', ArrowRight: 'd'} as Record<string, string>)[event.key] ?? event.key;
+  if (key.length !== 1 || key.charCodeAt(0) < 32 || key.charCodeAt(0) > 126) return;
+  event.preventDefault(); runtime.send({kind: 'input', value: key.charCodeAt(0)});
+});
+const targetSelect = get<HTMLSelectElement>('target');
+for (const descriptor of targets.values()) {
+  if ([...targetSelect.options].some(option => option.value === descriptor.id)) continue;
+  targetSelect.add(new Option(descriptor.name, descriptor.id));
+}
+targetSelect.addEventListener('change', () => {
+  const next = targets.get(targetSelect.value);
+  if (!next) return;
+  target = next; sourceBreakpoints.clear(); invalidate();
+});
+export function registerPlaygroundTarget(descriptor: TargetDescriptor): () => void {
+  const remove = registerTarget(descriptor);
+  const option = new Option(descriptor.name, descriptor.id);
+  targetSelect.add(option);
+  return () => {
+    remove(); option.remove();
+    if (target.id === descriptor.id) {
+      targetSelect.value = simulatorTarget.id;
+      targetSelect.dispatchEvent(new Event('change'));
+    }
+  };
+}
 renderFileTabs();
 fallback.addEventListener('input', () => {
   const start = fallback.selectionStart;
@@ -264,6 +420,7 @@ get('new-file-form').addEventListener('submit', event => {
   invalidate();
 });
 setupLoadDialog(root, () => new Map([...models].map(([file, model]) => [file, model.getValue()])), files => {
+  sourceBreakpoints.clear();
   replacing = true;
   highlights.clear();
   editor.setModel(null);
@@ -317,9 +474,11 @@ window.addEventListener('pagehide', () => {
   disposed = true;
   clearTimeout(debounce);
   service.cancel();
+  runtime.dispose();
   listing.clear();
   observer.disconnect();
   selectionSubscription.dispose();
+  mouseSubscription.dispose();
   for (const subscription of modelSubscriptions.values()) subscription.dispose();
   editor.dispose();
   for (const model of models.values()) model.dispose();

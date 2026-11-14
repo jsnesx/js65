@@ -5,6 +5,7 @@ await mkdir(outdir, {recursive: true});
 for (const [entry, name] of [
   ['website/app/main.ts', 'app'],
   ['website/app/editor.worker.ts', 'editor-worker'],
+  ['website/app/runtime.worker.ts', 'runtime-worker'],
   ['src/driver/entry-worker-browser.ts', 'compiler-worker'],
 ]) {
   const result = await Bun.build({entrypoints: [entry], outdir, target: 'browser',

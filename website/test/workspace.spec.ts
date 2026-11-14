@@ -18,7 +18,7 @@ async function fillSource(text: string): Promise<void> {
 }
 
 beforeAll(async () => {
-  browser = await chromium.launch({channel: 'chrome', headless: true});
+  browser = await chromium.launch({channel: 'chrome', headless: true, args: ['--disable-gpu']});
 });
 
 beforeEach(async () => {
@@ -32,6 +32,138 @@ afterEach(async () => {
 afterAll(async () => {
   try { await browser?.close(); }
   finally { server.close(); }
+});
+
+test('run, address break, inspect pixels, rewind, and reset', async () => {
+  await page.goto('explore/');
+  await expect(page.locator('#run')).toBeEnabled();
+  await page.locator('#breakpoint-address').fill('0602');
+  await page.locator('#breakpoint-form button').click();
+  await page.locator('#run').click();
+  await expect(page.locator('#runtime-status')).toContainText('breakpoint.');
+  await expect(page.locator('#registers')).toContainText('PC $0602  A $01');
+  await page.locator('#step').click();
+  await expect(page.locator('#runtime-status')).toContainText('completed.');
+  await expect(page.locator('#memory')).toContainText('$0200: 01');
+  expect(await page.locator('#screen').evaluate(canvas => [...(canvas as HTMLCanvasElement)
+    .getContext('2d')!.getImageData(0, 0, 1, 1).data])).toEqual([255, 255, 255, 255]);
+  await page.locator('#back').click();
+  await expect(page.locator('#memory')).toContainText('$0200: 00');
+  await page.locator('#step').click();
+  await expect(page.locator('#memory')).toContainText('$0200: 01');
+  await page.locator('#reset').click();
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+  await expect(page.locator('#registers')).toContainText('Cycles 7');
+  await expect(page.locator('#back')).toBeDisabled();
+});
+
+test('execution survives tabs, keyboard requires visible focus, and edits stop it', async () => {
+  await page.goto('explore/');
+  await expect(page.locator('#run')).toBeEnabled();
+  await fillSource('.org $600\nloop: lda $ff\nsta $200\njmp loop\n');
+  await expect(page.locator('#assembly')).toContainText('lda $ff');
+  await page.locator('#speed').selectOption('1000');
+  await page.locator('#run').click();
+  await page.locator('#screen').focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#memory')).toContainText('$0200: 77');
+  await page.getByRole('tab', {name: 'Assembly', exact: true}).click();
+  await page.keyboard.press('b');
+  await expect(page.locator('#run')).toHaveText('Pause');
+  await page.getByRole('tab', {name: 'Display', exact: true}).click();
+  await page.locator('#run').click();
+  await expect(page.locator('#runtime-status')).toContainText('paused.');
+  await expect(page.locator('#memory')).toContainText('$0200: 77');
+  await page.locator('#run').click();
+  await fillSource('.org $600\nlda missing\n');
+  await expect(page.locator('.try-status')).toHaveText('Assembly failed.');
+  await expect(page.locator('#run')).toBeDisabled();
+  await expect(page.locator('#back')).toBeDisabled();
+  await expect(page.locator('#registers')).toBeEmpty();
+});
+
+test('source breakpoints, budget, input replay, and automatic draft recovery', async () => {
+  await page.goto('explore/');
+  await expect(page.locator('#run')).toBeEnabled();
+  await fillSource('.org $600\nloop: lda $ff\nsta $200\njmp loop\n');
+  await expect(page.locator('#assembly')).toContainText('lda $ff');
+  await page.locator('#screen').focus(); await page.keyboard.press('a');
+  await page.locator('#step').click();
+  await expect(page.locator('#registers')).toContainText('A $61');
+  await page.locator('#back').click(); await page.locator('#step').click();
+  await expect(page.locator('#registers')).toContainText('A $61');
+  await page.locator('#budget').fill('6');
+  await page.locator('#run').click();
+  await expect(page.locator('#runtime-status')).toContainText('budget.');
+  await page.reload();
+  await expect(page.locator('#assembly')).toContainText('lda $ff');
+  await expect(page.locator('#registers')).toContainText('A $00');
+  await page.getByRole('tab', {name: 'Assembly', exact: true}).click();
+  await page.locator('.try-row').filter({hasText: 'lda $ff'}).click();
+  await page.locator('#source-breakpoint').click();
+  await expect(page.locator('#breakpoints')).toContainText('/workspace/main.s:2');
+  await page.locator('#run').click();
+  await expect(page.locator('#runtime-status')).toContainText('breakpoint.');
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+});
+
+test('runtime worker crashes can restart without stale execution', async () => {
+  await page.route('**/runtime-worker.js', route => route.fulfill({contentType: 'text/javascript',
+    body: 'throw new Error("runtime fixture crash");'}));
+  await page.goto('explore/');
+  await expect(page.locator('#runtime-status')).toContainText('runtime fixture crash');
+  await page.unroute('**/runtime-worker.js');
+  await page.locator('#reset').click();
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+  await page.locator('#run').click();
+  await expect(page.locator('#runtime-status')).toContainText('completed.');
+});
+
+test('manual interrupt entry and rewind use the recorded event', async () => {
+  await page.goto('explore/');
+  await expect(page.locator('#run')).toBeEnabled();
+  await page.locator('#nmi').click();
+  await page.locator('#step').click();
+  await expect(page.locator('#registers')).toContainText('PC $FFF8');
+  await expect(page.locator('#registers')).toContainText('Cycles 7');
+  await page.locator('#step').click();
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+  await page.locator('#back').click();
+  await expect(page.locator('#registers')).toContainText('PC $FFF8');
+  await page.locator('#back').click();
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+  await page.locator('#step').click();
+  await expect(page.locator('#registers')).toContainText('PC $FFF8');
+});
+
+test('internal second target invalidates mappings and capability controls', async () => {
+  await page.goto('explore/');
+  await expect(page.locator('#run')).toBeEnabled();
+  await page.locator('#step').click();
+  await expect(page.locator('#back')).toBeEnabled();
+  await page.evaluate(async () => {
+    const url = document.querySelector<HTMLScriptElement>('script[src*="try-me-assets/app.js"]')!.src;
+    const api = await import(url);
+    api.registerPlaygroundTarget({id: 'fixture', name: 'Internal fixture', compileTarget: 'js65-sim',
+      worker: 'runtime-worker.js', capabilities: {reverse: false, interrupts: false, pixels: false},
+      load: (index: {rows: {address?: number; bytes: number[]; authored: boolean}[]}) => {
+        const memory = new Uint8Array(65536);
+        for (const row of index.rows) if (row.authored && row.address != null) memory.set(row.bytes, row.address);
+        memory[0xfffd] = 6;
+        return {memory, entry: 0x600, completion: 0x605};
+      }});
+  });
+  await page.locator('#target').selectOption('fixture');
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+  await expect(page.locator('#back')).toBeDisabled();
+  await expect(page.locator('#nmi')).toBeDisabled();
+  await expect(page.locator('#display-hint')).toHaveText('This target has no pixel display.');
+  await page.locator('#step').click();
+  await expect(page.locator('#registers')).toContainText('PC $0602');
+  await expect(page.locator('#back')).toBeDisabled();
+  await page.locator('#target').selectOption('sim');
+  await expect(page.locator('#registers')).toContainText('PC $0600');
+  await expect(page.locator('#nmi')).toBeEnabled();
 });
 
 test('subpath assembly, source mapping, tabs, errors, and restart', async () => {
@@ -189,7 +321,7 @@ test('compilation keeps previous results until their replacement arrives', async
     await expect(page.locator('.try-status')).toBeEmpty();
     await expect(page.locator('#assembly')).toHaveText(previousListing!);
     await expect(page.locator('.try-diagnostics')).toHaveText(previousOutput!);
-    await expect(page.locator('#display-content')).toHaveText('Not implemented yet!');
+    await expect(page.locator('#screen')).toHaveCount(1);
     await expect(outputTab).toHaveText('Output (0/1/0)');
     release();
     if (load) {
@@ -389,7 +521,8 @@ test('theme footer stays at the page bottom', async () => {
   await expect(footer.getByRole('button', {name: 'Change theme'})).toBeVisible();
   const bounds = await footer.boundingBox();
   expect(bounds).not.toBeNull();
-  expect(Math.abs(bounds!.y + bounds!.height - 1200)).toBeLessThanOrEqual(1);
+  const height = await page.evaluate(() => document.documentElement.scrollHeight);
+  expect(Math.abs(bounds!.y + bounds!.height - height)).toBeLessThanOrEqual(1);
   await page.setViewportSize({width: 390, height: 844});
   const bottom = await footer.evaluate(element => {
     const footerBottom = element.getBoundingClientRect().bottom + scrollY;

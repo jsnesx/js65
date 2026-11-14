@@ -109,7 +109,7 @@ describe('init', function() {
 
   it('rejects a target that does not exist', async function() {
     await expect(runInit({}, {dir: 'demo', target: 'nes-mmc3'}))
-        .rejects.toThrow(/unknown target "nes-mmc3" \(js65 has sim, nes-nrom\)/);
+        .rejects.toThrow(/unknown target "nes-mmc3" \(js65 has sim, js65-sim, nes-nrom\)/);
   });
 });
 

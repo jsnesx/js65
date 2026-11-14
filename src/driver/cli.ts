@@ -830,7 +830,7 @@ ${[...LINT_RULES].map(([id, r]) => `                            ${id.padEnd(24)}
                           be defined in a different file. Used if you want to verify that
                           a module can be compiled standalone.
   -t NAME/--target=NAME   Link with a built-in segment layout instead of a linker config.
-                          js65 has two: \`sim\` and \`nes-nrom\`.
+                          js65 has three: \`sim\`, \`js65-sim\`, and \`nes-nrom\`.
                           Ignored when a config is given with -C.
   -u SYM/--force-import=SYM
                           Accepted and ignored, for ld65 compat. js65 links every module it

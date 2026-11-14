@@ -16,6 +16,9 @@ export function instructionHelp(row: ListingRow): string | undefined {
     `${flag.name}: ${flag.value}${flag.notes ? ` (${flag.notes})` : ''}`).join('\n');
   return [
     `${mnemonic.toUpperCase()} - ${reference.name} (NESdev reference)`,
+    'Active CPU: NMOS 6502. NES-specific notes describe a different CPU.',
+    ['adc', 'sbc', 'sed', 'cld'].includes(name) ?
+      'NMOS decimal mode is supported: D enables BCD for ADC/SBC. ADC N/V use the intermediate sum, Z the binary sum; SBC N/V/Z use the binary difference. C reports decimal carry/no borrow.' : '',
     reference.operation, reference.description,
     `Addressing mode: ${encoding.addressingMode}.`,
     `Flags: ${flags || 'none'}.`,
