@@ -97,8 +97,7 @@ runs:
     - name: Provide the MSVC CRT and Windows SDK (clang targets *-windows-msvc)
       if: runner.os == 'Windows'
       uses: vln-devsecops/actions-msvc@v1
-    - name: Load a full LLVM toolchain (macOS/Linux)
-      if: runner.os != 'Windows'
+    - name: Load a full LLVM toolchain
       shell: bash
       run: bash "$GITHUB_WORKSPACE/.github/actions/hermes_build/install-llvm.sh"
 

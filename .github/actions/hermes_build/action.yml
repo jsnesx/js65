@@ -69,8 +69,8 @@ runs:
         # the x64 and arm64 Linux runners both report runner.os == 'Linux'.
         key: shermes-${{ runner.os }}-${{ runner.arch }}-${{ inputs.hermes-ref }}-lto-pic-v6${{ inputs.cache-key-suffix }}
 
-    - name: Load a full LLVM toolchain (macOS/Linux)
-      if: runner.os != 'Windows' && inputs.skip-toolchain != 'true'
+    - name: Load a full LLVM toolchain
+      if: inputs.skip-toolchain != 'true'
       shell: bash
       run: bash "$GITHUB_ACTION_PATH/install-llvm.sh"
 
