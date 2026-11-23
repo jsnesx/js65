@@ -14,6 +14,7 @@ const ANON_SEGMENT_ATTR_REASONS = new Map<string, string>([
   ['alignload', ''],
   ['loadmem', ''],
   ['optional', ''],
+  ['overwrite', ''],
   ['dedupe', ''],
   ['default', `cannot write to a default segment`],
   ['align', `a segment starts where the previous one ended. Use .align instead`],
@@ -134,6 +135,7 @@ export class SegmentParser {
           case 'bss': seg.bss = this.parseFlag(val, key); break;
           case 'define': seg.define = this.parseFlag(val, key); break;
           case 'optional': seg.optional = this.parseFlag(val, key); break;
+          case 'overwrite': seg.overwrite = this.parseFlag(val, key); break;
           case 'dedupe': seg.dedupe = this.parseFlag(val, key); break;
           case 'default': seg.default = this.parseFlag(val, key); break;
           // js65 has no read-only concept, so accept and ignore ld65's types.

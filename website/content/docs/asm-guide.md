@@ -76,6 +76,7 @@ The full list of `.segment` parameters are as follows:
 * `:loadmem <num>` - Start address to use inside the base segment. This only works inside a `load/run` segment to set an offset into the parent to use for this segment.
 * `:mem <num>` - Sets the `org` space for what address this memory starts with.
 * `:off <num>` - File offset where this segment's data will be written. Can be used to have multiple segments that overwrite the same location.
+* `:overwrite` - Only usable on a RAM (`:zp` or `:bss`) segment that is also `:load`/`:run` on top of another RAM segment. Places the segment as an overlay instead of reserving them starting from `:mem`, allowing you to overlay RAM values that are never used at the same time.
 * `:optional` - Unused. We don't currently throw warnings about unused segments. Kept for ca65 compat until we decide if we want it.
 * `:out <str>` - (`<str>` is optional) File name to write to. Defaults to `"%O"` for the named output file.
 * `:ro` `:rw` - Unused. Kept for compatbility

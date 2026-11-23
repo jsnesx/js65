@@ -1670,7 +1670,7 @@ class Link {
     // Build up the LinkSegment objects
     this.collect(merged, ([name, s]) => {
       const ramBase = LinkSegment.isRamSegment(s) ?
-          this.ramBase(this.segmentArea.get(name) ?? name) : 0;
+          this.ramBase((!s.overwrite && this.segmentArea.get(name)) || name) : 0;
       this.segments.set(
           name, new LinkSegment(s, this.segmentWindows.get(name), ramBase));
     });
@@ -2109,7 +2109,10 @@ class Link {
         this.fail(`Segment ${seg.name} ($${size.toString(16)} bytes at $${
              start.toString(16)}) does not fit in ${mapped.name}`);
       }
-      if (memory != null) {
+      // don't claim space when its an overwrite
+      if (memory != null && seg.overwrite) {
+        return start;
+      } else if (memory != null) {
         const hit = list.find(([s, e, owner]) =>
             owner && s < start + size && start < e);
         if (hit) {
@@ -2149,10 +2152,23 @@ class Link {
       const s = merged.get(n);
       return s != null && needsLowering(s) && !inConfig.has(n);
     };
-    const loweredFirst = [
-      ...allocOrder.filter(isSourceLowered),
-      ...allocOrder.filter(n => !isSourceLowered(n)),
-    ];
+    const loweredFirst: string[] = [];
+    for (const name of allocOrder.filter(isSourceLowered)) {
+      // When placing the `:run` space for a value, we don't give any preference to
+      // placing the run values before anything else in the module. We just use the
+      // regular ordering for that (:load values still get placed first tho)
+      const seg = merged.get(name)!;
+      const runArea = seg.run ?? seg.load;
+      if (runArea != null && runArea !== (seg.load ?? seg.run) &&
+          !loweredFirst.includes(runArea) &&
+          allocOrder.indexOf(runArea) < allocOrder.indexOf(name)) {
+        loweredFirst.push(runArea);
+      }
+      loweredFirst.push(name);
+    }
+    for (const name of allocOrder) {
+      if (!loweredFirst.includes(name)) loweredFirst.push(name);
+    }
     this.collect(loweredFirst, name => {
       const seg = merged.get(name);
       if (!seg) return;

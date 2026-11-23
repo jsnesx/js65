@@ -19,6 +19,13 @@ import type {Assembler} from './assembler.ts';
 //    to know when to release the frame?
 const MAX_STACK_DEPTH = 100;
 
+function registerCode(s: string): number {
+  if (s.length !== 1) return 0;
+  const c = s.charCodeAt(0) | 0x20;
+  // 'a' || 'x' || 'y'
+  return c === 0x61 || c === 0x78 || c === 0x79 ? c : 0;
+}
+
 /** Token types that finish off a value so a `::` after one qualifies it. */
 const VALUE_END: ReadonlySet<string> = new Set(['num', 'str', 'rb', 'rp', 'rc', 'grp']);
 
@@ -569,6 +576,11 @@ export class Preprocessor {
     // Handling for the DEFINES layer
     switch (directive) {
       case '.define':
+        if (layers & Layer.FUNCTIONS) {
+          this.expandLayers(line, Layer.DEFINES, this.skipIdentifier(line, i));
+          return line.length;
+        }
+        return this.skipIdentifier(line, i);
       case '.delmacro':
       case '.ifdef':
       case '.ifndef':
@@ -691,7 +703,19 @@ export class Preprocessor {
       const x = a[k], y = b[k];
       if (x.token !== y.token) return false;
       switch (x.token) {
-        case 'ident': case 'str':
+        case 'ident': {
+          // ca65 scans a, x and y as register tokens instead of treating them
+          // as identifiers, so check for those first.
+          const rx = registerCode(x.str);
+          const ry = registerCode((y as typeof x).str);
+          if (rx || ry) {
+            if (rx !== ry) return false;
+          } else if (exact && x.str !== (y as typeof x).str) {
+            return false;
+          }
+          break;
+        }
+        case 'str':
           if (exact && x.str !== (y as typeof x).str) return false;
           break;
         case 'num':

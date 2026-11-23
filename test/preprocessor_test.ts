@@ -255,6 +255,19 @@ describe('Preprocessor', function() {
            await instruction('x baz'));
     });
 
+    it('should not run token functions in a .define body until it is used', async function() {
+      // ca65 reads the body raw, so a macro parameter named in it is still
+      // substituted when the define expands inside that macro (cc65's smc.inc).
+      await test(['.define D .ident(.concat(.string(p), "_x"))',
+            '.macro m p',
+            'x D',
+            '.endmacro',
+            'm foo',
+            'm bar'],
+           await instruction('x foo_x'),
+           await instruction('x bar_x'));
+    });
+
     it('should protect a define inside a macro body', async function() {
       // Macro bodies are collected with defines expanded but token functions
       // held back, and `.noexpand` runs in that same layer.
@@ -1394,7 +1407,17 @@ describe('Preprocessor', function() {
     });
 
     it('.match should treat all identifiers as equal', async function() {
-      await test(['a .match(x, y)'], await instruction('a 1'));
+      await test(['a .match(foo, bar)'], await instruction('a 1'));
+    });
+
+    it('.match should only match a register with the same register', async function() {
+      await test(['a .match(foo, a)'], await instruction('a 0'));
+      await test(['a .match(x, a)'], await instruction('a 0'));
+      await test(['a .match(y, x)'], await instruction('a 0'));
+      await test(['a .match(a, a)'], await instruction('a 1'));
+      await test(['a .match(X, x)'], await instruction('a 1'));
+      await test(['a .xmatch(Y, y)'], await instruction('a 1'));
+      await test(['a .xmatch(x, foo)'], await instruction('a 0'));
     });
 
     it('.xmatch should require identical identifier names', async function() {

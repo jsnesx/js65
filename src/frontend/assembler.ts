@@ -342,11 +342,19 @@ export class Assembler {
     this._chunkIndex = -1;
   }
 
-  private walkSymbolTree(sym: string): Expr|undefined {
+  /**
+   * the inlining flag is used when we are looking up a symbol from the parent scope
+   * if the parent scope has a value, we don't inline the new value immediately, we
+   * create a scoped forwards ref and figure it out later.
+   */
+  private walkSymbolTree(sym: string, inlining = false): Expr|undefined {
     let scope: Scope|undefined = this.currentScope;
     const unscoped = !sym.includes('::');
     do {
       const s = scope.resolve(sym, {allowForwardRef: false, missingScope: 'undefined'});
+      if (s && inlining && s.id! < 0 && scope !== this.currentScope) {
+        return undefined;
+      }
       if (s) return s.expr;
     } while (unscoped && (scope = scope.parent));
     return undefined;
@@ -379,7 +387,7 @@ export class Assembler {
 
   definedValue(sym: string): Expr|undefined {
     if (sym === '*') return this.pc();
-    const expr = this.walkSymbolTree(sym);
+    const expr = this.walkSymbolTree(sym, true);
     // A forward reference is allowed at the spot a label is defined, but if you
     // try to resolve it, then the forward reference needs to be resolvable at this stage.
     // So we need to call `resolve` here to get a numeric value for a label if possible.
@@ -512,7 +520,7 @@ export class Assembler {
    * to its `Symbol` even when the parser inlines an already-defined expr
    */
   private readonly symbolLookup: Exprs.SymbolLookup = {
-    get: (name: string) => this.lookupSymbol(name),
+    get: (name: string) => this.lookupSymbol(name, true),
     zeropage: (name: string) => this.isZeropageRef(name),
     ref: (name: string, source?: Tokens.SourceInfo): void => {
       if (!source || !this.currentScope.collectRefs) return;
@@ -1365,10 +1373,10 @@ export class Assembler {
     //   ::foo = 43
     // FWIW, ca65 _does_ allow this, as well as foo::bar = 42 after the scope.
     let sym = scope.resolve(ident, {allowForwardRef: !mut, ref: token});
-    if (sym && (mut !== (sym.id! < 0))) {
-      this.fail(`Cannot change mutability of ${ident}`, token);
-    } else if (mut && expr.op != 'num') {
+    if (mut && expr.op != 'num') {
       this.fail(`Mutable set requires constant`, token);
+    } else if (sym && (mut !== (sym.id! < 0))) {
+      this.fail(`Cannot change mutability of ${ident}`, token);
     } else if (!sym) {
       if (!mut) throw new Error(`impossible`);
       sym = scope.declare(ident, {id: -1}, token);
@@ -2180,8 +2188,13 @@ export class Assembler {
    * through the tree here to see if we can properly size the value
    * now instead of deferring it to link time which would force this
    * to get pessimized to an ABS addressing mode.
+   * 
+   * inlining flag is to work around ca65 scoping issues where a value defined
+   * in the parent scope isn't used for the value we find at this step. it is
+   * instead "found" but deferred until the scopes are closed at which time it
+   * uses the correct value in the scope.
    */
-  private lookupSymbol(name: string): Symbol|undefined {
+  private lookupSymbol(name: string, inlining = false): Symbol|undefined {
     if (name.charCodeAt(0) === 0x40 /* @ */) {
       return this.cheapLocals.symbols.get(name);
     }
@@ -2192,7 +2205,10 @@ export class Assembler {
       for (let scope: Scope|undefined = this.currentScope; scope;
            scope = scope.parent) {
         const sym = scope.symbols.get(name);
-        if (sym?.expr) return sym;
+        if (sym?.expr) {
+          if (inlining && sym.id! < 0 && scope !== this.currentScope) return undefined;
+          return sym;
+        }
         if (sym?.scoped) return sym; // explicitly scoped: no outer name applies
       }
       return undefined;
