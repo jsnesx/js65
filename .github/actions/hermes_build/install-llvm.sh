@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # Put a full LLVM 22 toolchain (clang, lld, llvm-profdata) on PATH.
-# macOS/Linux only.
-# Windows runners ship clang already with a different runner. MSVC supplies the CRT,
-# the Windows SDK, and link.exe that clang's *-windows-msvc target links against.
+# On Windows, MSVC (set up by an earlier step) supplies the CRT, the Windows
+# SDK, and link.exe that clang's *-windows-msvc target links against.
 set -euo pipefail
 
-if [ "$RUNNER_OS" = "macOS" ]; then
+LLVM_VERSION=22.1.8
+
+if [ "$RUNNER_OS" = "Windows" ]; then
+  # The runner's preinstalled clang lags behind the MSVC STL, which rejects
+  # clang versions older than it supports (STL1000), so bring our own.
+  LLVM_DIR="$RUNNER_TEMP/llvm"
+  mkdir -p "$LLVM_DIR"
+  curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/clang+llvm-$LLVM_VERSION-x86_64-pc-windows-msvc.tar.xz" \
+    | tar -xJ -C "$LLVM_DIR" --strip-components=1
+  LLVM_BIN="$(cygpath -u "$LLVM_DIR")/bin"
+  cygpath -w "$LLVM_BIN" >> "$GITHUB_PATH"
+elif [ "$RUNNER_OS" = "macOS" ]; then
   # Remove existing llvm so we don't get warnings with the newly installed llvm
   for keg in $(brew list --formula | grep -E '^llvm(@[0-9]+)?$' || true); do
     [ "$keg" = "llvm@22" ] || brew uninstall --ignore-dependencies "$keg"
@@ -28,12 +38,14 @@ else
   sudo apt-get install -y llvm-22 clang-22 lld-22 libclang-rt-22-dev
   LLVM_BIN=/usr/lib/llvm-22/bin
 fi
-echo "$LLVM_BIN" >> "$GITHUB_PATH"
+if [ "$RUNNER_OS" != "Windows" ]; then
+  echo "$LLVM_BIN" >> "$GITHUB_PATH"
+fi
 "$LLVM_BIN/clang" --version
 "$LLVM_BIN/llvm-profdata" --version
 # Compile and link a real TU so a missing SDK or C++ runtime fails here,
 # with a readable error, instead of thousands of lines into Hermes.
 echo '#include <cstdio>
-int main() { std::printf("toolchain ok\n"); return 0; }' > /tmp/probe.cpp
-"$LLVM_BIN/clang++" -std=c++17 /tmp/probe.cpp -o /tmp/probe
-/tmp/probe
+int main() { std::printf("toolchain ok\n"); return 0; }' > "$RUNNER_TEMP/probe.cpp"
+"$LLVM_BIN/clang++" -std=c++17 "$RUNNER_TEMP/probe.cpp" -o "$RUNNER_TEMP/probe.exe"
+"$RUNNER_TEMP/probe.exe"
