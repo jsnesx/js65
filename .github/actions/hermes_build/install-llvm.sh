@@ -5,15 +5,20 @@
 set -euo pipefail
 
 LLVM_VERSION=22.1.8
+# RUNNER_TEMP is D:\a\_temp on Windows; tar treats "D:" as a remote host.
+TMP_DIR="$RUNNER_TEMP"
+if [ "$RUNNER_OS" = "Windows" ]; then
+  TMP_DIR="$(cygpath -u "$RUNNER_TEMP")"
+fi
 
 if [ "$RUNNER_OS" = "Windows" ]; then
   # The runner's preinstalled clang lags behind the MSVC STL, which rejects
   # clang versions older than it supports (STL1000), so bring our own.
-  LLVM_DIR="$RUNNER_TEMP/llvm"
+  LLVM_DIR="$TMP_DIR/llvm"
   mkdir -p "$LLVM_DIR"
   curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/clang+llvm-$LLVM_VERSION-x86_64-pc-windows-msvc.tar.xz" \
     | tar -xJ -C "$LLVM_DIR" --strip-components=1
-  LLVM_BIN="$(cygpath -u "$LLVM_DIR")/bin"
+  LLVM_BIN="$LLVM_DIR/bin"
   cygpath -w "$LLVM_BIN" >> "$GITHUB_PATH"
 elif [ "$RUNNER_OS" = "macOS" ]; then
   # Remove existing llvm so we don't get warnings with the newly installed llvm
@@ -46,6 +51,6 @@ fi
 # Compile and link a real TU so a missing SDK or C++ runtime fails here,
 # with a readable error, instead of thousands of lines into Hermes.
 echo '#include <cstdio>
-int main() { std::printf("toolchain ok\n"); return 0; }' > "$RUNNER_TEMP/probe.cpp"
-"$LLVM_BIN/clang++" -std=c++17 "$RUNNER_TEMP/probe.cpp" -o "$RUNNER_TEMP/probe.exe"
-"$RUNNER_TEMP/probe.exe"
+int main() { std::printf("toolchain ok\n"); return 0; }' > "$TMP_DIR/probe.cpp"
+"$LLVM_BIN/clang++" -std=c++17 "$TMP_DIR/probe.cpp" -o "$TMP_DIR/probe.exe"
+"$TMP_DIR/probe.exe"
