@@ -138,6 +138,8 @@ export interface Segment {
   loadMem?: number;
   /** Occupies address space but emits no bytes (ld65 `type = bss`/`zp`). */
   bss?: boolean;
+  /** Placed at `:mem` on top of whatever else is there without claiming the space */
+  overwrite?: boolean;
   /** Emit START/SIZE/LAST/LOAD/RUN/FILEOFFS symbols */
   define?: boolean;
   /** Drop the segment entirely if no chunks land in it. */

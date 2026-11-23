@@ -236,6 +236,128 @@ FREE "CODE" [$8000, $10000)
 
   });
 
+  describe('ca65 compatibility', function() {
+    const LAYOUT = `
+.segment "ZEROPAGE" :mem $0000 :size $0100 :zp
+.segment "SHORTRAM" :mem $0100 :size $0100 :bss
+.segment "ROM"      :mem $8000 :size $0010 :off 0 :fill $ff :out
+.segment "SMCCODE"  :load "ROM" :run "SHORTRAM" :define
+.segment "CODE"     :load "ROM"
+`;
+
+    it('should substitute macro params named in a .define body (smc.inc)', function() {
+      const out = compileSource(LAYOUT + `
+.define _SMCDesignator .mid(0, .tcount(label) - 1, label) .ident(.concat(.string(.right(1, label)), "_SMC"))
+.macro DefSMC label
+_SMCDesignator:
+  lda #$42
+.endmacro
+.segment "CODE"
+  DefSMC foo
+  DefSMC bar
+  lda foo_SMC
+  lda bar_SMC
+`);
+      expect([...out.subarray(0, 10)]).toEqual([0xa9, 0x42, 0xa9, 0x42, 0xad, 0x00, 0x80, 0xad, 0x02, 0x80]);
+    });
+
+    it('should only .match a register against the same register', function() {
+      const out = compileSource(LAYOUT + `
+CurrentBank = $0145
+.macro BankStore bank
+  .if .match(bank, a)
+    sta $5115
+  .elseif .match(bank, x)
+    stx $5115
+  .else
+    lda bank
+    sta $5115
+  .endif
+.endmacro
+.segment "CODE"
+  BankStore CurrentBank
+  BankStore a
+  BankStore x
+`);
+      expect([...out.subarray(0, 12)]).toEqual(
+          [0xad, 0x45, 0x01, 0x8d, 0x15, 0x51, 0x8d, 0x15, 0x51, 0x8e, 0x15, 0x51]);
+    });
+
+    it('should resolve an outer .set symbol inside a scope to its final value', function() {
+      const out = compileSource(LAYOUT + `
+COUNT .set 0
+.segment "CODE"
+.proc UseIt
+  cpx #COUNT
+  rts
+.endproc
+COUNT .set COUNT + 1
+COUNT .set COUNT + 1
+  cpx #COUNT
+`);
+      expect([...out.subarray(0, 5)]).toEqual([0xe0, 0x02, 0x60, 0xe0, 0x02]);
+    });
+
+    // ca65 never binds a nested scope to an outer .set symbol's current value,
+    // so each of these is "Constant expression expected" there.
+    for (const [what, line] of [
+      ['re-.set it', 'COUNT .set COUNT + 1'],
+      ['.set from it', 'OTHER .set COUNT + 1'],
+      ['.if on it', '.if COUNT = 5\nnop\n.endif'],
+    ]) {
+      it(`should reject using an outer .set symbol as a constant in a scope (${what})`, function() {
+        const result = compile([{type: 'source', name: 'test.s', code: LAYOUT + `
+COUNT .set 5
+.segment "CODE"
+.proc P
+${line}
+.endproc
+`}], {lineContinuations: true});
+        expect(result.success).toBe(false);
+      });
+    }
+
+    it('should place a memory area\'s own bss before a segment that runs there', function() {
+      const out = compileSource(LAYOUT + `
+.segment "SHORTRAM"
+Var: .res $10
+.segment "SMCCODE"
+SmcStart:
+  nop
+  nop
+  rts
+.segment "CODE"
+  lda Var
+  jsr SmcStart
+.assert Var = $0100, error, "Var is not at $0100"
+.assert SmcStart = $0110, error, "SmcStart is not at $0110"
+`);
+      expect([...out.subarray(0, 9)]).toEqual([0xea, 0xea, 0x60, 0xad, 0x00, 0x01, 0x20, 0x10, 0x01]);
+    });
+
+    it('should overlay a zp segment on bytes another zp segment uses', function() {
+      const out = compileSource(`
+.segment "ZEROPAGE" :mem $0000 :size $0100 :zp
+.segment "OVERLAY"  :load "ZEROPAGE" :mem $00 :zp :overwrite
+.segment "ROM"      :mem $8000 :size $0010 :off 0 :fill $ff :out
+.segment "CODE"     :load "ROM"
+.segment "ZEROPAGE"
+NmiR0: .res 8
+R0:    .res 8
+.segment "OVERLAY"
+DrvR0: .res 8
+.segment "CODE"
+  lda NmiR0
+  lda R0
+  lda DrvR0
+.assert NmiR0 = $00, error, "NmiR0 is not at $00"
+.assert R0 = $08, error, "R0 is not at $08"
+.assert DrvR0 = $00, error, "DrvR0 does not overlay NmiR0"
+`);
+      expect([...out.subarray(0, 6)]).toEqual([0xa5, 0x00, 0xa5, 0x08, 0xa5, 0x00]);
+    });
+  });
+
   describe('.macpack common', function() {
     const SEG = '.segment "CODE" :bank $00 :size $0010 :mem $8000 :off $0000\n';
 

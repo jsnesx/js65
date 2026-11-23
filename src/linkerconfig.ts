@@ -728,6 +728,7 @@ export function lowerLinkerConfig(
 function applySegmentType(seg: Segment, def: SegmentDef): void {
   if (def.type === 'bss' || def.type === 'zp') seg.bss = true;
   if (def.type === 'zp') seg.addressing = 1;
+  if (def.type === 'overwrite') seg.overwrite = true;
 }
 
 function fail(message: string): never {
