@@ -211,7 +211,7 @@ export namespace Segment {
 // }
 
 /** Bump whenever we touch this file */
-export const MODULE_FORMAT_VERSION = 6;
+export const MODULE_FORMAT_VERSION = 7;
 
 /** A first pass size guess for an import whose addrsize the linker may know better. */
 export interface LateAssemblySizeQuery {
@@ -231,7 +231,7 @@ export interface AutoImport {
   source?: SourceInfo;
 }
 
-/** The input a module was assembled from. `source` code is post-`jsPreprocess`. */
+/** The original source or actions supplied to the assembler. */
 export type LateAssemblyInput =
   | { type: 'source', code: string, name: string }
   | { type: 'actions', actions: AssemblyAction[], name: string };
@@ -246,8 +246,17 @@ export interface LateAssembly {
   input?: LateAssemblyInput;
   /** Every `.include`/`.incbin` the first pass loaded. */
   files?: SourceLog;
+  javascript?: JsReplay;
   /** `-D` defines applied before the input. */
   defines?: SymbolDefine[];
+}
+
+export interface JsReplay {
+  files: SourceLog;
+  directories?: Map<string, string[]>;
+  baseRomLength?: number;
+  baseRomSha1?: string;
+  includePaths?: string[];
 }
 
 /** One contiguous run of bytes a JS block wrote into the base ROM. */
@@ -410,4 +419,5 @@ export interface Module {
   romPatch?: RomPatch;
   /** Present only when the source had `.jspostbegin` blocks. */
   jsPost?: JsPost;
+  additionalJsPosts?: JsPost[];
 }

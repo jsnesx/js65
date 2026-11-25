@@ -21,7 +21,7 @@ import { assembleInput, type InputSetup } from './assemblypass.ts';
 import { Assembler, type RefExtractor } from './frontend/assembler.ts';
 import { Base64 } from './base64.ts';
 import { Cpu } from './cpu.ts';
-import { diffRom, jsPostprocess, jsPreprocess } from './jspreprocessor.ts';
+import { diffRom, jsPostprocess } from './jspreprocessor.ts';
 import { Linker, type Export as LinkExport } from './linker.ts';
 import { SparseByteArray } from './util.ts';
 import { applyFeatures,
@@ -370,14 +370,8 @@ export function assemble(
     defines: options?.defines,
     macroIndex: options?.macroIndex,
     inactiveRegionIndex: options?.inactiveRegionIndex,
-    stage: (code, name) => jsPreprocess(code, name, {
-      jsActions,
-      allowJavascript: options?.allowJavascript,
-      callbacks,
-      includePaths: options?.includePaths,
-      binIncludePaths: options?.binIncludePaths,
-      baseRom: options?.baseRom,
-    }),
+    javascript: {allowJavascript: options?.allowJavascript, callbacks,
+                 includePaths: options?.includePaths, baseRom: options?.baseRom},
   };
 
   // Reference to the currently processing assembler. If the current file
@@ -462,15 +456,8 @@ export function link(
   const collector = new ErrorCollector();
 
   try {
-    const posts = modules.flatMap(m => m.jsPost ? [m.jsPost] : []);
-    if (posts.length && !options?.allowJavascript) {
-      throw new SourceError(
-          `.jspostbegin requires --allow-javascript\n` +
-          `  JavaScript blocks execute arbitrary code at link time and are disabled by default.`,
-          {file: posts[0].file, line: posts[0].blocks[0].line, column: 0});
-    }
-
     const linker = new Linker({
+      allowJavascript: options?.allowJavascript,
       target: options?.target,
       linkerConfig: options?.linkerConfig,
       linkerConfigName: options?.linkerConfigName,
@@ -488,6 +475,14 @@ export function link(
     }
 
     const out = linker.link(signal);
+    const linked = linker.linkedModules();
+    const posts = linked.flatMap(m => m.jsPost ? [m.jsPost, ...(m.additionalJsPosts ?? [])] : []);
+    if (posts.length && !options?.allowJavascript) {
+      throw new SourceError(
+          `.jspostbegin requires --allow-javascript\n` +
+          `  JavaScript blocks execute arbitrary code at link time and are disabled by default.`,
+          {file: posts[0].file, line: posts[0].blocks[0].line, column: 0});
+    }
     // A config can send segments to files of their own; only the main output
     // is patched into the base ROM.
     const extraOutputs = linker.outputFiles();
@@ -506,7 +501,7 @@ export function link(
       }
       // Apply all of the JS patches and then generate the IPS
       const patch = new SparseByteArray();
-      for (const module of modules) {
+      for (const module of linked) {
         for (const {offset, data} of module.romPatch?.runs ?? []) patch.set(offset, data);
       }
       for (const [start, data] of out.chunks()) {

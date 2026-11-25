@@ -86,7 +86,8 @@ export class Linker {
 
   constructor(opts: LinkerOptions = {}) {
     this.opts = opts;
-    this._link = new Link(opts.errorCollector, linkerDefines(opts.defines), opts.lto ?? true);
+    this._link = new Link(opts.errorCollector, linkerDefines(opts.defines), opts.lto ?? true,
+                          opts.allowJavascript);
   }
 
   read(file: Module): Linker {
@@ -101,6 +102,10 @@ export class Linker {
 
   romImage(): Uint8Array | undefined {
     return this._link.romImage;
+  }
+
+  linkedModules(): readonly Module[] {
+    return this._link.rawModules;
   }
 
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
@@ -1341,7 +1346,7 @@ class Link {
    */
   segmentOrder: string[] = [];
   // Order that modules are passed into the link command.
-  private rawModules: Module[] = [];
+  readonly rawModules: Module[] = [];
   /** Linker ordering for anon segments. Ordered by files passed in, then top to bottom of each file. */
   private anonDeclarationOrder: string[] = [];
   /** True once any named (non-anonymous) segment has been registered. */
@@ -1397,7 +1402,8 @@ class Link {
   constructor(readonly errorCollector?: ErrorCollector,
               /** `-D` overrides for config `SYMBOLS`, already reduced to numbers. */
               private readonly defines: CfgSymbols = new Map(),
-              private readonly lto = true) {}
+              private readonly lto = true,
+              private readonly allowJavascript?: boolean) {}
 
   fail(msg: string, at?: {source?: SourceInfo}): never {
     if (!this.errorCollector) Tokens.fail(msg, at);
@@ -1632,8 +1638,6 @@ class Link {
   link(signal?: { readonly aborted: boolean }): SparseByteArray {
     // Catch a cross-module named/anon mix before any state is half-built.
     this.checkAnonMode();
-    // Before anything reads `data`, so free space and pattern reuse see the edits
-    this.mergeRomPatches();
     // Preserve the order that the segments are declared
     for (const name of [...this.segmentOrder, ...this.rawSegments.keys()]) {
       if (this.segmentIndex.has(name)) continue;
@@ -1666,6 +1670,7 @@ class Link {
       this.stopIfFailed('the late assembly pass failed');
       this.lowerSegments(merged);
     }
+    this.mergeRomPatches();
 
     // Build up the LinkSegment objects
     this.collect(merged, ([name, s]) => {
@@ -1858,7 +1863,8 @@ class Link {
     const linkEnv = buildLinkTimeEnv(this.rawModules, merged);
     const noMessages = this.rawModules.map(() => []);
     const replayed = replayModules(this.rawModules, noMessages, linkEnv, signal,
-                                   {errorLimit: this.errorCollector?.limit});
+                                   {errorLimit: this.errorCollector?.limit,
+                                    allowJavascript: this.allowJavascript, baseRom: this.baseRom});
     if (this.errorCollector) this.errorCollector.merge(replayed.messages);
     let didReplace = false;
     for (let i = 0; i < this.rawModules.length; i++) {

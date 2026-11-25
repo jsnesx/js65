@@ -480,6 +480,29 @@ function validateLateAssembly(v: unknown, path: string): LateAssembly {
   const out: LateAssembly = { sizeQueries, condQueries, globalKinds, opts };
   if (v.input !== undefined) out.input = validateLateAssemblyInput(v.input, `${path}.input`);
   if (v.files !== undefined) out.files = validateSourceLog(v.files, `${path}.files`);
+  if (v.javascript !== undefined) {
+    const js = v.javascript;
+    const at = `${path}.javascript`;
+    if (!isObject(js)) fail(at, 'expected object');
+    const replay: NonNullable<LateAssembly['javascript']> =
+        {files: validateSourceLog(js.files, `${at}.files`)};
+    out.javascript = replay;
+    if (js.baseRomLength !== undefined) {
+      replay.baseRomLength = reqOffset(js.baseRomLength, `${at}.baseRomLength`);
+    }
+    if (js.baseRomSha1 !== undefined) {
+      replay.baseRomSha1 = reqString(js.baseRomSha1, `${at}.baseRomSha1`);
+    }
+    if (js.includePaths !== undefined) {
+      replay.includePaths = reqArray(js.includePaths, `${at}.includePaths`).map(p => reqString(p, at));
+    }
+    if (js.directories !== undefined) {
+      replay.directories = new Map(reqArray(js.directories, `${at}.directories`).map(entry => {
+        const [name, entries] = reqArray(entry, at);
+        return [reqString(name, at), reqArray(entries, at).map(e => reqString(e, at))];
+      }));
+    }
+  }
   if (v.defines !== undefined) out.defines = validateDefines(v.defines, `${path}.defines`);
   return out;
 }
@@ -647,9 +670,14 @@ export function parseModule(obj: unknown): Validated<Module> {
     if (obj.romPatch !== undefined) {
       out.romPatch = validateRomPatch(obj.romPatch, 'module.romPatch');
     }
+    if (obj.additionalJsPosts !== undefined) {
+      out.additionalJsPosts = reqArray(obj.additionalJsPosts, 'module.additionalJsPosts')
+          .map((p, i) => validateJsPost(p, `module.additionalJsPosts[${i}]`));
+    }
     if (obj.jsPost !== undefined) {
       out.jsPost = validateJsPost(obj.jsPost, 'module.jsPost');
     }
+    if (out.additionalJsPosts && !out.jsPost) fail('module.additionalJsPosts', 'requires module.jsPost');
     return { ok: true, value: out };
   } catch (err) {
     if (err instanceof ValidationError) return { ok: false, error: err.message };

@@ -1054,7 +1054,7 @@ describe('replay keeps staged JavaScript output', function() {
 
   const zpEnv: LinkTimeEnv =
       {addrSize: () => 1, bank: () => undefined, segmentBank: () => undefined};
-  const DEFERRED = '.import foo\n.if .defined(foo) && foo < $100\n  .byte 1\n.endif\n';
+  const DEFERRED = '.import foo\nlda foo\n';
 
   function build(js: string, fromObject: boolean) {
     const result = libAssemble([{type: 'source', name: 'main.s', code: js + DEFERRED}],
@@ -1062,8 +1062,10 @@ describe('replay keeps staged JavaScript output', function() {
     expect(result.messages.filter(m => m.level === 'error')).toEqual([]);
     const original = fromObject ?
         deserializeObjectFile(serializeObjectFile(result.modules[0])) : result.modules[0];
-    expect(original.lateAssembly?.condQueries.length).toBeGreaterThan(0);
-    const replay = replayModules([original], [[]], zpEnv);
+    expect(original.lateAssembly?.sizeQueries.length).toBeGreaterThan(0);
+    const replay = replayModules([original], [[]], zpEnv, undefined,
+                                 {allowJavascript: true, baseRom: new Uint8Array(2)});
+    expect(replay.messages.filter(m => m.level === 'error')).toEqual([]);
     expect(replay.replayed).toEqual([0]);
     return {original, replayed: replay.modules[0]};
   }
