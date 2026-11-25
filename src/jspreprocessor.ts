@@ -20,6 +20,8 @@ export interface JsPreprocessOptions {
   includePaths?: string[];
   binIncludePaths?: string[];
   baseRom?: Uint8Array;
+  moduleRom?: () => Uint8Array<ArrayBuffer>;
+  registerPost?: (post: JsPost) => void;
 }
 
 export interface JsPreprocessResult {
@@ -291,7 +293,7 @@ function resolveInputs(file: string, decls: Declarations,
 const BASEROM_MAX_LENGTH = 32 * 1024 * 1024; // 32 MB
 
 /** A copy of `base` in a resizable buffer, so blocks can grow it in place. */
-function growableRom(base: Uint8Array): Uint8Array<ArrayBuffer> {
+export function growableRom(base: Uint8Array): Uint8Array<ArrayBuffer> {
   const buffer = new ArrayBuffer(base.length, {
     maxByteLength: Math.max(BASEROM_MAX_LENGTH, base.length),
   });
@@ -300,15 +302,19 @@ function growableRom(base: Uint8Array): Uint8Array<ArrayBuffer> {
   return rom;
 }
 
-export function diffRom(base: Uint8Array, rom: Uint8Array<ArrayBuffer>): RomPatch | undefined {
+function checkRom(base: Uint8Array, rom: Uint8Array<ArrayBuffer>) {
   if (rom.buffer.detached) {
     throw new Error('baserom buffer was detached (transfer() is not allowed)');
   }
-  const newLength = rom.length;
   // The link-time merge keeps the largest length, so a shrink could never apply
-  if (newLength < base.length) {
-    throw new Error(`baserom was shrunk from ${base.length} to ${newLength} bytes; the ROM can only grow`);
+  if (rom.length < base.length) {
+    throw new Error(`baserom was shrunk from ${base.length} to ${rom.length} bytes; the ROM can only grow`);
   }
+}
+
+export function diffRom(base: Uint8Array, rom: Uint8Array<ArrayBuffer>): RomPatch | undefined {
+  checkRom(base, rom);
+  const newLength = rom.length;
   const runs: RomPatchRun[] = [];
   let i = 0;
   while (i < newLength) {
@@ -414,6 +420,10 @@ function blank(lines: string[], start: number, end: number, text = '') {
 
 export function jsPreprocess(code: string, file: string,
                              opts: JsPreprocessOptions): JsPreprocessResult {
+  // fast path skip anything without any `.js` in it at all.
+  // sorry not sorry if you decide to have `.js` in a comment lol
+  if (!/\.js/i.test(code))
+    return {code, usedJavascript: false, blocks: 0};
   const lines = code.split('\n');
   const {decls, blocks, posts} = scan(lines, file);
   if (!blocks.length && !posts.length && !decls.includes.length && !decls.inputs.length &&
@@ -446,7 +456,7 @@ export function jsPreprocess(code: string, file: string,
   const out = [...lines];
   const jsDeflate = deflate();
   const base = opts.baseRom ?? new Uint8Array(0);
-  const baserom = growableRom(base);
+  const baserom = opts.moduleRom?.() ?? growableRom(base);
   for (const b of blocks) {
     // The body starts on the line after `.jsbegin`.
     const {code: src, spans} =
@@ -458,6 +468,11 @@ export function jsPreprocess(code: string, file: string,
                          __js65_deflate: jsDeflate, ...inputs});
       } catch (err) {
         throw blockError(err, file, b.start, spans);
+      }
+      try {
+        checkRom(base, baserom);
+      } catch (err) {
+        fail(file, b.start, (err as Error).message);
       }
       return a.actions;
     });
@@ -483,6 +498,16 @@ export function jsPreprocess(code: string, file: string,
     prelude: prelude.map(({text, ...s}) => s.module != null ? s : {...s, text}),
     blocks: posts.map(p => ({line: p.start, body: p.body})),
   } : undefined;
+  if (jsPost && opts.registerPost) {
+    const register = opts.registerPost;
+    for (const block of jsPost.blocks) {
+      const index = opts.jsActions.add(() => {
+        register({...jsPost, blocks: [block]});
+        return [];
+      });
+      out[block.line - 1] = `.jsaction ${index}`;
+    }
+  }
   return {code: out.join('\n'), usedJavascript: true, blocks: blocks.length, romPatch, jsPost};
 }
 

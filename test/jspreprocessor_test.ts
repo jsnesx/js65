@@ -577,13 +577,13 @@ describe('baserom', function() {
   });
 
   it('reports a detached buffer against the file', function() {
-    const r = run(block('baserom.buffer.transfer();'), {}, {baseRom: new Uint8Array(4)});
-    expect(() => r.romPatch!()).toThrow(/detached/);
+    expect(() => run(block('baserom.buffer.transfer();'), {}, {baseRom: new Uint8Array(4)}))
+        .toThrow(/detached/);
   });
 
   it('rejects shrinking below the base length', function() {
-    const r = run(block('baserom.buffer.resize(2);'), {}, {baseRom: new Uint8Array(4)});
-    expect(() => r.romPatch!()).toThrow(/shrunk from 4 to 2/);
+    expect(() => run(block('baserom.buffer.resize(2);'), {}, {baseRom: new Uint8Array(4)}))
+        .toThrow(/shrunk from 4 to 2/);
   });
 
   it('rejects a .jsinput that would shadow it', function() {
@@ -727,6 +727,122 @@ describe('baserom merged at link time', function() {
       0, 0, 0, 0, 1, 1,
       0, 0, 4, 0, 0, 0, 0x1c, 0,
       0x45, 0x4f, 0x46]);
+  });
+});
+
+describe('JavaScript in assembly includes', function() {
+  const block = (body: string) => `.jsbegin\n${body}\n.jsend\n`;
+  const post = (body: string) => `.jspostbegin\n${body}\n.jspostend\n`;
+  const src = (code: string): AssemblyInput => ({type: 'source', name: 'main.s', code});
+  const opts = {allowJavascript: true, baseRom: new Uint8Array(8)};
+
+  it('shares the module ROM, posts each block once, and keeps debug sources', function() {
+    const code = 'Value = 3\n' + block('baserom[2] = 1;') +
+        post('rom[3] = 1;') + '.include "dir/header.s"\n' +
+        block('baserom[2] *= 2;') + post('rom[3] *= 2;');
+    const child = '.jsinclude "helper.js"\n.jsinput input, "data"\n' +
+        block('baserom[2] += add(defines.Value, input.bytes[0]);') +
+        post('rom[3] = add(rom[3], 2);');
+    const contents = new SourceContents();
+    const result = assemble([src(code)], {...opts, generateDebugInfo: true}, callbacks({
+      'dir/header.s': '.include "nested.s"\n.include "nested.s"\n',
+      'dir/nested.s': child, 'dir/helper.js': 'const add = (a, b) => a + b;',
+      'dir/data': 'A',
+    }), contents);
+    expect(result.messages).toEqual([]);
+    expect(contents.data.get('dir/nested.s')).toBe(child);
+    const module = deserializeObjectFile(serializeObjectFile(result.modules[0]));
+    const linked = link([module], opts);
+    expect(linked.messages).toEqual([]);
+    expect([...linked.data.slice(2, 4)]).toEqual([18, 6]);
+  });
+
+  it('registers a repeated post block once', function() {
+    const result = assemble([src('.repeat 3\n.include "p.s"\n.endrep\n')], opts,
+                            callbacks({'p.s': post('rom[0]++;')}));
+    expect(result.messages).toEqual([]);
+    expect(result.modules[0].jsPost?.blocks.length).toBe(1);
+    expect(result.modules[0].additionalJsPosts).toBeUndefined();
+  });
+
+  it('gates JS at its included source line and skips inactive includes', function() {
+    const fs = callbacks({'header.s': '\n' + block('a.byte(1);')});
+    const include = '.include "header.s"\n';
+    expect(assemble([src('.if 0\n' + include + '.endif\n')], {}, fs).success).toBe(true);
+    const result = assemble([src(include)], {}, fs);
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('requires --allow-javascript'),
+      source: expect.objectContaining({file: 'header.s', line: 2}),
+    }));
+  });
+
+  it('replays a newly taken include from an object with frozen JS inputs', function() {
+    const code = '.segment "B" :bank 1 :size 1 :mem $a000 :off 7\n.org $a000\nTarget: rts\n' +
+        '.segment "A" :bank 0 :size 4 :mem $8000 :off 0\n' +
+        '.org $8000\n.if .bank(Target) <> .bank(*)\n.include "sub/body.s"\n.endif\n';
+    const body = '.jsinclude "helper.js"\n.jsinput inputs, "*.dat"\n' +
+        block('a.byte(add(inputs[0].bytes[0])); baserom[5]++;') + post('rom[6] = rom[5] + 1;');
+    const result = assemble([src(code)], opts, callbacks({
+      'sub/body.s': body, 'sub/helper.js': 'const add = n => n + 1;', 'sub/x.dat': 'A',
+    }));
+    expect(result.messages).toEqual([]);
+    const module = deserializeObjectFile(serializeObjectFile(result.modules[0]));
+    expect(module.jsPost).toBeUndefined();
+    expect(link([module], {}).success).toBe(false);
+    const linked = link([module], opts);
+    expect(linked.messages).toEqual([]);
+    expect([...linked.data]).toEqual([66, 0, 0, 0, 0, 1, 2, 0x60]);
+    const ips = link([module], opts, 'ips');
+    expect(ips.messages).toEqual([]);
+    expect([...ips.data]).toEqual([
+      80, 65, 84, 67, 72, 0, 0, 0, 0, 1, 66, 0, 0, 5, 0, 3, 1, 2, 0x60, 69, 79, 70,
+    ]);
+  });
+
+  const bankCode = '.segment "B" :bank 1 :size 1 :mem $a000 :off 7\n.org $a000\nTarget: rts\n' +
+      '.segment "A" :bank 0 :size 4 :mem $8000 :off 0\n' +
+      '.org $8000\n.if .bank(Target) <> .bank(*)\n.include "sub/body.s"\n.endif\n';
+  const bankFiles = () => callbacks({
+    'sub/body.s': '.jsinclude "helper.js"\n.jsinput inputs, "*.dat"\n' +
+        block('a.byte(add(inputs[0].bytes[0])); baserom[5]++;'),
+    'sub/helper.js': 'const add = n => n + 1;', 'sub/x.dat': 'A',
+  });
+  const bankObject = () => {
+    const result = assemble([src(bankCode)], opts, bankFiles());
+    expect(result.messages).toEqual([]);
+    return deserializeObjectFile(serializeObjectFile(result.modules[0]));
+  };
+
+  it('replays in memory with the assembled flag and base ROM', function() {
+    const result = assemble([src(bankCode)], opts, bankFiles());
+    expect(result.messages).toEqual([]);
+    const linked = link(result.modules, {});
+    expect(linked.messages).toEqual([]);
+    expect([...linked.data]).toEqual([66, 0, 0, 0, 0, 1, 0, 0x60]);
+  });
+
+  it('refuses to replay against a different base ROM', function() {
+    for (const baseRom of [new Uint8Array([1, 0, 0, 0, 0, 0, 0, 0]), new Uint8Array(4)]) {
+      const linked = link([bankObject()], {allowJavascript: true, baseRom});
+      expect(linked.messages).toContainEqual(expect.objectContaining({
+        message: expect.stringContaining('requires the original base ROM (8 bytes'),
+      }));
+    }
+    const longer = link([bankObject()], {allowJavascript: true, baseRom: new Uint8Array(16)});
+    expect(longer.messages).toEqual([]);
+  });
+
+  it('fails a replay that needs JS files pass 1 never read', function() {
+    const noText = bankObject();
+    noText.lateAssembly!.javascript!.files.text.clear();
+    expect(link([noText], opts).messages).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('helper.js, which the first pass did not load'),
+    }));
+    const noListing = bankObject();
+    noListing.lateAssembly!.javascript!.directories = undefined;
+    expect(link([noListing], opts).messages).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('needs a listing of sub'),
+    }));
   });
 });
 

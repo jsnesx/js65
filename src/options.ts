@@ -38,6 +38,12 @@ export type JsBlockRunner = (ctx: JsBlockContext) => AssemblyAction[];
 export class JsActionTable {
   private readonly entries: JsBlockRunner[] = [];
 
+  fork(): JsActionTable {
+    const table = new JsActionTable();
+    for (const entry of this.entries) table.entries.push(entry);
+    return table;
+  }
+
   add(run: JsBlockRunner): number {
     return this.entries.push(run) - 1;
   }
@@ -140,6 +146,7 @@ export interface AssemblerOptions {
 
 /** Options the linker reads. */
 export interface LinkerOptions {
+  allowJavascript?: boolean;
   target?: string;
   /** Full text of the linker config file. */
   linkerConfig?: string;

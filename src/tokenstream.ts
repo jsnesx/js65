@@ -106,7 +106,9 @@ export class TokenStream implements Tokens.Source {
     readonly opts?: Options,
     readonly sourceContents?: SourceContents,
     readonly errorCollector?: ErrorCollector,
-    readonly sourceLog?: SourceLog) {}
+    readonly sourceLog?: SourceLog,
+    private readonly tokenizeInclude?: (code: string, name: string) => Tokenizer,
+    private readonly preloadInclude?: (code: string, name: string) => void) {}
 
   /** Directory the frame currently on top should resolve includes against. */
   private currentDir(): string | undefined {
@@ -175,9 +177,9 @@ export class TokenStream implements Tokens.Source {
     // path so that two "header.inc" files in different dirs have the correct path.
     const resolved = joinDir(base, path);
     // Nested includes resolve relative to this file's own directory.
-    this.enter(new Tokenizer(code, resolved, this.opts, this.sourceContents,
-                             this.errorCollector),
-               joinDir(base, dirOf(path)));
+    const tokenizer = this.tokenizeInclude?.(code, resolved) ??
+        new Tokenizer(code, resolved, this.opts, this.sourceContents, this.errorCollector);
+    this.enter(tokenizer, joinDir(base, dirOf(path)));
   }
 
   /** Pushes one of the built-in macro packages onto the stack. */
@@ -221,7 +223,9 @@ export class TokenStream implements Tokens.Source {
       return;
     }
     if (!binary) {
-      log.text.set(key, found as ResolvedFile<string>);
+      const text = found as ResolvedFile<string>;
+      log.text.set(key, text);
+      this.preloadInclude?.(text.content, joinDir(bases[text.baseIndex], path));
       return;
     }
     const content = typeof found.content === 'string' ?
