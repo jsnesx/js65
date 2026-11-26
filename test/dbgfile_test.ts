@@ -290,6 +290,24 @@ describe('module debug tables', () => {
     expect(symNamed(m, 'ext').refs!.map(id => lineOf(m, id).line)).toEqual([5]);
   });
 
+  it('records forward refs only on their final definitions', () => {
+    const m = build([
+      'Target: rts',
+      '.proc Nested',
+      '  bne Target',
+      'Target: rts',
+      '.endproc',
+      '.proc Fallback',
+      '  jsr Target',
+      '  .dbg sym, "target", "00", static, "Target"',
+      '.endproc',
+    ].join('\n'));
+    const syms = m.debug!.syms.filter(sym => sym.name === 'Target');
+    expect(syms.map(sym => sym.defs?.map(id => lineOf(m, id).line))).toEqual([[1], [4]]);
+    expect(syms.map(sym => sym.refs?.map(id => lineOf(m, id).line))).toEqual([[7], [3]]);
+    expect(m.debug!.syms[m.debug!.hll[0].sym!]).toBe(syms[0]);
+  });
+
   it('lists the main file first with its size', () => {
     const code = 'nop\n; é\n';
     const m = build(code);

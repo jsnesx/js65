@@ -514,6 +514,48 @@ Target:
     expect(replay.success).toBe(true);
   });
 
+  it('answers late bank conditions for local forward references and enclosing fallbacks', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "CODE"
+.scope Nested
+  .word Target
+  .if .bank(Target) = 0 && .bank(Enclosing) = 1
+    .byte $11
+  .endif
+Target: rts
+.endscope
+.segment "BANK1"
+Target: rts
+Enclosing: rts
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+    expect(Array.from(replay.modules[0].chunks![0].data)).toEqual([0xff, 0xff, 0x11, 0x60]);
+  });
+
+  it('does not use an enclosing bank for deferred data when a later local label exists', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "BANK1"
+Target: rts
+.segment "CODE"
+.scope Nested
+  .byte .bank(Target), .bank(Fallback)
+  .if .bank(External) = 1
+    nop
+  .endif
+Target: rts
+.endscope
+.segment "BANK1"
+Fallback: rts
+External: rts
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+    expect(replay.modules[0].chunks![1].subs?.map(s => s.expr.num)).toEqual([0, 1]);
+  });
+
   it('keys collected segments by qualified name', function() {
     const asm = new Assembler(Cpu.P02);
     asm.segment('CODE');
@@ -529,7 +571,7 @@ Target:
         .toEqual(['One::Target', 'Two::Target']);
   });
 
-  it('skips anonymous scopes when qualifying a key', function() {
+  it('distinguishes anonymous scopes when qualifying keys', function() {
     const asm = new Assembler(Cpu.P02);
     asm.segment('CODE');
     asm.scope(undefined);
@@ -538,7 +580,37 @@ Target:
     asm.byte(0);
     asm.endScope();
     asm.endScope();
-    expect([...asm.collectLocalSegments().keys()]).toEqual(['Far::Target']);
+    asm.scope(undefined);
+    asm.scope('Far');
+    asm.label('Target');
+    asm.byte(0);
+    asm.endScope();
+    asm.endScope();
+    expect([...asm.collectLocalSegments().keys()]).toEqual(['#0::Far::Target', '#1::Far::Target']);
+  });
+
+  it('resolves same-named forward refs in separate anonymous scopes', function() {
+    const {result, env} = assembleSource(SEGMENTS + `
+.segment "CODE"
+.scope
+  .if .bank(Target) = 0
+    .byte $11
+  .endif
+Target: rts
+.endscope
+.segment "BANK1"
+.scope
+  .if .bank(Target) = 1
+    .byte $22
+  .endif
+Target: rts
+.endscope
+`);
+    const replay = replayModules(result.modules, result.moduleMessages, env);
+    expect(messages(replay.messages)).toEqual([]);
+    expect(replay.success).toBe(true);
+    expect(replay.modules[0].chunks?.map(c => Array.from(c.data)))
+        .toEqual([[0x11, 0x60], [0x22, 0x60]]);
   });
 
   it('does not collide same-named labels in sibling scopes', function() {

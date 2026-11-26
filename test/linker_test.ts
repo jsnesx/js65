@@ -134,7 +134,9 @@ describe('Linker', function() {
     expect(chunks(link(m))).toEqual([[50, [0x34, 0xff]]]);
   });
 
-  it('should truncate an out-of-range branch marked forceRange', function() {
+  it('should reject an out-of-range branch marked forceRange', function() {
+    // force_range truncates immediates and data, but a branch displacement
+    // keeps its signed range check, like ca65's signed fragments.
     const m = {
       chunks: [{
         segments: ['code'],
@@ -146,7 +148,7 @@ describe('Linker', function() {
       }],
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
-    expect(chunks(link(m))).toEqual([[50, [0xff, 200]]]);
+    expect(() => link(m)).toThrow(/Branch out of range: offset 200/);
   });
 
   it('should fill in an offset from a symbol', function() {
@@ -185,6 +187,23 @@ describe('Linker', function() {
       segments: [{name: 'code', size: 400, offset: 30, memory: 80}],
     };
     expect(chunks(link(m))).toEqual([[50, [2, 4, 181, 8]]]);
+  });
+
+  it('diagnoses a local assignment that refers to its own pending definition', () => {
+    const input: AssemblyInput = {type: 'source', name: 'cycle.s', code:
+        'foo=8\n.scope Inner\nfoo=foo+1\n.byte foo\n.endscope'};
+    const result = compile([input], {});
+    expect(result.success).toBe(false);
+    expect(result.messages.some(m => m.message === "Circular reference in definition of symbol 'foo'"))
+        .toBe(true);
+  });
+
+  it('diagnoses a cycle formed when a nested reference binds to its parent', () => {
+    const input: AssemblyInput = {type: 'source', name: 'cycle.s', code:
+        'foo=Inner::bar\n.scope Inner\nbar=foo+1\n.endscope\n.word foo'};
+    const result = compile([input], {});
+    expect(result.success).toBe(false);
+    expect(result.messages.filter(m => m.message === 'Circular symbol reference')).toHaveLength(1);
   });
 
   it('should support multiple segments', function() {
@@ -3324,6 +3343,30 @@ foo:
     expect(Array.from(result.outputs[0].data.slice(0, 2))).toEqual([0xa5, 0x20]);
   });
 
+  it('recomputes a forward branch to a shadowing local when a zero-page import shrinks', () => {
+    const main: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.segment "CODE" :bank 0 :size $100 :mem $8000 :off 0
+.org $8000
+.import ZpVar
+Exit: rts
+.proc Worker
+  bne Exit
+  lda ZpVar
+Exit: rts
+.endproc
+`};
+    const zp: AssemblyInput = {type: 'source', name: 'zp.s', code: `
+.segment "ZP" :size $10 :mem $20 :zp
+.export ZpVar
+ZpVar: .res 1
+`};
+    const result = compile([main, zp], {});
+    expect(result.messages).toEqual([]);
+    expect(result.success).toBe(true);
+    // The first pass reserves three bytes for lda. The linked branch skips two.
+    expect(Array.from(result.outputs[0].data)).toEqual([0x60, 0xd0, 0x02, 0xa5, 0x20, 0x60]);
+  });
+
   it('does not re-assemble or disturb linking when every import is already sized', function() {
     const zp: AssemblyInput = {
       type: 'source', name: 'zp.s',
@@ -3512,6 +3555,35 @@ Target:
       // instead, so `after` lands 2 bytes later than pass 1's guess did.
       expect(Array.from(result.outputs[0].data.slice(0, 5)))
           .toEqual([0xea, 0x11, 0x11, 0x11, 0xea]);
+    });
+
+    it('rebinds operands when a late conditional adds one local definition and removes another', () => {
+      const source: AssemblyInput = {type: 'source', name: 'main.s', code: `
+.segment "CODE" :bank 0 :size $100 :mem $8000 :off 0
+.org $8000
+Value = 2
+Exit: rts
+.proc Worker
+  lda #Value
+  bne Exit
+  .if .bank(Gate) = 1
+    nop
+Exit: rts
+  .else
+    Value = 3
+  .endif
+.endproc
+.segment "BANK1" :bank 1 :size $100 :mem $9000 :off $100
+.org $9000
+Gate: rts
+`};
+      const result = compile([source], {});
+      expect(result.messages).toEqual([]);
+      expect(result.success).toBe(true);
+      // The first scan cannot know Gate's bank. Once the bank is known, the
+      // local Value disappears and the newly active local Exit claims the branch.
+      expect(Array.from(result.outputs[0].data.slice(0, 7)))
+          .toEqual([0x60, 0xa9, 0x02, 0xd0, 0x01, 0xea, 0x60]);
     });
 
     it('does not replay or error on assemble-only (no link)', function() {

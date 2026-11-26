@@ -18,7 +18,7 @@ import type { LinkTimeEnv } from '../assemblypass.ts';
 import { runActions } from './actions.ts';
 import { IntervalSet, MaxKeySizeCacheMap } from '../util.ts';
 import { CheapScope, RE_SCOPE_SPLIT, SIZE_NAME, SIZE_SUFFIX, Scope, type Symbol,
-         firstRef, isSizeOfSymbol, parseSymbol } from './scope.ts';
+         bindForwardRef, firstRef, isSizeOfSymbol, parseSymbol } from './scope.ts';
 import { CharMap, type CharMapping, writeString } from './charmap.ts';
 import { LocalLabels } from './locallabels.ts';
 import { SegmentParser } from './segmentparser.ts';
@@ -44,6 +44,11 @@ const PREDECLARED_SEGMENTS = new Map<string, mod.Segment>([
 
 /** Any operation that forces the expr to be linker derived */
 const DEFERRABLE_LINK_OPS = new Set(['^', '.bankbyte', '.addrsize']);
+
+function referencesId(expr: Expr, id: number): boolean {
+  return (expr.op === 'sym' && expr.num === id) ||
+      Boolean(expr.args?.some(arg => referencesId(arg, id)));
+}
 
 /**
  * List of CPUs that we support.
@@ -260,13 +265,13 @@ export class Assembler {
     if (opts.collectReferences || opts.generateDebugInfo) {
       this.currentScope.collectRefs = true;
       this.cheapLocals.collectRefs = true;
+      this.symbolLookup.referenceSources = true;
     }
     if (opts.generateDebugInfo) {
       this.dbg = new AssemblyDebug(opts.moduleName, {
         lookupSymbol: name => this.lookupSymbol(name),
         resolve: expr => this.resolve(expr),
-        isZeropageGlobal: name => this.globals.isZeropage(name),
-        isImport: name => this.globals.hasGlobalKind(name, 'import'),
+        isImport: (name, scope) => this.globals.isImport(name, scope),
         errorCollector: this.errorCollector,
       });
     }
@@ -342,31 +347,11 @@ export class Assembler {
     this._chunkIndex = -1;
   }
 
-  /**
-   * the inlining flag is used when we are looking up a symbol from the parent scope
-   * if the parent scope has a value, we don't inline the new value immediately, we
-   * create a scoped forwards ref and figure it out later.
-   */
-  private walkSymbolTree(sym: string, inlining = false): Expr|undefined {
-    let scope: Scope|undefined = this.currentScope;
-    const unscoped = !sym.includes('::');
-    do {
-      const s = scope.resolve(sym, {allowForwardRef: false, missingScope: 'undefined'});
-      if (s && inlining && s.id! < 0 && scope !== this.currentScope) {
-        return undefined;
-      }
-      if (s) return s.expr;
-    } while (unscoped && (scope = scope.parent));
-    return undefined;
-  }
-
   definedSymbol(sym: string): boolean {
     // In this case, it's okay to traverse up the scope chain since if we
     // were to reference the symbol, it's guaranteed to be defined somehow.
-    if (this.globals.hasGlobalKind(sym, 'import')) return true;
-    const s = this.walkSymbolTree(sym);
-    if (s !== undefined) return Boolean(s);
-    return false;
+    if (this.globals.isImport(sym, this.currentScope)) return true;
+    return Boolean(this.lookupSymbol(sym)?.expr);
   }
 
   /**
@@ -387,7 +372,7 @@ export class Assembler {
 
   definedValue(sym: string): Expr|undefined {
     if (sym === '*') return this.pc();
-    const expr = this.walkSymbolTree(sym, true);
+    const expr = this.lookupSymbol(sym, 'immediate')?.expr;
     // A forward reference is allowed at the spot a label is defined, but if you
     // try to resolve it, then the forward reference needs to be resolvable at this stage.
     // So we need to call `resolve` here to get a numeric value for a label if possible.
@@ -399,7 +384,7 @@ export class Assembler {
     // ; .if test3 ; not okay since MyLabel is unresolved
     // MyLabel:
     // .if test3  ; okay since MyLabel is resolved.
-    return expr && this.resolve(expr);
+    return expr && this.resolve(expr, true);
   }
 
   constantSymbol(sym: string): boolean {
@@ -412,9 +397,10 @@ export class Assembler {
   referencedSymbol(sym: string): boolean {
     // If not referenced in this scope, we don't know which it is...
     // NOTE: this is different from ca65.
-    const s = this.currentScope.resolve(
-        sym, {allowForwardRef: false, missingScope: 'undefined'});
-    return s != null; // NOTE: this counts definitions.
+    const picked = this.currentScope.pickScope(sym, undefined, 'undefined');
+    if (!picked) return false;
+    const [name, scope] = picked;
+    return scope.symbols.has(name) || scope.forwardRefs.has(name);
   }
 
   isMnemonic(name: string): boolean {
@@ -453,7 +439,7 @@ export class Assembler {
   }
 
   evaluate(expr: Expr): number|undefined {
-    expr = this.resolve(expr);
+    expr = this.resolve(expr, true);
     if (expr.op === 'num' && !expr.meta?.rel) return expr.num;
     return undefined;
   }
@@ -516,20 +502,23 @@ export class Assembler {
    * When parsing symbols, we will need to be able to both resolve a symbol in the
    * scope, and also size a symbol. Instead of sticking zeropage in as a second
    * param everywhere, we can just roll it together with the symbol lookup.
-   * `ref` is an optional callback so the LSP can track every identifier token
-   * to its `Symbol` even when the parser inlines an already-defined expr
+   * Record references to inlined symbols here. Unresolved names carry their
+   * token source until resolveSymbol can attach the reference to its binding.
    */
   private readonly symbolLookup: Exprs.SymbolLookup = {
-    get: (name: string) => this.lookupSymbol(name, true),
+    get: (name: string) => this.lookupSymbol(name, 'deferred'),
     zeropage: (name: string) => this.isZeropageRef(name),
-    ref: (name: string, source?: Tokens.SourceInfo): void => {
-      if (!source || !this.currentScope.collectRefs) return;
-      // Resolve through the same scope walk the assembler would use at eval
-      // time, then append the ref on the underlying Symbol.
-      const sym = this.lookupSymbol(name);
-      if (sym) (sym.refs ??= []).push(source);
-    },
+    ref: (sym, source) => this.recordInlinedRef(sym, source),
   };
+
+  private readonly immediateSymbolLookup: Exprs.SymbolLookup = {
+    get: name => this.lookupSymbol(name, 'immediate'),
+    ref: (sym, source) => this.recordInlinedRef(sym, source),
+  };
+
+  private recordInlinedRef(sym: Symbol, source?: Tokens.SourceInfo) {
+    if (source && this.currentScope.collectRefs) (sym.refs ??= []).push(source);
+  }
 
   // Returns an expr resolving to a symbol name (e.g. a label)
   symbol(name: string): Expr {
@@ -564,14 +553,8 @@ export class Assembler {
   /** Adapts the linker provided environment to combine it with the chunk info */
   private evalEnv(): Exprs.LinkTimeEvalEnv {
     return this._evalEnv ??= {
-      addrSize: (sym) => {
-        const segs = this.linkEnv?.localForwardRefs?.get(sym);
-        return segs ? this.linkEnv?.segmentAddrSize?.(segs) : this.linkEnv?.addrSize(sym);
-      },
-      bank: (sym) => {
-        const segs = this.linkEnv?.localForwardRefs?.get(sym);
-        return segs ? this.linkEnv?.segmentBank(segs) : this.linkEnv?.bank(sym);
-      },
+      addrSize: sym => this.linkEnv?.addrSize(sym),
+      bank: sym => this.linkEnv?.bank(sym),
       chunkBank: (chunkIndex) => {
         const segs = this.segmentsForChunk(chunkIndex);
         return segs && this.linkEnv?.segmentBank(segs);
@@ -579,28 +562,37 @@ export class Assembler {
     };
   }
 
-  /** Find the fully qualified scope name for a label ie: Scope::Inner::Label */
-  private localRefKey(name: string): string|undefined {
+  /** Checks the previous scan for a local label a late condition needs now. */
+  private cachedLinkValue(expr: Expr, name: string): Expr|undefined {
     // Cheap locals and `*`/anonymous/rts/relative refs are never scope-qualified.
     if (name.startsWith('@')) return undefined;
     if (parseSymbol(name).type !== 'none') return undefined;
-    if (name.includes('::')) {
-      const picked =
-          this.currentScope.pickScope(name, undefined, 'undefined');
-      if (!picked) return undefined;
-      const [tail, scope] = picked;
-      return scope.qualifiedPrefix() + tail;
+    const qualified = name.includes('::');
+    let picked = this.currentScope.pickScope(name, undefined, 'undefined');
+    if (qualified && !picked) {
+      // A qualified path can forward-reference a scope. Respect the first
+      // component's lexical owner when it is already visible.
+      const split = name.indexOf('::');
+      const head = name.slice(0, split);
+      const owner = head ? this.currentScope.findScope(head) : this.currentScope.global;
+      if (owner) picked = [name.slice(split + 2), owner];
     }
-    for (let scope: Scope|undefined = this.currentScope; scope;
-         scope = scope.parent) {
-      const sym = scope.symbols.get(name);
-      if (sym) return scope.qualifiedPrefix() + name;
+    const [tail, start] = picked ?? [name, this.currentScope];
+    for (let scope: Scope|undefined = start; scope; scope = scope.parent) {
+      const key = scope.localRefKey(tail);
+      this.localRefQueries.add(key);
+      const segs = this.linkEnv?.localForwardRefs?.get(key);
+      if (segs) {
+        const value = expr.op === '.addrsize' ? this.linkEnv?.segmentAddrSize?.(segs) :
+            this.linkEnv?.segmentBank(segs);
+        return value === undefined ? undefined : {op: 'num', num: value, meta: Exprs.size(value)};
+      }
+      if (qualified && picked) break;
     }
-    // Not declared yet, so a forward reference lands in the current scope.
-    return this.currentScope.qualifiedPrefix() + name;
+    return undefined;
   }
 
-  resolve(expr: Expr): Expr {
+  resolve(expr: Expr, immediate = false): Expr {
     // Fast path for plain numbers which are already resolved.
     if (expr.op === 'num' && !expr.args &&
         !(expr.meta?.rel && expr.meta.org != null)) {
@@ -614,33 +606,27 @@ export class Assembler {
         const replacement = this.sizeOf(e.args[0].sym);
         if (replacement) return Exprs.evaluate(rec(replacement));
         // Not defined yet - leave it for `resolveDeferredOps` to retry at the end.
-        this.deferredOps.set(e, {kind: 'sizeof', scope: this.currentScope});
+        if (!immediate) this.deferredOps.set(e, {kind: 'sizeof', scope: this.currentScope});
         return e;
       }
-      // Attempt to resolve a .bank(ForwardRef) before the rest of the code
-      // using the localForwardRefs from the linker, otherwise track it for the latepass.
-      if (DEFERRABLE_LINK_OPS.has(e.op) && e.args?.length === 1 &&
-          e.args[0].op === 'sym' && e.args[0].sym != null) {
-        const key = this.localRefKey(e.args[0].sym) ?? e.args[0].sym;
-        if (this.inCondition) this.localRefQueries.add(key);
-        if (this.linkEnv?.localForwardRefs?.has(key)) {
-          return Exprs.evaluate({...e, args: [{...e.args[0], sym: key}]},
-                                this.evalEnv());
-        }
-      }
       while (e.op === 'sym' && e.sym) {
-        e = this.resolveSymbol(e);
+        const replacement = this.resolveSymbol(e, immediate);
+        if (replacement === e) break;
+        e = replacement;
       }
       e = this.substituteResolvedRef(e);
       const recursed = rec(e);
+      const arg = recursed.args?.length === 1 && DEFERRABLE_LINK_OPS.has(recursed.op) ?
+          recursed.args[0] : undefined;
+      if (arg?.op === 'sym' && arg.sym != null) {
+        // Only a condition needs the previous scan's guess. Deferred operands
+        // wait for the symbol id to bind in this scan.
+        return (this.inCondition && this.cachedLinkValue(recursed, arg.sym)) || recursed;
+      }
       const out = Exprs.evaluate(recursed, this.evalEnv());
       // If we can't resolve this right now because its a linker value, store it for later.
-      if (out === recursed && DEFERRABLE_LINK_OPS.has(recursed.op) &&
-          recursed.args?.length === 1) {
-        const arg = recursed.args[0];
-        if (arg.op === 'sym' && arg.sym == null && arg.num != null) {
-          this.deferredOps.set(out, {kind: 'link'});
-        }
+      if (!immediate && out === recursed && arg?.op === 'sym' && arg.num != null) {
+        this.deferredOps.set(out, {kind: 'link'});
       }
       return out;
     });
@@ -762,7 +748,7 @@ export class Assembler {
     return sym;
   }
 
-  resolveSymbol(symbol: Expr): Expr {
+  resolveSymbol(symbol: Expr, immediate = false): Expr {
     const name = symbol.sym!;
     const parsed = parseSymbol(name);
     if (parsed.type === 'pc') {
@@ -772,19 +758,18 @@ export class Assembler {
       if (local) return local;
     }
     const scope = name.startsWith('@') ? this.cheapLocals : this.currentScope;
+    if (immediate) {
+      const sym = this.lookupSymbol(name, 'immediate');
+      if (sym?.expr) return sym.expr;
+      return this.globals.lateImport(name, this.currentScope, symbol.source, true) ?? symbol;
+    }
     // A nested term carries no source, but the debug info still wants its line.
     const ref = symbol.source || !this.dbg ? symbol : {source: this.dbg.source};
     const sym = scope.resolve(name, {allowForwardRef: true, ref});
-    if (sym.expr) {
-      // console.log(`sometging: ${JSON.stringify(sym)}`);
-      return sym.expr;
-    }
-    // If this is a late pass, we can resolve import and globalimport now
-    const imported = this.globals.lateImport(name, sym);
-    if (imported) return imported;
-    // if the expression is not yet known then refer to the symbol table,
-    // adding it if necessary.
+    if (sym.expr) return sym.expr;
     if (sym.id == null) this.allocSymbol(sym);
+    const imported = this.globals.lateImport(name, this.currentScope, firstRef(sym));
+    if (imported) return sym.expr = imported;
 
     const out: Expr = {op: 'sym', num: sym.id!};
     if (symbol.meta?.zeropage) out.meta = {zeropage: true};
@@ -813,43 +798,26 @@ export class Assembler {
       for (const child of scope.anonymousChildren) {
         close(child);
       }
-      for (const [name, sym] of scope.symbols) {
-        if (sym.expr || sym.id == null) continue;
-        if (scope.parent) {
-          // TODO - record where it was referenced?
-          if (sym.scoped) {
-            collector.add('error', `Symbol '${name}' undefined`, firstRef(sym));
-            continue;
-          }
-          const parentSym = scope.parent.symbols.get(name);
-          // check if this is already recorded multiple times from different scopes
-          // and don't double define it if it is.
-          const multiScopeGlobal = this.globals.isMultiScope(name);
-          if (!parentSym) {
-            // just alias it directly in the parent scope
-            if (!multiScopeGlobal) scope.parent.symbols.set(name, sym);
-          } else if (multiScopeGlobal) {
-            // leave sym as-is since the imports/exports pass resolves it directly.
-          } else {
-            // The parent symbol is the real one, so the debug info credits it the refs.
-            if (this.dbg && sym.refs) (parentSym.refs ??= []).push(...sym.refs);
-            if (parentSym.id != null && parentSym.id >= 0) {
-              // If this is resolving a macro from a parent symbol, try to use that value, otherwise
-              // fall back to parent sym id
-              sym.expr = {op: 'sym', num: parentSym.id};
-            } else if (parentSym.expr) {
-              sym.expr = parentSym.expr;
-            } else {
-              // must have either id or expr...?
-              collector.add('error', `Internal error: symbol '${name}' has neither id nor expr`, firstRef(sym));
-            }
-          }
+      const parent = scope.parent;
+      if (!parent) return;
+      for (const [name, sym] of scope.forwardRefs) {
+        const global = this.globals.kindInScope(name, scope);
+        if (sym.expr || global === 'import' || global === 'global' ||
+            (global && this.globals.isMultiScope(name))) continue;
+        scope.forwardRefs.delete(name);
+        if (sym.scoped) {
+          collector.add('error', `Symbol '${name}' undefined`, firstRef(sym));
+          continue;
         }
-        // handle global scope separately...
+        const defined = parent.symbols.get(name);
+        const target = defined ?? parent.forwardRefs.get(name);
+        if (target) {
+          bindForwardRef(sym, target, scope.collectRefs);
+        } else {
+          parent.forwardRefs.set(name, sym);
+        }
       }
     };
-
-    // test case: ref a name in two child scopes, define it in grandparent
 
     if (this.currentScope.parent) {
       // TODO - record where it was opened?
@@ -963,20 +931,18 @@ export class Assembler {
     const out = new Map<string, readonly string[]>();
     // Keyed by qualified name so `Far::Target` and a bare `Target` in another
     // scope stay distinct, matching how a reference spells them.
-    const visit = (scope: Scope, prefix: string) => {
+    const visit = (scope: Scope) => {
       for (const [name, sym] of scope.symbols) {
         if (isSizeOfSymbol(name) || name.startsWith('@')) continue;
         const chunkIndex = sym.expr?.meta?.chunk;
         if (chunkIndex == null) continue;
         const segs = this.chunks[chunkIndex]?.segments;
-        if (segs) out.set(prefix + name, segs);
+        if (segs) out.set(scope.localRefKey(name), segs);
       }
-      for (const [name, child] of scope.children) visit(child, `${prefix}${name}::`);
-      // An anonymous scope has no name to qualify with, so its symbols are only
-      // reachable unqualified from inside it.
-      for (const child of scope.anonymousChildren) visit(child, prefix);
+      for (const child of scope.children.values()) visit(child);
+      for (const child of scope.anonymousChildren) visit(child);
     };
-    visit(this.currentScope.global, '');
+    visit(this.currentScope.global);
     return out;
   }
 
@@ -1199,7 +1165,8 @@ export class Assembler {
       this.lateAssemblyCondQueries.push({source: at.source});
       return undefined;
     }
-    const expr = this.parseExpr(tokens, 1);
+    // The preprocessor already recorded the condition's source references.
+    const expr = Exprs.parseOnly(tokens, 1, undefined, this.encodeChar);
     const prev = this.inCondition;
     this.inCondition = true;
     let value;
@@ -1291,10 +1258,10 @@ export class Assembler {
       this._source = tokens[0].source;
     }
     const name = Tokens.str(tokens[0]);
-    const expr = this.parseExpr(tokens, 2);
+    const ctx = this.structContext[this.structContext.length - 1];
+    const expr = this.parseExpr(tokens, 2, ctx?.kind === 'enum');
     // := marks the sym as a label so it shows up in debuggers
     const isLabel = Tokens.eq(tokens[1], Tokens.ASSIGN_LABEL);
-    const ctx = this.structContext[this.structContext.length - 1];
     if (ctx?.kind !== 'enum') {
       this.assign(name, expr, isLabel, tokens[0]);
       return;
@@ -1315,7 +1282,7 @@ export class Assembler {
     if (tokens[0].source) {
       this._source = tokens[0].source;
     }
-    this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2), tokens[0]);
+    this.set(Tokens.str(tokens[0]), this.parseExpr(tokens, 2, true), tokens[0]);
   }
 
   assign(ident: string, expr: Expr|number, isLabel = false, token?: Token,
@@ -1333,7 +1300,7 @@ export class Assembler {
       this.fail(`Cheap locals may only be labels: ${ident}`);
     }
     // Now make the assignment.
-    if (typeof expr !== 'number') expr = this.resolve(expr);
+    if (typeof expr !== 'number') expr = this.resolve(expr, true);
     this.assignSymbol(ident, true, expr, token);
   }
 
@@ -1364,29 +1331,30 @@ export class Assembler {
       expr.source = this._source;
     }
 
-    const isCheapLocal = ident.startsWith('@');
-    const scope = isCheapLocal ? this.cheapLocals : this.currentScope;
-    // NOTE: This is incorrect - it will look up the scope chain when it
-    // shouldn't.  Mutables may or may not want this, immutables must not.
-    // Whether this is tied to allowFwdRef or not is unclear.  It's also
-    // unclear whether we want to allow defining symbols in outside scopes:
-    //   ::foo = 43
-    // FWIW, ca65 _does_ allow this, as well as foo::bar = 42 after the scope.
-    let sym = scope.resolve(ident, {allowForwardRef: !mut, ref: token});
+    const [name, scope] = ident.startsWith('@') ? [ident, this.cheapLocals] as const :
+        this.currentScope.pickScope(ident, token, mut ? 'fail' : 'create')!;
+    const pending = scope instanceof Scope ? scope.forwardRefs.get(name) : undefined;
+    let sym = pending ?? scope.resolve(name, {ref: token});
     if (mut && expr.op != 'num') {
       this.fail(`Mutable set requires constant`, token);
     } else if (sym && (mut !== (sym.id! < 0))) {
       this.fail(`Cannot change mutability of ${ident}`, token);
     } else if (!sym) {
-      if (!mut) throw new Error(`impossible`);
-      sym = scope.declare(ident, {id: -1}, token);
+      sym = scope.declare(name, mut ? {id: -1} : {}, token);
     } else if (!mut && sym.expr) {
       const orig =
           sym.expr.source ? `\nOriginally defined${Tokens.at(sym.expr)}` : '';
       this.fail(`Redefining symbol ${ident}${orig}`, token);
     }
+    if (pending?.id != null && referencesId(expr, pending.id)) {
+      this.fail(`Circular reference in definition of symbol '${ident}'`, token);
+    }
     sym.expr = expr;
     if (isLabel) sym.isLabel = true;
+    if (pending && scope instanceof Scope) {
+      scope.takeForwardRef(name);
+      scope.declare(name, pending, token);
+    }
 
     if (scope.collectRefs && token?.source) {
       sym.def = token.source;
@@ -1447,7 +1415,7 @@ export class Assembler {
         // In a compound expression like foo+1, we still need to carry
         // the addrsize through for foo in the latepass.
         if (expr.meta?.size == null && !expr.meta?.zeropage) {
-          const name = this.globals.unresolvedImportIn(expr);
+          const name = this.globals.unresolvedImportIn(expr, this.currentScope);
           if (name) {
             const answer = this.linkEnv?.addrSize(name);
             if (answer != null) {
@@ -1462,7 +1430,8 @@ export class Assembler {
 
       // If the size is unknown, fall back to the operand's address size, which
       // is zeropage only if it was tracked all the way here from the definition.
-      const s = expr.meta?.size ?? (expr.meta?.zeropage ? 1 : 2);
+      const s = expr.meta?.size ?? this.enclosingOperandSize(expr) ??
+          (expr.meta?.zeropage ? 1 : 2);
       // console.log(`sizing up 'add' expr: ${JSON.stringify(expr)}`);
       if (m === 'add' && s === 1 && 'zpg' in ops) {
         return this.opcode(ops.zpg!, 1, expr);
@@ -1488,6 +1457,26 @@ export class Assembler {
       return this.opcode(ops[m]!, argLen, arg[1]!);
     }
     this.fail(`Bad address mode ${m} for ${mnemonic}`);
+  }
+
+  private enclosingOperandSize(expr: Expr): number|undefined {
+    if (!this.currentScope.parent) return undefined;
+    let hasEnclosingHint = false;
+    const width = (e: Expr): number => {
+      if (e.meta?.size != null) return e.meta.size;
+      if (e.op === 'sym' && e.sym) {
+        const hint = this.lookupSymbol(e.sym, 'immediate')?.expr;
+        if (hint) {
+          hasEnclosingHint = true;
+          return hint.meta?.size ?? (hint.meta?.zeropage ? 1 : 2);
+        }
+      }
+      if (!e.args?.length) return e.meta?.zeropage ? 1 : 2;
+      // Try to find the smallest fitting size for the operand based on the symbol scope
+      return e.args.reduce((size, arg) => Math.max(size, width(arg)), 1);
+    };
+    const size = width(expr);
+    return hasEnclosingHint ? size : undefined;
   }
 
   parseArg(tokens: Token[], start: number): Arg {
@@ -1656,7 +1645,7 @@ export class Assembler {
       const sub: mod.Substitution = {offset, size, expr};
       // The linker is what range-checks a substituted value, so the feature has
       // to ride along with the substitution to get there.
-      if (this.opts.forceRange) sub.forceRange = true;
+      if (this.opts.forceRange && !isBranch) sub.forceRange = true;
       (chunk.subs || (chunk.subs = [])).push(sub);
       this.writeNumber(chunk.data, size); // write goes after subs
     } else {
@@ -2170,14 +2159,15 @@ export class Assembler {
    * so we can properly size it.
    */
   private isZeropageRef(name: string): boolean {
-    if (this.globals.isZeropage(name)) return true;
+    if (this.globals.isZeropage(name, this.currentScope)) return true;
     const zp = Boolean(this.lookupSymbol(name)?.expr?.meta?.zeropage);
     // A plain `.import` should be abs, but maybe they meant .importzp
     // the linker may know better once every module is loaded, so query it.
-    if (!zp && this.globals.isImportRef(name)) {
-      const answer = this.linkEnv?.addrSize(name);
+    const imported = !zp && this.globals.importName(name, this.currentScope);
+    if (imported) {
+      const answer = this.linkEnv?.addrSize(imported);
       if (answer != null) return answer === 1;
-      this.lateAssemblyQueries.push({name, guess: 2, source: this._source});
+      this.lateAssemblyQueries.push({name: imported, guess: 2, source: this._source});
     }
     return zp;
   }
@@ -2189,12 +2179,11 @@ export class Assembler {
    * now instead of deferring it to link time which would force this
    * to get pessimized to an ABS addressing mode.
    * 
-   * inlining flag is to work around ca65 scoping issues where a value defined
-   * in the parent scope isn't used for the value we find at this step. it is
-   * instead "found" but deferred until the scopes are closed at which time it
-   * uses the correct value in the scope.
+   * Deferred references only inline definitions in the current scope, since an
+   * enclosing definition could still be shadowed. Immediate contexts can use
+   * the visible definition now, except for an enclosing mutable binding.
    */
-  private lookupSymbol(name: string, inlining = false): Symbol|undefined {
+  private lookupSymbol(name: string, mode?: 'deferred'|'immediate'): Symbol|undefined {
     if (name.charCodeAt(0) === 0x40 /* @ */) {
       return this.cheapLocals.symbols.get(name);
     }
@@ -2205,11 +2194,11 @@ export class Assembler {
       for (let scope: Scope|undefined = this.currentScope; scope;
            scope = scope.parent) {
         const sym = scope.symbols.get(name);
-        if (sym?.expr) {
-          if (inlining && sym.id! < 0 && scope !== this.currentScope) return undefined;
-          return sym;
-        }
-        if (sym?.scoped) return sym; // explicitly scoped: no outer name applies
+        if (sym) return mode === 'immediate' && scope !== this.currentScope &&
+            sym.id === -1 ? undefined : sym;
+        if (mode === 'deferred') break;
+        const kind = this.globals.kindInScope(name, scope);
+        if (kind === 'import' || kind === 'global') break;
       }
       return undefined;
     }
@@ -2219,8 +2208,8 @@ export class Assembler {
         name, {allowForwardRef: false, missingScope: 'undefined'});
   }
 
-  private declareGlobal(ident: string, kind: GlobalKind, weak = false) {
-    if (!this.globals.declare(ident, kind, this.currentScope, weak)) return;
+  private declareGlobal(ident: string, kind: GlobalKind, weak = false, zeropage = false) {
+    if (!this.globals.declare(ident, kind, this.currentScope, weak, zeropage)) return;
     this.dbg?.declareGlobal(ident, kind, this._source);
   }
 
@@ -2245,10 +2234,7 @@ export class Assembler {
   }
 
   importzpInternal(idents: string[]) {
-    for (const ident of idents) {
-      this.declareGlobal(ident, 'import');
-      this.globals.markZeropage(ident);
-    }
+    for (const ident of idents) this.declareGlobal(ident, 'import', false, true);
   }
 
   exportzp(...idents: string[]) {
@@ -2256,10 +2242,7 @@ export class Assembler {
   }
 
   exportzpInternal(idents: string[]) {
-    for (const ident of idents) {
-      this.declareGlobal(ident, 'export');
-      this.globals.markZeropage(ident);
-    }
+    for (const ident of idents) this.declareGlobal(ident, 'export', false, true);
   }
 
   global(...idents: string[]) {
@@ -2276,10 +2259,7 @@ export class Assembler {
   }
 
   globalzpInternal(idents: string[]) {
-    for (const ident of idents) {
-      this.declareGlobal(ident, 'global', true);
-      this.globals.markZeropage(ident);
-    }
+    for (const ident of idents) this.declareGlobal(ident, 'global', true, true);
   }
 
   scope(name?: string, at?: Tokens.SourceInfo) {
@@ -2326,6 +2306,7 @@ export class Assembler {
       child.name = name;
       this.currentScope.children.set(name, child);
     } else {
+      child.anonymousIndex = this.currentScope.anonymousChildren.length;
       this.currentScope.anonymousChildren.push(child);
     }
     this.currentScope = child;
@@ -2578,15 +2559,16 @@ export class Assembler {
   // Utility methods for processing arguments
 
   parseConst(tokens: Token[], start: number): number {
-    const val = this.evaluate(this.parseExpr(tokens, start));
+    const val = this.evaluate(this.parseExpr(tokens, start, true));
     if (val != null) return val;
     this.fail(`Expression is not constant`, tokens[1]);
   }
   parseNoArgs(tokens: Token[], _start: number) {
     Tokens.expectEol(tokens[1]);
   }
-  parseExpr(tokens: Token[], start: number): Expr {
-    const expr = Exprs.parseOnly(tokens, start, this.symbolLookup, this.encodeChar);
+  parseExpr(tokens: Token[], start: number, immediate = false): Expr {
+    const lookup = immediate ? this.immediateSymbolLookup : this.symbolLookup;
+    const expr = Exprs.parseOnly(tokens, start, lookup, this.encodeChar);
     if (!this.opts.refExtractor?.ref) return expr;
     // Parsing inlines known symbols, so keep a named copy for refExtractor.
     const out = {...expr};
@@ -2648,7 +2630,7 @@ export class Assembler {
   }
 
   parseResArgs(tokens: Token[]): [number, number?] {
-    const data = this.parseDataList(tokens);
+    const data = this.parseDataList(tokens, false, true);
     if (data.length > 2) this.fail(`Expected at most 2 args`, data[2]);
     if (!data.length) this.fail(`Expected at least 1 arg`);
     const count = this.evaluate(data[0]);
@@ -2658,9 +2640,9 @@ export class Assembler {
     return [count, val];
   }
 
-  parseDataList(tokens: Token[]): Array<Expr>;
+  parseDataList(tokens: Token[], allowString?: false, immediate?: boolean): Array<Expr>;
   parseDataList(tokens: Token[], allowString: true): Array<Expr|string>;
-  parseDataList(tokens: Token[], allowString = false): Array<Expr|string> {
+  parseDataList(tokens: Token[], allowString = false, immediate = false): Array<Expr|string> {
     if (tokens.length < 2) {
       this.fail(`Expected a data list`, tokens[0]);
     }
@@ -2671,7 +2653,7 @@ export class Assembler {
       } else if (term.length < 1) {
         this.fail(`Missing term`);
       } else {
-        out.push(this.resolve(this.parseExpr(term, 0)));
+        out.push(this.resolve(this.parseExpr(term, 0, immediate), immediate));
       }
     }
     return out;
@@ -2726,7 +2708,7 @@ export class Assembler {
     if (args.length !== 2 /* && args.length !== 3 */) {
       this.fail(`Expected constant number, then identifier`);
     }
-    const num = this.evaluate(this.parseExpr(args[0], 0));
+    const num = this.evaluate(this.parseExpr(args[0], 0, true));
     if (num == null) this.fail(`Expected a constant number`);
 
     // let segName = this.segments.length === 1 ? this.segments[0] : undefined;
@@ -2738,7 +2720,7 @@ export class Assembler {
     // }
     // const seg = segName ? this.segmentData.get(segName) : undefined;
 
-    const offset = this.resolve(this.parseExpr(args[1], 0));
+    const offset = this.resolve(this.parseExpr(args[1], 0, true), true);
     if (offset.op === 'num' && offset.meta?.chunk != null) {
       return [num, offset];
     } else {
@@ -2819,7 +2801,8 @@ export class Assembler {
   }
 
   writeNumber(data: number[], size: number, val?: number, isBranch?: boolean) {
-    if (val != null && !this.opts.forceRange && !Exprs.fits(val, size, isBranch)) {
+    if (val != null && !(this.opts.forceRange && !isBranch) &&
+        !Exprs.fits(val, size, isBranch)) {
       // We have to write the bytes even if this should error out so that the
       // rest of the error diagnostics match up correctly.
       this.errorCollector.add(

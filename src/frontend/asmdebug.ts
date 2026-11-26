@@ -51,8 +51,7 @@ export interface EmitMark {
 export interface DebugHost {
   lookupSymbol(name: string): Symbol|undefined;
   resolve(expr: Expr): Expr;
-  isZeropageGlobal(name: string): boolean;
-  isImport(name: string): boolean;
+  isImport(name: string, scope: Scope): boolean;
   readonly errorCollector: ErrorCollector;
 }
 
@@ -299,9 +298,8 @@ export class AssemblyDebug {
     };
     visit(global);
 
-    const addrSize = (name: string, sym: Symbol): mod.DebugAddrSize => {
+    const addrSize = (sym: Symbol): mod.DebugAddrSize => {
       const expr = sym.expr!;
-      if (expr.op === 'im') return this.host.isZeropageGlobal(name) ? 'zeropage' : 'absolute';
       if (expr.op === 'num' && !expr.meta?.rel) {
         const n = expr.num!;
         if (n >= 0 && n < 0x100) return 'zeropage';
@@ -314,7 +312,7 @@ export class AssemblyDebug {
       const expr = sym.expr!;
       const out: mod.DebugSym = {
         name,
-        addrsize: addrSize(name, sym),
+        addrsize: addrSize(sym),
         expr,
         kind: expr.op === 'im' ? 'imp' : sym.isLabel ? 'lab' : 'equ',
       };
@@ -389,7 +387,7 @@ export class AssemblyDebug {
       if (sym?.expr) return sym;
     }
     // An import nothing uses exists, but has no debug sym.
-    if (this.host.isImport(c.asmName!)) return undefined;
+    if (this.host.isImport(c.asmName!, c.scope)) return undefined;
     this.host.errorCollector.add('error', `Assembler symbol '${c.asmName}' not found`, c.source);
     return undefined;
   }
