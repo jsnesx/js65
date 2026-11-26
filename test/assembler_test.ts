@@ -2594,25 +2594,21 @@ Ptr: .res 2
          expect(codeOf(m)).toEqual([0x85, 0xff]);
        });
 
-    // A constant defined outside a `.proc` is a value, not an address, so there
-    // is no address size to carry - the value itself has to make it in. ca65
-    // binds the name to the enclosing definition at the point of use, which
-    // means the number is already in hand when the operand gets sized.
     it('should size a constant from an enclosing scope by its value',
        function() {
-         const m = assembleModule(`
+         const code = assemble(`
 BLANK_TILE = $af
 .segment "CODE"
 .proc p
   lda BLANK_TILE
 .endproc
 `);
-         expect(codeOf(m)).toEqual([0xa5, 0xaf]);
+         expect(code).toEqual([0xa5, 0xaf]);
        });
 
     it('should size a constant from an enclosing scope through nested scopes',
        function() {
-         const m = assembleModule(`
+        const code = assemble(`
 BLANK_TILE = $af
 .segment "CODE"
 .scope outer
@@ -2621,20 +2617,18 @@ BLANK_TILE = $af
 .endproc
 .endscope
 `);
-         expect(codeOf(m)).toEqual([0xa5, 0xaf]);
+        expect(code).toEqual([0xa5, 0xaf]);
        });
 
     it('should fold an offset from an enclosing scope\'s constant', function() {
-      // Only worth anything if the value comes in rather than a reference: the
-      // `+` has to fold to a number before the operand can be sized from it.
-      const m = assembleModule(`
+      const code = assemble(`
 BLANK_TILE = $af
 .segment "CODE"
 .proc p
   lda BLANK_TILE+1
 .endproc
 `);
-      expect(codeOf(m)).toEqual([0xa5, 0xb0]);
+      expect(code).toEqual([0xa5, 0xb0]);
     });
 
     it('should go absolute when an offset carries the value out of the zeropage',
@@ -2649,15 +2643,15 @@ BLANK_TILE = $af
          expect(codeOf(m)).toEqual([0xad, 0xfe, 0x01, 0xad, 0x00, 0x01]);
        });
 
-    it('should size an offset by its result, not its operands', function() {
-      const m = assembleModule(`
+    it('should size an offset from an enclosing constant using the widths of both terms', function() {
+      const code = assemble(`
 BIG = $1234
 .segment "CODE"
 .proc p
   lda BIG-$1200
 .endproc
 `);
-      expect(codeOf(m)).toEqual([0xa5, 0x34]);
+      expect(code).toEqual([0xad, 0x34, 0x00]);
     });
 
     it('should size a zero-padded literal by its value', function() {
@@ -2692,14 +2686,14 @@ BLANK_TILE = $af
 
     it('should stay absolute for a constant from an enclosing scope that does not fit',
        function() {
-         const m = assembleModule(`
+         const code = assemble(`
 BIG = $1234
 .segment "CODE"
 .proc p
   lda BIG
 .endproc
 `);
-         expect(codeOf(m)).toEqual([0xad, 0x34, 0x12]);
+         expect(code).toEqual([0xad, 0x34, 0x12]);
        });
 
     it('should still size a constant defined after the reference as absolute',
@@ -2717,11 +2711,9 @@ BLANK_TILE = $af
          expect(codeOf(m)).toEqual([0xad, 0xff, 0xff]);
        });
 
-    it('should bind to the enclosing constant when the local one comes later',
+    it('should use the enclosing constant for width and the later local constant for value',
        function() {
-         // The first reference has only the outer `$af` to go on; the second is
-         // after the local definition and takes that instead.
-         const m = assembleModule(`
+         const code = assemble(`
 BLANK_TILE = $af
 .segment "CODE"
 .proc p
@@ -2730,8 +2722,194 @@ BLANK_TILE = $12
   lda BLANK_TILE
 .endproc
 `);
-         expect(codeOf(m)).toEqual([0xa5, 0xaf, 0xa5, 0x12]);
+         expect(code).toEqual([0xa5, 0x12, 0xa5, 0x12]);
        });
+
+    it('should size compound indexed operands using the enclosing value', function() {
+      expect(assemble(`
+Value = $ff
+.proc p
+  lda Value+1,x
+  lda Value+256,x
+Value = $20
+.endproc
+`)).toEqual([0xb5, 0x21, 0xbd, 0x20, 0x01]);
+    });
+
+    it('should size an expression without computing with the enclosing value', function() {
+      expect(assemble(`
+Divisor = 0
+.scope Nested
+  lda 32/Divisor,x
+Divisor = 2
+.endscope
+`)).toEqual([0xb5, 0x10]);
+    });
+
+    it('should range-check the later local value against the enclosing width', function() {
+      expect(assembleErrors(`
+Value = $12
+.proc p
+  lda Value,x
+Value = $1234
+.endproc
+`)).toEqual([expect.stringMatching(/range|byte/i)]);
+    });
+
+    it('should bind a forward branch to a later same-scope label, not an outer one',
+       function() {
+         // ca65 resolves the innermost scope, even for forward references: an
+         // outer `Exit` must not capture a branch that a later `Foo::Exit`
+         // claims, or the displacement points 600 bytes back.
+         const code = assemble(`
+Exit: rts
+.res 600, $ea
+.proc Foo
+  bne Exit
+  nop
+Exit: rts
+.endproc
+`);
+         expect(code.slice(0, 1)).toEqual([0x60]);
+         expect(code.slice(-4)).toEqual([0xd0, 0x01, 0xea, 0x60]);
+       });
+
+    it('should still reach an enclosing label the scope never defines',
+       function() {
+         // Deferring the outer label must not lose it: with no local
+         // definition the reference promotes out to the enclosing one.
+         const code = assemble(`
+Exit: rts
+.proc Foo
+  jsr Exit
+.endproc
+`);
+         expect(code).toEqual([0x60, 0x20, 0x00, 0x80]);
+       });
+
+    it('should let an immediate context see an enclosing label',
+       function() {
+         // `.if` needs the value now, so it walks out to the definition even
+         // though operand parsing no longer inlines labels from enclosing
+         // scopes.
+         const code = assemble(`
+Label: rts
+.proc p
+  .if Label
+    lda #$01
+  .endif
+.endproc
+`);
+         expect(code).toEqual([0x60, 0xa9, 0x01]);
+       });
+
+    it('should read visible values in immediate contexts after deferred references', function() {
+      expect(assemble(`
+Count = 2
+OuterLabel: nop
+.proc Worker
+  .byte Count, <OuterLabel
+  .if Count = 2 && OuterLabel = $8000
+    .res Count, $ea
+  .endif
+  .enum Local
+    Entry = Count
+  .endenum
+  .byte Local::Entry
+  .assert Count = 3, error
+  .assert OuterLabel > $8000, error
+Count = 3
+OuterLabel: rts
+.endproc
+`)).toEqual([0xea, 3, 6, 0xea, 0xea, 2, 0x60]);
+    });
+
+    it('should let deferred references count for .referenced without hiding definitions', function() {
+      expect(assemble(`
+Value = 2
+.scope Nested
+  .byte Value
+  .if .referenced(Value) && .defined(Value)
+    .byte Value
+  .endif
+Value = 3
+.endscope
+`)).toEqual([3, 3]);
+    });
+
+    it('should reject an enclosing mutable in immediate contexts', function() {
+      expect(assembleErrors(`
+Value .set 2
+.scope Nested
+  .if Value
+    .byte 9
+  .endif
+.endscope
+`)).toEqual(['Expected a constant']);
+      expect(assembleErrors(`
+Value .set 2
+.scope Nested
+  .res Value
+.endscope
+`)).toEqual(['Expected constant count']);
+    });
+
+    it('should reject a mutable definition after a deferred reference', function() {
+      expect(assembleErrors(`
+Value = 2
+.scope Nested
+  .byte Value
+Value .set 3
+.endscope
+`)).toEqual(['Cannot change mutability of Value']);
+      expect(assemble(`
+.scope Nested
+Value .set 2
+  .byte Value
+Value .set Value + 1
+  .byte Value
+.endscope
+`)).toEqual([2, 3]);
+    });
+
+    it('should share a pending id between bare and qualified references', function() {
+      const m = assembleModule(`
+.scope Nested
+  .byte Value
+.endscope
+  .byte Nested::Value
+Nested::Value = 3
+`);
+      expect(m.symbols!.map(s => s.expr?.num)).toEqual([3]);
+      expect(m.chunks![0].subs!.map(s => s.expr.num)).toEqual([0, 0]);
+    });
+
+    it('should bind pending references from sibling scopes to a parent definition', function() {
+      expect(assemble(`
+.scope First
+  .byte Common
+.endscope
+.scope Second
+  .byte Common
+.endscope
+Common = 5
+`)).toEqual([5, 5]);
+    });
+
+    it('should autoimport a pending ref without taking a sibling definition', function() {
+      const source = `
+.scope First
+  .word Value
+.endscope
+.scope Second
+Value = 3
+.endscope
+`;
+      const m = assembleModule(source);
+      expect(m.autoImports?.map(i => i.name)).toEqual(['Value']);
+      expect(m.symbols?.map(s => s.expr?.op)).toEqual(['im']);
+      expect(assembleErrors(`.autoimport -\n${source}`)).toEqual(["Symbol 'Value' undefined"]);
+    });
 
     // ca65's `z:` / `a:` / `f:` prefixes override the address size the operand
     // would otherwise be given. They are the escape hatch for the cases above
@@ -3706,13 +3884,15 @@ lda #.sizeof(Point)
 
       it('should fail on a branch the assembler resolved out of range',
          function() {
-        // A backward branch inside one chunk never reaches the linker, so
-        // before the check landed this was silently truncated to a wrong jump.
+        // A backward branch inside one chunk never reaches the linker. The
+        // range check applies with or without the feature: force_range is for
+        // immediates and data, and truncating a displacement would silently
+        // jump somewhere else.
         expect(assembleErrors('back: nop\n.res 200\n  bne back\n'))
             .toEqual(['Branch out of range: offset -203 (valid range: -128 to 127)']);
-        expect(assemble('.feature force_range\nback: nop\n.res 200\n  bne back\n')
-                   .slice(-2))
-            .toEqual([0xd0, 0x35]);
+        expect(assembleErrors(
+            '.feature force_range\nback: nop\n.res 200\n  bne back\n'))
+            .toEqual(['Branch out of range: offset -203 (valid range: -128 to 127)']);
       });
 
       it('should fail on an out of range value without the feature',
@@ -3743,10 +3923,27 @@ lda #.sizeof(Point)
                 'Branch out of range: offset 200 at $8001 (valid range: -128 to 127)');
       });
 
-      it('should truncate a branch out of range', function() {
-        const data = assemble(
-            '.feature force_range\nbne far\n.res 200\nfar: nop\n');
-        expect(data.slice(0, 2)).toEqual([0xd0, 0xc8]);
+      it('should fail on a branch out of range with the feature too', function() {
+        // The linker checks substituted values, and a branch displacement is
+        // never exempt from its signed range, feature or not.
+        expect(assembleErrors('.feature force_range\nbne far\n.res 200\nfar: nop\n'))
+            .toContain(
+                'Branch out of range: offset 200 at $8001 (valid range: -128 to 127)');
+      });
+
+      it('should assemble a branch that fits with the feature on', function() {
+        expect(assemble('.feature force_range\nback: nop\n  bne back\n'))
+            .toEqual([0xea, 0xd0, 0xfd]);
+      });
+
+      it('should keep scope resolution working with the feature on', function() {
+        // js65 2.3.4 combined two bugs here: the branch bound to the outer
+        // `Exit` and force_range hid the resulting range error, so `bne Exit`
+        // silently jumped to the wrong address instead of `Foo::Exit`.
+        const code = assemble(
+            '.feature force_range\nExit: rts\n.res 600, $ea\n' +
+            '.proc Foo\n  bne Exit\n  nop\nExit: rts\n.endproc\n');
+        expect(code.slice(-4)).toEqual([0xd0, 0x01, 0xea, 0x60]);
       });
 
       it('should record itself on the substitution it applies to',
@@ -4851,6 +5048,47 @@ Target:
   });
 
   describe('scoped .export/.global declarations', function() {
+    it('exports a scoped definition that binds an earlier reference', function() {
+      const m = assembleModule(`
+  .word Value
+.scope Nested
+  .export Value
+  .word Value
+Value = 3
+.endscope
+`);
+      expect(m.symbols?.map(s => [s.expr?.op, s.expr?.num, s.export]))
+          .toEqual([['sym', 1, undefined], ['num', 3, 'Value']]);
+    });
+
+    it('binds a nested import separately from an enclosing definition', function() {
+      const m = assembleModule(`
+Value = 4
+.scope Nested
+  .word Value
+  .import Value
+.endscope
+  .word Value, Nested::Value
+`);
+      expect(m.symbols?.map(s => [s.expr?.op, s.expr?.sym])).toEqual([['im', 'Value']]);
+      expect(m.chunks![0].subs?.map(s => s.expr.num)).toEqual([0, 0]);
+    });
+
+    it('uses the address size of the qualified import declaration', function() {
+      const m = assembleModule(`
+.scope ByteImport
+  .importzp Value
+.endscope
+.scope WordImport
+  .import Value
+.endscope
+  lda ByteImport::Value
+  lda WordImport::Value
+`);
+      expect(Array.from(m.chunks![0].data)).toEqual([0xa5, 0xff, 0xad, 0xff, 0xff]);
+      expect(m.symbols?.map(s => s.expr?.meta?.size)).toEqual([1, undefined]);
+    });
+
     it('rejects a file-scope .export satisfied only inside a .proc', function() {
       expect(assembleErrors(`
 .export a_after
@@ -5129,39 +5367,22 @@ a_after:
         symbols: [],
       });
     });
-    // it('should error since foo is resolved as size 1 when outputting the byte, but when resolved later its 2 bytes', function() {
-    //   const a = new Assembler(Cpu.P02);
-    //   a.assign('foo', 5);
-    //   a.scope();
-    //   a.instruction([ident('lda'), ident('foo')]);
-    //   a.assign('foo', 5000);
-    //   a.endScope();
-    //   try {
-    //     a.module();
-    //     expect("").toEqual("Test failed, didn't throw an error.");
-    //   } catch (err: any) {
-    //     console.log(err.message);
-    //     expect(err.message).toEqual("5000 doesn't fit in one byte");
-    //   }
-    // });
-    it('should use the outer foo when the inner one is not assigned until later', function() {
+    it('should keep the enclosing width while a later assignment binds the symbol id', function() {
       const a = new Assembler(Cpu.P02);
       a.assign('foo', 5000);
       a.scope();
       a.instruction([ident('lda'), ident('foo')]);
       a.assign('foo', 5);
       a.endScope();
-      // The reference binds to whatever `foo` names at the point of use, and at
-      // that point the only `foo` is the outer one. The inner assignment starts
-      // a new symbol that this instruction never sees.
       expect(strip(a.module())).toEqual({
         segments: [],
         chunks: [{
           overwrite: 'allow',
           segments: [],
-          data: Uint8Array.of(0xad, 5000 & 0xff, 5000 >> 8),
+          data: Uint8Array.of(0xad, 0xff, 0xff),
+          subs: [{offset: 1, size: 2, expr: {op: 'sym', num: 0}}],
         }],
-        symbols: [],
+        symbols: [{expr: {op: 'num', num: 5, meta: {size: 1}}}],
       });
     });
     it('should use an abs value because the symbol is undefined, so it is sized to 2 until the symbol is defined', function() {

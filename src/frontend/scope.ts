@@ -54,6 +54,23 @@ export function firstRef(sym?: Symbol): Tokens.SourceInfo|undefined {
   return sym?.refs?.[0];
 }
 
+/** Keeps the original linker id and moves the references to the owning symbol. */
+export function bindForwardRef(ref: Symbol, target: Symbol, collectRefs?: boolean) {
+  if (ref.refs) {
+    if (!target.refs) {
+      target.refs = ref.refs;
+    } else if (collectRefs) {
+      const refs = target.refs;
+      for (const source of ref.refs) {
+        if (!refs.some(r => r.file === source.file && r.line === source.line &&
+                           r.column === source.column)) refs.push(source);
+      }
+    }
+  }
+  ref.expr = target.id != null && target.id >= 0 ?
+      {op: 'sym', num: target.id} : target.expr;
+}
+
 /** What to do when a qualified name mentions a scope that doesn't exist yet. */
 export type MissingScope = 'fail'|'undefined'|'create';
 
@@ -82,12 +99,10 @@ export abstract class BaseScope {
     return [name, this];
   }
 
-  // TODO - may need additional options:
-  //   - lookup constant - won't return a mutable value or a value from
-  //     a parent scope, implies no forward ref
-  //   - shallow - don't recurse up the chain, for assignment only??
-  // Might just mean allowForwardRef is actually just a mode string?
-  //  * ca65's .definedsymbol is more permissive than .ifconst
+  protected forwardRefTable(): Map<string, Symbol> {
+    return this.symbols; // Cheap locals share a table until the next label.
+  }
+
   resolve(name: string, opts: FwdRefResolveOpts): Symbol;
   resolve(name: string, opts?: ResolveOpts): Symbol|undefined;
   resolve(name: string, opts: ResolveOpts = {}):
@@ -98,8 +113,8 @@ export abstract class BaseScope {
     const picked = this.pickScope(name, ref, missingScope);
     if (!picked) return undefined;
     const [tail, scope] = picked;
-    const sym = scope.symbols.get(tail);
-//console.log('resolve:',name,'sym=',sym,'fwd?',allowForwardRef);
+    const sym = scope.symbols.get(tail) ??
+        (allowForwardRef ? scope.forwardRefTable().get(tail) : undefined);
     if (sym) {
       if (tail !== name) sym.scoped = true;
       // Keep the first reference site so error messages can point at it. Only
@@ -111,13 +126,8 @@ export abstract class BaseScope {
       return sym;
     }
     if (!allowForwardRef) return undefined;
-    // if (scope.closed) throw new Error(`Could not resolve symbol: ${name}`);
-    // make a new symbol - but only in an open scope
-    //const symbol = {id: this.symbolArray.length};
-//console.log('created:',symbol);
-    //this.symbolArray.push(symbol);
     const symbol: Symbol = ref?.source ? {refs: [ref.source]} : {};
-    scope.symbols.set(tail, symbol);
+    scope.forwardRefTable().set(tail, symbol);
     if (tail !== name) symbol.scoped = true;
     return symbol;
   }
@@ -133,6 +143,7 @@ export abstract class BaseScope {
 
 export class Scope extends BaseScope {
   readonly global: Scope;
+  readonly forwardRefs = new Map<string, Symbol>();
   readonly children = new Map<string, Scope>();
   readonly anonymousChildren: Scope[] = [];
 
@@ -148,16 +159,28 @@ export class Scope extends BaseScope {
   dbgType?: 'struct'|'enum';
   /** 1-based number of an unnamed scope, for debug info. */
   anonId?: number;
+  /** Anonymous sibling index for identifying bank queries across assembly passes. */
+  anonymousIndex?: number;
   /** Bytes emitted directly in this scope, not counting nested scopes. */
   debugRuns?: mod.DebugScopeRun[];
 
-  /** Find the scope prefix without the name of the label */
-  qualifiedPrefix(): string {
-    const parts: string[] = [];
+  protected override forwardRefTable(): Map<string, Symbol> {
+    return this.forwardRefs;
+  }
+
+  /** Identifies the scope for late queries, including unnameable anonymous scopes. */
+  localRefKey(name: string): string {
+    const parts = [name];
     for (let scope: Scope|undefined = this; scope?.parent; scope = scope.parent) {
-      if (scope.name) parts.unshift(scope.name);
+      parts.push(scope.name ?? `#${scope.anonymousIndex}`);
     }
-    return parts.length ? `${parts.join('::')}::` : '';
+    return parts.reverse().join('::');
+  }
+
+  takeForwardRef(name: string): Symbol|undefined {
+    const sym = this.forwardRefs.get(name);
+    this.forwardRefs.delete(name);
+    return sym;
   }
 
   constructor(readonly parent?: Scope, public kind?: 'scope'|'proc') {
@@ -197,6 +220,7 @@ export class Scope extends BaseScope {
   /** Splits a qualified symbol name into its unqualified tail and owning scope. */
   pickScope(name: string, at?: {source?: Tokens.SourceInfo},
             missing: MissingScope = 'fail'): [string, Scope]|undefined {
+    if (!name.includes('::')) return [name, this];
     const split = name.split(RE_SCOPE_SPLIT);
     const tail = split.pop()!;
     const found = this.walkScopes(split);

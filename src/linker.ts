@@ -1284,8 +1284,8 @@ class LinkChunk {
   writeValue(offset: number, val: number, size: number, isBranch?: boolean,
              source?: SourceInfo, forceRange?: boolean) {
     // `force_range` says to truncate whatever we're given, which the masking
-    // loop at the bottom already does, so the feature is just a skipped check.
-    if (!forceRange && val != null && !Exprs.fits(val, size, isBranch)) {
+    // loop at the bottom already does.
+    if (!(forceRange && !isBranch) && val != null && !Exprs.fits(val, size, isBranch)) {
       const at = this.org != null ? ` at $${(this.org + offset).toString(16)}` : '';
       this.linker.fail(Exprs.rangeErrorMessage(val, size, isBranch, at),
                        source && {source});
@@ -1398,6 +1398,7 @@ class Link {
 
   /** Imports already reported missing, so each is named once per run. */
   private missingImports = new Set<string>();
+  private circularSymbols?: Set<number>;
 
   constructor(readonly errorCollector?: ErrorCollector,
               /** `-D` overrides for config `SYMBOLS`, already reduced to numbers. */
@@ -2683,9 +2684,12 @@ class Link {
   }
 
   resolveSymbols(expr: Expr): Expr {
-    // pre-traverse so that transitive imports work
+    let active: Set<number>|undefined;
+    const path: number[] = [];
     return Exprs.traverse(expr, (e, rec) => {
+      const depth = path.length;
       while (e.op === 'im' || e.op === 'sym') {
+        let id: number;
         if (e.op === 'im') {
           const name = e.sym!;
           const imported = this.exports.get(name);
@@ -2697,13 +2701,27 @@ class Link {
             // root expression it happens to sit inside.
             this.fail(msg, e.source ? e : expr);
           }
-          e = this.symbols[imported].expr!;
+          id = imported;
         } else {
           if (e.num == null) throw new Error(`Symbol not global`);
-          e = this.symbols[e.num].expr!;
+          id = e.num;
         }
+        const value = this.symbols[id].expr!;
+        if (value.op === 'sym' || value.op === 'im' || value.args?.length) {
+          if (this.circularSymbols?.has(id)) throw new RecoverableError('Circular symbol reference');
+          if (active?.has(id)) {
+            this.circularSymbols ??= new Set();
+            for (const member of path.slice(path.indexOf(id))) this.circularSymbols.add(member);
+            this.fail('Circular symbol reference', e.source ? e : expr);
+          }
+          (active ??= new Set()).add(id);
+          path.push(id);
+        }
+        e = value;
       }
-      return Exprs.evaluate(rec(e));
+      const result = Exprs.evaluate(rec(e));
+      while (path.length > depth) active!.delete(path.pop()!);
+      return result;
     });
   }
 

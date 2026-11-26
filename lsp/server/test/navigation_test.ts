@@ -189,6 +189,28 @@ describe('navigation compute functions', () => {
       expect((def as Location).range.start.line).toBe(0);
     });
 
+    it('attaches deferred references only to the definitions that claim them', async () => {
+      const {analyzer, uri} = await analyzed([
+        'Value = 2',
+        '.scope Nested',
+        '  .byte 1 + Value',
+        'Value = 3',
+        '.endscope',
+        '.scope Fallback',
+        '  .byte 1 + Value',
+        '.endscope',
+      ].join('\n'));
+      const def = computeDefinition(analyzer, {
+        textDocument: {uri}, position: {line: 2, character: 13},
+      });
+      expect((def as Location).range.start.line).toBe(3);
+      const refs = computeReferences(analyzer, {
+        textDocument: {uri}, position: {line: 0, character: 1},
+        context: {includeDeclaration: false},
+      });
+      expect(refs.map(ref => ref.range.start.line)).toEqual([6]);
+    });
+
     it('returns an empty list where nothing is defined', async () => {
       const {analyzer, uri} = await analyzed(SOURCE);
       const def = computeDefinition(analyzer, {
